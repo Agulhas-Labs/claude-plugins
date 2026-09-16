@@ -1,0 +1,31 @@
+{
+  "name": "agulhas-labs",
+  "owner": {
+    "name": "Agulhas Labs",
+    "url": "https://github.com/Agulhas-Labs/claude-plugins"
+  },
+  "metadata": {
+    "description": "Claude Code plugins from Agulhas Labs: agent orchestration that measures its own cost."
+  },
+  "plugins": [
+    {
+      "name": "orchestration",
+      "source": "./plugins/orchestration",
+      "description": "A tiered agent roster, delegation rules with gates and a review budget, a context-budget hook, and agent-cost, a report of where Claude Code token spend goes.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Agulhas Labs"
+      },
+      "homepage": "https://github.com/Agulhas-Labs/claude-plugins",
+      "repository": "https://github.com/Agulhas-Labs/claude-plugins",
+      "license": "Apache-2.0",
+      "keywords": [
+        "orchestration",
+        "subagents",
+        "delegation",
+        "token-cost",
+        "verification"
+      ]
+    }
+  ]
+}

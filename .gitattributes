@@ -1,0 +1,3 @@
+# Every file is text and checks out with LF everywhere: the hooks are run by sh, and a CRLF
+# engineering.md would inject a carriage return on every line of every subagent's conventions.
+* text=auto eol=lf
