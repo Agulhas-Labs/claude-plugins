@@ -759,6 +759,16 @@ class BashClassTests(unittest.TestCase):
                          "bash: wait loop (polling a run)")
         self.assertEqual(ac.bash_class("for f in a b; do grep -c x $f; done"), "bash: grep")
 
+    def test_a_loop_word_in_a_message_or_a_loop_pacing_its_own_work_is_not_a_wait(self):
+        self.assertEqual(ac.bash_class('git commit -m "retry for the flaky sleep test; done"'), "bash: git mutate")
+        self.assertEqual(ac.bash_class("for f in *.png; do sips -Z 800 $f; sleep 1; done"), "bash: other")
+        self.assertEqual(ac.bash_class('gh pr list | grep -i "fix for" ; sleep 0'), "bash: gh")
+
+    def test_a_pipe_inside_quotes_does_not_split_the_command(self):
+        self.assertEqual(ac.bash_class("rg 'cargo build|cargo test' Sources/"), "bash: grep")
+        self.assertEqual(ac.bash_class('grep -E "npm test|make" notes.txt | head -3'), "bash: grep")
+        self.assertEqual(ac.pipeline_stages("a 'x|y' | b \"p|q\" || c"), ["a 'x|y' ", " b \"p|q\" || c"])
+
     def test_a_cd_on_its_own_line_is_transparent(self):
         self.assertEqual(ac.bash_class("cd /some/dir\nmake test | tail -5"), "bash: build/test")
 

@@ -21,7 +21,7 @@ import sys
 TASK_ID = re.compile(rb"<task-id>([^<>\s]{1,64})</task-id>")
 # How a backgrounded Bash call reads in a transcript written by the CLI in print mode, which records
 # the tool result's text but not the `toolUseResult` object an interactive session also writes.
-STARTED = re.compile(rb"Command running in background with ID: ([A-Za-z0-9_-]{1,64})")
+STARTED = re.compile(r"Command running in background with ID: ([A-Za-z0-9_-]{1,64})")
 
 
 def transcript(payload):
@@ -60,6 +60,23 @@ def ended(entry):
                 yield value
 
 
+def announced(entry):
+    """Ids a tool result of this agent's own opens with. The same sentence further into a result is
+    quoted text — a transcript it read, another run's output file — and names a run it never started."""
+    if entry.get("type") != "user":
+        return
+    content = (entry.get("message") or {}).get("content")
+    for block in content if isinstance(content, list) else []:
+        if not isinstance(block, dict) or block.get("type") != "tool_result":
+            continue
+        body = block.get("content")
+        if isinstance(body, list):
+            body = next((part.get("text") for part in body if isinstance(part, dict)), None)
+        match = STARTED.match(body) if isinstance(body, str) else None
+        if match:
+            yield match.group(1)
+
+
 def live(path):
     """Background ids this agent started that nothing has since reported finished, in start order."""
     started, over = [], set()
@@ -71,12 +88,12 @@ def live(path):
                 if isinstance(task, str) and task not in started:
                     started.append(task)
             elif b"running in background with ID" in raw:
-                for match in STARTED.finditer(raw):
-                    task = match.group(1).decode("utf-8", "replace")
+                for task in announced(record(raw)):
                     if task not in started:
                         started.append(task)
             if b"task-notification" in raw:
-                # Any notification for an id ends it: completed, failed and killed all report.
+                # Any notification for an id ends it: completed, failed and killed all report. Matched
+                # anywhere on the line, so quoted text can end an id too: that errs toward letting go.
                 over.update(m.group(1).decode("utf-8", "replace") for m in TASK_ID.finditer(raw))
             if b'"TaskStop"' in raw:
                 over.update(ended(record(raw)))

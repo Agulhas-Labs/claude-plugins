@@ -94,15 +94,43 @@ PURE_FILTER = re.compile(r"^(grep|rg|tail|head|sed|awk|sort|uniq|wc|tee)\b")
 
 
 # A loop that sleeps until a log shows a verdict line. What it costs is the wait on the run it watches,
-# whatever it greps for meanwhile.
-WAIT_LOOP = re.compile(r"\b(for|while|until)\b[\s\S]*\b(sleep|caffeinate -t)\b")
+# whatever it greps for meanwhile. The loop word opens a statement, so prose in a quoted message is not
+# one; a `for` loop must `break`, or it is only pacing its own work.
+WAIT_LOOP = re.compile(r"(?:^|[;&|\n(]\s*|\b(?:do|then)\s+)(for|while|until)\b([\s\S]*)\bdone\b")
+SLEEPS = re.compile(r"\b(sleep|caffeinate -t)\b")
+
+
+def is_wait_loop(c):
+    m = WAIT_LOOP.search(c)
+    if not m or not SLEEPS.search(m.group(2)):
+        return False
+    return m.group(1) != "for" or re.search(r"\bbreak\b", m.group(2)) is not None
+
+
+def pipeline_stages(c):
+    """Split on `|` outside quotes; `||` is not a pipe."""
+    stages, start, quote, i = [], 0, None, 0
+    while i < len(c):
+        ch = c[i]
+        if quote:
+            if ch == "\\" and quote == '"': i += 1
+            elif ch == quote: quote = None
+        elif ch in "'\"": quote = ch
+        elif ch == "\\": i += 1
+        elif ch == "|":
+            if c[i + 1:i + 2] == "|": i += 1
+            else:
+                stages.append(c[start:i]); start = i + 1
+        i += 1
+    stages.append(c[start:])
+    return stages
 
 
 def bash_class(cmd):
     c = cmd.strip()
     c = re.sub(r"^(cd [^;&\n]+(&&|;|\n)\s*)+", "", c)
-    if WAIT_LOOP.search(c): return "bash: wait loop (polling a run)"
-    for stage in re.split(r"(?<!\|)\|(?!\|)", c):
+    if is_wait_loop(c): return "bash: wait loop (polling a run)"
+    for stage in pipeline_stages(c):
         stage = stage.strip()
         if stage and not PURE_FILTER.match(stage):
             found = stage_class(stage)

@@ -80,6 +80,23 @@ class BackgroundRunTests(unittest.TestCase):
         self.write(started_in_print_mode("bd32o4p1o"))
         self.assertIn("bd32o4p1o", self.ask())
 
+    def test_the_sentence_quoted_inside_a_result_names_no_run_of_this_agents(self):
+        # Reading another transcript or another run's output file brings the sentence in mid-result.
+        quoted = started_in_print_mode("bd32o4p1o")
+        block = quoted["message"]["content"][0]
+        block["content"] = "42\t" + block["content"]
+        said = {"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": TEXT.format(task="bcrt1kt74")}]}}
+        self.write(quoted, said)
+        self.assertIsNone(self.ask())
+
+    def test_a_result_given_as_text_parts_is_read_too(self):
+        parts = started_in_print_mode("bd32o4p1o")
+        block = parts["message"]["content"][0]
+        block["content"] = [{"type": "text", "text": block["content"]}]
+        self.write(parts)
+        self.assertIn("bd32o4p1o", self.ask())
+
     def test_a_run_recorded_in_print_mode_and_finished_is_silent(self):
         self.write(started_in_print_mode("bd32o4p1o"), notified("bd32o4p1o"))
         self.assertIsNone(self.ask())
