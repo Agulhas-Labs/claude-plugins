@@ -12,7 +12,7 @@
       "name": "orchestration",
       "source": "./plugins/orchestration",
       "description": "A tiered agent roster, delegation rules with gates and a review budget, a context-budget hook, and agent-cost, a report of where Claude Code token spend goes.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "Agulhas Labs"
       },

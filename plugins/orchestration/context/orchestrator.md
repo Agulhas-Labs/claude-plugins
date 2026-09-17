@@ -44,6 +44,16 @@ loudly and read what it did.
   measured week the longest 10% of subagents were 45% of all subagent spend, and one 340-turn round
   split into three agents would have cost less than half as much. A handoff carries one item, or one
   cluster of findings in one area; independent items are separate agents.
+- **Size the handoff before you send it.** Split it if any of these is true: it lists more than three
+  deliverables, it expects more than one commit, or it tells the agent to read a whole document. One
+  eight-item handoff with a plan to read spent 160k tokens and delivered the first item; the same work
+  re-cut into three-item briefs, with the reading already done, went through.
+- **When the spec is large, scout first.** One cheap read-only agent reads it and returns a brief per
+  job: the rules that job needs, quoted, and the files and lines it touches. Each maker starts from its
+  own brief and never opens the spec.
+- **An agent that stops early hands back groundwork.** Its report lists what is committed, what
+  remains, and for each remaining item what it learned: the files and lines, the decisions it would
+  take, where the fixtures are. The next handoff quotes that, so nothing is read twice.
 - **Don't delegate below the overhead line.** A change smaller than the prompt needed to hand it off is
   cheaper done directly.
 - **Name the branch the agent owns,** and the branch it bases on or merges into.
@@ -71,7 +81,9 @@ loudly and read what it did.
 - **Cheap makers, one expensive review.** A middle rung makes fully specified rounds; the reviewer
   reviews once, at the end. No reviewer round for a diff under about 50 lines, and a fix of a few lines
   the orchestrator makes itself.
-- **Past about ten agents in a session,** report the count to the user and ask before spawning more.
+- **The cap is on agents running at once, not on how many a session uses.** A long job split into small
+  agents uses many of them, and that is the cheap way to do it. Past about ten in a session, say the
+  count and what they went on the next time you report; don't stop to ask.
 
 ## The roster's tools
 

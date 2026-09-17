@@ -47,7 +47,7 @@ fi
 
 terms="${PRIVATE_TERMS:-$HOME/.config/agulhas/private-terms.txt}"
 if [ -f "$terms" ]; then
-  if grep -rniF -f "$terms" --exclude-dir=.git --exclude-dir=__pycache__ . ; then
+  if grep -rniF -f "$terms" --exclude-dir=.git --exclude=.git --exclude-dir=__pycache__ . ; then
     echo "privacy gate: the lines above carry a private term" >&2
     exit 1
   fi
