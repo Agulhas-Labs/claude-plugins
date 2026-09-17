@@ -132,11 +132,21 @@ this to the repository's `.claude/settings.json`:
 ```json
 {
   "extraKnownMarketplaces": {
-    "agulhas-labs": { "source": { "source": "github", "repo": "Agulhas-Labs/claude-plugins" } }
+    "agulhas-labs": {
+      "source": { "source": "github", "repo": "Agulhas-Labs/claude-plugins" },
+      "autoUpdate": true
+    }
   },
   "enabledPlugins": { "orchestration@agulhas-labs": true }
 }
 ```
+
+## Updates
+
+A marketplace you add yourself does not update on its own. Turn that on once: `/plugin`, then
+Marketplaces, `agulhas-labs`, Enable auto-update. Claude Code then refreshes the marketplace and its
+installed plugins when it starts. The `"autoUpdate": true` line above does the same for a repository.
+To update by hand, run `/plugin marketplace update agulhas-labs`.
 
 Plugins, agents and hooks load when a session starts, so start a new one after installing or updating.
 An organisation's managed settings can restrict which marketplaces and models are allowed; check them
