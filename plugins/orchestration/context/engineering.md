@@ -47,6 +47,11 @@ of all subagent spend: each one re-sent the whole context to do one small thing.
 
 - Request independent calls together in one response: the reads, searches and checks a step needs.
 - Don't re-read what is already in your context. Read a large file by the range that matters.
+- A subagent's prompt cache lasted five minutes where this was measured. Wait longer than that on one
+  command and your next turn rewrites your whole context: 30 of 34 such turns in one week followed a
+  single Bash call, after a median wait of nine minutes in a 178k context. So run a suite or build
+  that takes that long once, when the work is ready for it, and the narrowest test that covers the
+  change between edits.
 - When told your context has passed its budget, finish the item in hand, commit it once verified, and
   hand back with the remaining items listed. Don't start another.
 

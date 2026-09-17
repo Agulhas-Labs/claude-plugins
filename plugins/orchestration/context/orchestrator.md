@@ -44,6 +44,11 @@ loudly and read what it did.
   measured week the longest 10% of subagents were 45% of all subagent spend, and one 340-turn round
   split into three agents would have cost less than half as much. A handoff carries one item, or one
   cluster of findings in one area; independent items are separate agents.
+- **Name the slow check, and say when it runs.** A subagent's cache lasts minutes, not the hour a main
+  session may get, so a maker that waits on a nine-minute suite comes back cold and rewrites its whole
+  context; in one measured week the agents that did so more than once held half of that cost. Give
+  the narrow test for use between edits, and the full suite as the last gate, run once. When running
+  the full suite is the whole job, it is a `runner`'s: its context is small, so going cold costs little.
 - **Size the handoff before you send it.** Split it if any of these is true: it lists more than three
   deliverables, it expects more than one commit, or it tells the agent to read a whole document. One
   eight-item handoff with a plan to read spent 160k tokens and delivered the first item; the same work

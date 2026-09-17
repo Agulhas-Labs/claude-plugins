@@ -17,6 +17,11 @@ worth the install even if you ignore everything else.
 
 Start a new session and carry on working as you were. There is nothing to configure.
 
+Also in this marketplace: [`cache-guard`](plugins/cache-guard/README.md). It holds a message back, once,
+when it is about to be sent into a large context whose prompt cache has expired, which is when one
+"ok, carry on" costs twenty times what it did before lunch. It tells you the cost and offers a handoff
+file written without using your session's model. `/plugin install cache-guard@agulhas-labs`.
+
 ## What you get
 
 | Agent | Model | The work it takes |
@@ -111,7 +116,8 @@ re-sending everything to do one small thing. So agents are told to ask for indep
 Subagents also run on your main session's model unless told otherwise, and most of what they do is
 already specified by the time they get it. That is the roster.
 
-Spend is weighted by price, with cache reads at a tenth of fresh input, so these are shares of cost and
+Spend is weighted by price, with cache reads at a tenth of fresh input (a fortieth on Fable 5.1, as
+published), so these are shares of cost and
 not raw token counts. They come from one week on one machine. Your mix will differ, which is why the
 measuring tool ships with the rules.
 

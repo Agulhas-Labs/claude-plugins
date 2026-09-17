@@ -5,14 +5,14 @@
     "url": "https://github.com/Agulhas-Labs/claude-plugins"
   },
   "metadata": {
-    "description": "Claude Code plugins from Agulhas Labs. Start with orchestration: a team of agents sized to the job, and a report of what they cost."
+    "description": "Claude Code plugins from Agulhas Labs. orchestration: a team of agents sized to the job, and a report of what they cost. cache-guard: a warning before the one message that costs twenty times the rest."
   },
   "plugins": [
     {
       "name": "orchestration",
       "source": "./plugins/orchestration",
       "description": "Run Claude Code like a lead with a team: cheap models do the specified work, an expensive one designs and reviews, and nothing is done until a command proves it. Includes agent-cost, which shows where your tokens went.",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "author": {
         "name": "Agulhas Labs"
       },
@@ -25,6 +25,23 @@
         "delegation",
         "token-cost",
         "verification"
+      ]
+    },
+    {
+      "name": "cache-guard",
+      "source": "./plugins/cache-guard",
+      "description": "Warns once before a message that will cost far more than usual: a large Claude Code context whose prompt cache has expired, or a model or effort change that resets it. Shows the estimated cost, and offers a handoff file written by a cheap model in the background so you can /clear instead.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Agulhas Labs"
+      },
+      "homepage": "https://github.com/Agulhas-Labs/claude-plugins",
+      "repository": "https://github.com/Agulhas-Labs/claude-plugins",
+      "license": "Apache-2.0",
+      "keywords": [
+        "prompt-cache",
+        "token-cost",
+        "hooks"
       ]
     }
   ]

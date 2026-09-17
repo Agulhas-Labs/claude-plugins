@@ -1,8 +1,8 @@
 ---
 name: agent-cost
 description: >-
-  Report where Claude Code token spend goes — totals, per-day trend, concentration, turn shape, what
-  fills the context, and the fixed start every context pays. Use when asked where tokens/usage went,
+  Report where Claude Code token spend goes — totals, per-day trend, concentration, turn shape, cold
+  cache, what fills the context, and the fixed start every context pays. Use when asked where tokens/usage went,
   why Claude Code usage or cost is high, how much a subagent or agent type is spending, what a subagent
   starts with (instructions, deferred tools, skill listing), or to compare spend before/after a change.
 ---
@@ -44,6 +44,19 @@ python3 agentcost.py [--since X] [--until X] [--projects DIR] [--transcript PATH
 - **Turn shape** — the % of turns carrying exactly one tool call, and their share of spend. High values
   here mean calls that could have been requested together were made one at a time, each paying the full
   context over again. **Action**: batch independent tool calls into one response.
+- **Cold cache** — the turns that arrived after the prompt cache had expired (a gap of 5 minutes or
+  more, and under half the previous context read back from cache), their share of spend, and the
+  "avoidable" part: what writing that context in again cost above a warm cache read. The `cache writes`
+  line shows the lifetime the writes were actually bought at, per kind — where the records carry the
+  split, and prints `no lifetime recorded` where they do not — and it sets how long an idle context
+  stays warm. The main-only gap x size table is the case for a guard that warns before a prompt is
+  sent into a cold, large context. **Action**: a large main-session context left idle past the cache
+  lifetime is cheaper to `/clear` and restart from a short handoff than to continue; `/compact` pays
+  for the cold context once, and every turn after it is small. A model or effort change mid-session
+  resets the cache the same way, with no gap, so this section does not count it. The section also
+  shows what subagent cold turns were waiting on; when most follow one Bash call, the fix is fewer
+  long waits inside a large context (run the long suite once, at the end; a narrow test between
+  edits), and no prompt guard can catch them.
 - **What fills the context** — a category table showing
   which kind of content is resident in a typical context and how much of it gets re-sent turn after
   turn. **Action**: if `Read (whole file)` or a re-read-heavy category dominates, read files by range
@@ -59,7 +72,8 @@ python3 agentcost.py [--since X] [--until X] [--projects DIR] [--transcript PATH
 
 ## Caveats (the report states these too)
 
-- Input-equivalent (`input-eq`) prices every token against the uncached input rate (cache read x0.1,
+- Input-equivalent (`input-eq`) prices every token against the uncached input rate (cache read x0.1, or x0.025 on
+  Claude Fable 5.1, whose published cache-read price is a fortieth of its input price;
   cache write 5-minute x1.25, cache write 1-hour x2, uncached x1) — it is **a price comparison, not a
   token count**. Output tokens are reported separately and never folded into it.
 - Figures marked `≈` are `chars/4` estimates, not exact token counts.

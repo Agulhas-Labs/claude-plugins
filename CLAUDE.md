@@ -19,4 +19,7 @@ written for them.
 - `.claude-plugin/marketplace.json` — the marketplace: one entry per plugin.
 - `plugins/orchestration/` — the roster (`agents/`), the conventions it injects (`context/`), its hooks
   (`hooks/`), the `agent-cost` skill (`skills/`), and tests (`tests/`, plus the skill's own).
+- `plugins/cache-guard/` — a `UserPromptSubmit` hook (`hooks/`) that holds a message back when the
+  context's prompt cache has expired, the handoff it offers instead (written by script, summarised by a
+  detached headless run), a `SessionStart` hook that points the next session at it, and tests (`tests/`).
 - `scripts/check.sh` — the repository gate. `githooks/` — the pre-commit hook that runs it.

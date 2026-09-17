@@ -3,11 +3,12 @@
 
 Reads Claude Code transcripts (main sessions and their subagents) and reports: totals split main vs
 subagent, spend per day, concentration (does a few long contexts dominate spend), turn shape (single
-tool-call turns), what fills a context, the fixed start every
-context pays before its first turn, and the largest contexts by spend.
+tool-call turns), cold cache (turns that arrived after the prompt cache had expired), what fills a
+context, the fixed start every context pays before its first turn, and the largest contexts by spend.
 
 Pricing: input-equivalent prices every token against the uncached input rate — uncached x1, cache read
-x0.1, cache write (5-minute) x1.25, cache write (1-hour) x2. When a usage record carries no 5m/1h split,
+x0.1 (x0.025 on Claude Fable 5.1, whose published cache-read price is a fortieth of its input price),
+cache write (5-minute) x1.25, cache write (1-hour) x2. When a usage record carries no 5m/1h split,
 all of cache_creation_input_tokens is priced at x1.25. This is a price comparison against the uncached
 input rate, not a token count. Output tokens are reported separately and never folded into input-equiv.
 
@@ -26,6 +27,13 @@ import textwrap
 from datetime import datetime, timedelta
 
 HOME = os.path.expanduser("~")
+
+# Cold cache: a turn that arrives after the prompt cache has expired pays to write its whole context
+# again instead of reading it back at the cache-read rate.
+COLD_GAP_SECONDS = 300          # the shortest cache lifetime a write can buy
+COLD_READ_FRACTION = 0.5        # "read under half of the previous context back from cache"
+COLD_LONG_GAP_SECONDS = 3600    # the longest cache lifetime: past this, no write could still be warm
+COLD_LARGE_CONTEXT = 100_000    # the size bucket a prompt guard would warn about
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +133,21 @@ def classify(name, inp):
 # pricing
 # ---------------------------------------------------------------------------
 
-def input_equivalent(usage):
+CACHE_READ_WEIGHT = 0.1
+# Published cache-read price over published input price, where it is not a tenth. Matched against the
+# model id reduced to lowercase letters and digits, so a dated id still matches.
+CACHE_READ_WEIGHTS = (("fable51", 0.025),)
+
+
+def cache_read_weight(model):
+    name = "".join(ch for ch in str(model or "").lower() if ch.isalnum())
+    for family, weight in CACHE_READ_WEIGHTS:
+        if family in name:
+            return weight
+    return CACHE_READ_WEIGHT
+
+
+def input_equivalent(usage, model=None):
     uncached = usage.get("input_tokens", 0)
     cache_read = usage.get("cache_read_input_tokens", 0)
     cc = usage.get("cache_creation") or {}
@@ -135,11 +157,66 @@ def input_equivalent(usage):
         cache_write_eq = w5 * 1.25 + w1 * 2.0
     else:
         cache_write_eq = usage.get("cache_creation_input_tokens", 0) * 1.25
-    return uncached * 1.0 + cache_read * 0.1 + cache_write_eq
+    return uncached * 1.0 + cache_read * cache_read_weight(model) + cache_write_eq
 
 
 def context_size(usage):
     return usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0) + usage.get("cache_creation_input_tokens", 0)
+
+
+def cache_writes(usage):
+    """(5-minute, 1-hour) tokens written to cache by one turn, and whether the record carried the
+    split at all. A record with no `cache_creation` dict books everything as 5-minute, which is how
+    `input_equivalent` prices it (x1.25)."""
+    cc = usage.get("cache_creation") or {}
+    if cc:
+        return cc.get("ephemeral_5m_input_tokens", 0), cc.get("ephemeral_1h_input_tokens", 0), True
+    return usage.get("cache_creation_input_tokens", 0), 0, False
+
+
+def cold_rewrite_cost(usage, prev_ctx, model=None):
+    """(rewritten, extra) for a cold turn: how much of the previous context this turn had to put back
+    into the cache, and what that cost above a warm cache read (the model's read weight) of the same tokens.
+
+    The rewritten tokens are priced with the turn's own 5m/1h write mix, pro-rata when the turn wrote
+    more than the previous context was worth. A turn that wrote nothing — the whole context arrived
+    uncached — pays the uncached rate (x1.0) on what it re-sent."""
+    w5, w1, _ = cache_writes(usage)
+    written = w5 + w1
+    if written > 0:
+        rewritten = min(prev_ctx, written)
+        share = rewritten / written
+        paid = w5 * share * 1.25 + w1 * share * 2.0
+    else:
+        rewritten = min(prev_ctx, usage.get("input_tokens", 0))
+        paid = rewritten * 1.0
+    return rewritten, paid - rewritten * cache_read_weight(model)
+
+
+def cold_turns(ctx_turns):
+    """Every turn of one context that arrived after its prompt cache had expired, as
+    dict(turn, prev, gap, prev_ctx, rewritten, extra).
+
+    Cold means all three: the turn is not its context's first (so there was a cache to lose), it
+    follows a gap of at least `COLD_GAP_SECONDS` (the shortest lifetime a cache write buys), and it
+    read back under `COLD_READ_FRACTION` of the previous context — the context it should have read
+    from cache was not read. The previous turn is the previous turn of the *context*, whether or not
+    it falls inside the reporting window."""
+    records = []
+    for i in range(1, len(ctx_turns)):
+        turn, prev = ctx_turns[i], ctx_turns[i - 1]
+        if turn.get("ts") is None or prev.get("ts") is None:
+            continue
+        gap = (turn["ts"] - prev["ts"]).total_seconds()
+        if gap < COLD_GAP_SECONDS:
+            continue
+        prev_ctx = prev["ctx"]
+        if turn["usage"].get("cache_read_input_tokens", 0) >= COLD_READ_FRACTION * prev_ctx:
+            continue
+        rewritten, extra = cold_rewrite_cost(turn["usage"], prev_ctx, turn.get("model"))
+        records.append(dict(turn=turn, prev=prev, gap=gap, prev_ctx=prev_ctx,
+                             rewritten=rewritten, extra=extra))
+    return records
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +465,7 @@ class Loaded:
         self.window_turns = [t for t in ctx.turns if since <= t["ts"] < until]
         self.first_in_window = bool(ctx.turns) and since <= ctx.turns[0]["ts"] < until
         for t in self.window_turns:
-            t["ie"] = input_equivalent(t["usage"])
+            t["ie"] = input_equivalent(t["usage"], t.get("model"))
 
 
 def load_all(projects_dir, transcript, since, until):
@@ -501,6 +578,156 @@ def section_turn_shape(out, loaded):
         one_tool = [t for t in turns if t["n_tools"] == 1]
         ie_one = sum(t["ie"] for t in one_tool)
         out.append(f"  {label:10} turns carrying exactly one tool call: {100*len(one_tool)/n:5.1f}% of turns, {100*ie_one/total_ie:5.1f}% of input-eq spend")
+    out.append("")
+
+
+def cache_lifetime_line(label, turns):
+    """One `cache writes` line: the share of this kind's cache writes bought at each lifetime, which
+    is what the plan in force actually gives it."""
+    w5 = w1 = 0
+    any_split = False
+    for t in turns:
+        a, b, split = cache_writes(t["usage"])
+        if split:
+            any_split = True
+            w5 += a
+            w1 += b
+    total = w5 + w1
+    if not any_split or not total:
+        return f"  {label:10} cache writes  no lifetime recorded"
+    h1 = f"1-hour {100*w1/total:.0f}%" + (f" ({fmt_tok(w1)})" if w1 else "")
+    h5 = f"5-minute {100*w5/total:.0f}%" + (f" ({fmt_tok(w5)})" if w5 else "")
+    return f"  {label:10} cache writes  {h1:<22} {h5}"
+
+
+def subagent_cold_breakdown(records_by_context):
+    """Why subagent turns went cold: what the previous turn had just called, and — for the turns that
+    followed a Bash call — which commands filled the wait. `records_by_context` is (ctx, records) for
+    every subagent context in the window, `records` from `cold_turns(ctx.turns)` filtered to that
+    context's in-window turns. Returns a plain dict so tests can assert numbers, not just text."""
+    bash, other_tool, no_tool = [], [], []
+    by_command_av = collections.defaultdict(float)
+    by_command_n = collections.defaultdict(int)
+    total_contexts = len(records_by_context)
+    contexts_with_cold = 0
+    contexts_multi = 0
+    total_avoidable = 0.0
+    multi_avoidable = 0.0
+
+    for ctx, records in records_by_context:
+        if not records:
+            continue
+        contexts_with_cold += 1
+        ctx_avoidable = sum(r["extra"] for r in records)
+        total_avoidable += ctx_avoidable
+        if len(records) >= 2:
+            contexts_multi += 1
+            multi_avoidable += ctx_avoidable
+        index_of = {id(t): i for i, t in enumerate(ctx.turns)}
+        for r in records:
+            prev_tools = r["prev"]["tools"]
+            if "Bash" in prev_tools:
+                bash.append(r)
+                ti = index_of.get(id(r["turn"]))
+                cats = {cat for eti, cat, ch in ctx.events if eti == ti and cat.startswith("bash: ")}
+                for cat in cats:
+                    by_command_av[cat] += r["extra"]
+                    by_command_n[cat] += 1
+            elif prev_tools:
+                other_tool.append(r)
+            else:
+                no_tool.append(r)
+
+    by_command = sorted(((cat, by_command_av[cat], by_command_n[cat]) for cat in by_command_av),
+                         key=lambda t: -t[1])[:3]
+
+    return dict(bash=bash, other_tool=other_tool, no_tool=no_tool, by_command=by_command,
+                total_contexts=total_contexts, contexts_with_cold=contexts_with_cold,
+                contexts_multi=contexts_multi, total_avoidable=total_avoidable,
+                multi_avoidable=multi_avoidable)
+
+
+def section_cold_cache(out, loaded):
+    """Spend on turns that arrived after the prompt cache had expired, and how much of it a guard
+    that warned before sending into a cold, large context could have saved."""
+    out.append("=== Cold cache ===")
+    out.append("  a turn is cold when it follows a gap of 5 minutes or more and read under half of"
+               " the previous context from cache")
+    per_kind = {}
+    groups_by_kind = {}
+    for kind in ("main", "subagent"):
+        group = [l for l in loaded if l.ctx.kind == kind]
+        turns = [t for l in group for t in l.window_turns]
+        in_window = {id(t) for t in turns}
+        records = [r for l in group for r in cold_turns(l.ctx.turns) if id(r["turn"]) in in_window]
+        per_kind[kind] = (turns, records)
+        groups_by_kind[kind] = group
+        out.append(cache_lifetime_line(kind, turns))
+
+    if not any(records for _, records in per_kind.values()):
+        out.append("  none in this window")
+        out.append("")
+        return
+
+    for kind in ("main", "subagent"):
+        turns, records = per_kind[kind]
+        total_ie = sum(t["ie"] for t in turns) or 1
+        ie = sum(r["turn"]["ie"] for r in records)
+        avoidable = sum(r["extra"] for r in records)
+        share = f"({100*ie/total_ie:.1f}% of {kind} spend)"
+        out.append(f"  {kind:10} cold turns {len(records):4} of {len(turns):6}  input-eq {fmt_tok(ie):>6}"
+                    f"  {share:<26} avoidable {fmt_tok(avoidable):>6} ({100*avoidable/total_ie:.1f}%)")
+
+    # Only main gets the gap x size table: a prompt guard fires before a prompt is sent, and only the
+    # main session has a prompt a person is about to send.
+    out.append("")
+    out.append("  main, by gap and context size (avoidable input-eq):")
+    cells = collections.defaultdict(lambda: [0.0, 0])
+    for r in per_kind["main"][1]:
+        gap_key = "5m to 1h" if r["gap"] < COLD_LONG_GAP_SECONDS else "over 1h"
+        size_key = "under 100k" if r["prev_ctx"] < COLD_LARGE_CONTEXT else "100k and over"
+        cell = cells[(gap_key, size_key)]
+        cell[0] += r["extra"]
+        cell[1] += 1
+    out.append(f"    {'gap':14} {'under 100k':<16} {'100k and over'}")
+    for gap_key in ("5m to 1h", "over 1h"):
+        row = []
+        for size_key in ("under 100k", "100k and over"):
+            av, n = cells[(gap_key, size_key)]
+            unit = "turn" if n == 1 else "turns"
+            row.append(f"{fmt_tok(av)} ({n} {unit})")
+        out.append(f"    {gap_key:14} {row[0]:<16} {row[1]:<16}".rstrip())
+
+    records_by_context = []
+    for l in groups_by_kind["subagent"]:
+        in_window = {id(t) for t in l.window_turns}
+        recs = [r for r in cold_turns(l.ctx.turns) if id(r["turn"]) in in_window]
+        records_by_context.append((l.ctx, recs))
+    bd = subagent_cold_breakdown(records_by_context)
+    if bd["bash"] or bd["other_tool"] or bd["no_tool"]:
+        out.append("")
+        out.append("  subagent, what the cold turns were waiting on (avoidable input-eq):")
+
+        def group_line(label, records, suffix=""):
+            av = sum(r["extra"] for r in records)
+            n = len(records)
+            unit = "turn" if n == 1 else "turns"
+            return f"    {label:28} {fmt_tok(av):>6} ({n} {unit}){suffix}"
+
+        suffix = ""
+        if bd["bash"]:
+            wait_m = round(median(r["gap"] for r in bd["bash"]) / 60)
+            med_ctx = median(r["prev_ctx"] for r in bd["bash"])
+            suffix = f"   median wait {wait_m}m, median context {fmt_tok(med_ctx)}"
+        out.append(group_line("after a Bash call", bd["bash"], suffix))
+        out.append(group_line("after another tool", bd["other_tool"]))
+        out.append(group_line("after no tool call", bd["no_tool"]))
+        if bd["by_command"]:
+            out.append("    by command:  " + " · ".join(
+                f"{cat} {fmt_tok(av)} ({n})" for cat, av, n in bd["by_command"]))
+        pct = round(100 * bd["multi_avoidable"] / bd["total_avoidable"]) if bd["total_avoidable"] else 0
+        out.append(f"    agents with a cold turn: {bd['contexts_with_cold']} of {bd['total_contexts']}; "
+                    f"the {bd['contexts_multi']} with two or more hold {pct}% of it")
     out.append("")
 
 
@@ -695,6 +922,7 @@ def build_report(loaded, top_n, tools=False):
     section_per_day(out, loaded)
     section_concentration(out, loaded)
     section_turn_shape(out, loaded)
+    section_cold_cache(out, loaded)
     section_fills_context(out, loaded)
     section_fixed_start(out, loaded)
     section_largest(out, loaded, top_n)

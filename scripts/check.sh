@@ -19,6 +19,7 @@ if [ -z "$py" ]; then
 fi
 "$py" -m unittest discover -s plugins/orchestration/tests
 "$py" -m unittest discover -s plugins/orchestration/skills/agent-cost/tests
+"$py" -m unittest discover -s plugins/cache-guard/tests
 
 # A plugin's version is written twice, in its manifest and in the marketplace entry; they must agree.
 "$py" - <<'EOF'
@@ -40,14 +41,16 @@ EOF
 
 if command -v claude >/dev/null 2>&1; then
   claude plugin validate . --strict
-  claude plugin validate plugins/orchestration --strict
+  for plugin in plugins/*/; do
+    claude plugin validate "${plugin%/}" --strict
+  done
 else
   echo "manifest validation: claude CLI not found — skipped" >&2
 fi
 
 terms="${PRIVATE_TERMS:-$HOME/.config/agulhas/private-terms.txt}"
 if [ -f "$terms" ]; then
-  if grep -rniF -f "$terms" --exclude-dir=.git --exclude=.git --exclude-dir=__pycache__ . ; then
+  if grep -rniF -f "$terms" --exclude-dir=.git --exclude=.git --exclude-dir=__pycache__ --exclude-dir=.build . ; then
     echo "privacy gate: the lines above carry a private term" >&2
     exit 1
   fi

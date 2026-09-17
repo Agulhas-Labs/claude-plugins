@@ -121,6 +121,29 @@ class TurnDedupeTests(unittest.TestCase):
 
 
 class PricingTests(unittest.TestCase):
+    def test_a_cache_read_on_fable_5_1_weighs_a_fortieth_and_a_tenth_on_everything_else(self):
+        u = usage(input_tokens=0, cache_read=1_000_000, cache_creation=0)
+        self.assertAlmostEqual(ac.input_equivalent(u, "claude-fable-5-1"), 25_000.0)
+        self.assertAlmostEqual(ac.input_equivalent(u, "claude-fable-5-1-20260801"), 25_000.0)
+        self.assertAlmostEqual(ac.input_equivalent(u, "claude-fable-5"), 100_000.0)
+        self.assertAlmostEqual(ac.input_equivalent(u, "claude-opus-5"), 100_000.0)
+        self.assertAlmostEqual(ac.input_equivalent(u), 100_000.0)
+
+    def test_a_loaded_turn_is_priced_with_its_own_models_read_weight(self):
+        fx = FixtureRoot(self)
+        u = usage(input_tokens=0, cache_read=1_000_000, cache_creation=0)
+        fx.main_session(session="fable", entries=[assistant("m1", ts_str(BASE), u, model="claude-fable-5-1")])
+        fx.main_session(session="opus", entries=[assistant("m2", ts_str(BASE), u, model="claude-opus-5")])
+        loaded = ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
+        spend = sorted(t["ie"] for l in loaded for t in l.window_turns)
+        self.assertEqual([round(x) for x in spend], [25_000, 100_000])
+
+    def test_a_cold_rewrite_on_fable_5_1_is_measured_against_its_cheaper_warm_read(self):
+        u = usage(input_tokens=0, cache_read=0, cache_creation=100_000,
+                  split={"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 100_000})
+        self.assertAlmostEqual(ac.cold_rewrite_cost(u, 100_000, "claude-fable-5-1")[1], 197_500.0)
+        self.assertAlmostEqual(ac.cold_rewrite_cost(u, 100_000, "claude-opus-5")[1], 190_000.0)
+
     def test_input_equivalent_with_5m_1h_split(self):
         u = usage(input_tokens=100, cache_read=1000, split={"ephemeral_5m_input_tokens": 200, "ephemeral_1h_input_tokens": 50})
         # 100*1 + 1000*0.1 + 200*1.25 + 50*2.0 = 100 + 100 + 250 + 100 = 550
@@ -421,6 +444,217 @@ class FillsContextTests(unittest.TestCase):
         self.assertEqual(line.split()[-2], "16k")
 
 
+class ColdCacheTests(unittest.TestCase):
+    """A turn is cold when it follows a gap of at least 5 minutes and read back under half of the
+    previous context from cache — it pays to write that context in again."""
+
+    def _turn(self, ts, u):
+        return dict(ts=ts, ctx=ac.context_size(u), usage=u, model="claude-sonnet-5", n_tools=0,
+                    tools={})
+
+    def _context(self, turns, kind="main"):
+        c = ac.Context(kind, "/tmp/cold.jsonl", "proj", "sess", "c1")
+        c.turns = turns
+        return c
+
+    def test_a_warm_turn_after_a_long_gap_is_not_cold(self):
+        prev = self._turn(BASE, usage(input_tokens=0, cache_read=50000))
+        warm = self._turn(BASE + timedelta(hours=2), usage(input_tokens=0, cache_read=50000))
+        self.assertEqual(ac.cold_turns([prev, warm]), [])
+
+    def test_a_gap_over_five_minutes_with_the_context_rewritten_at_the_1h_rate_is_cold(self):
+        prev_ctx = 50000
+        prev = self._turn(BASE, usage(input_tokens=0, cache_read=prev_ctx))
+        cold = self._turn(BASE + timedelta(minutes=10),
+                          usage(input_tokens=0, cache_read=0, cache_creation=prev_ctx,
+                                split={"ephemeral_5m_input_tokens": 0,
+                                       "ephemeral_1h_input_tokens": prev_ctx}))
+        records = ac.cold_turns([prev, cold])
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["prev_ctx"], prev_ctx)
+        self.assertEqual(records[0]["rewritten"], prev_ctx)
+        # what the rewrite cost (x2.0, the 1-hour write rate) above a warm cache read (x0.1)
+        self.assertAlmostEqual(records[0]["extra"], prev_ctx * (2.0 - 0.1))
+
+    def test_a_gap_under_five_minutes_with_a_low_cache_read_is_not_cold(self):
+        # This is what compaction looks like: the context is rewritten, but not because it expired.
+        prev = self._turn(BASE, usage(input_tokens=0, cache_read=50000))
+        compacted = self._turn(BASE + timedelta(seconds=299),
+                               usage(input_tokens=0, cache_read=0, cache_creation=20000))
+        self.assertEqual(ac.cold_turns([prev, compacted]), [])
+
+    def test_the_first_turn_of_a_context_is_never_cold(self):
+        first = self._turn(BASE, usage(input_tokens=0, cache_read=0, cache_creation=50000))
+        self.assertEqual(ac.cold_turns([first]), [])
+
+    def test_a_previous_turn_outside_the_window_still_counts_as_the_previous_turn(self):
+        since = BASE
+        prev_ctx = 40000
+        prev = self._turn(BASE - timedelta(hours=1), usage(input_tokens=0, cache_read=prev_ctx))
+        cold = self._turn(BASE + timedelta(minutes=10),
+                          usage(input_tokens=0, cache_read=0, cache_creation=prev_ctx))
+        l = ac.Loaded(self._context([prev, cold]), since, since + timedelta(hours=4))
+        self.assertEqual(len(l.window_turns), 1)          # the previous turn is out of the window
+        records = ac.cold_turns(l.ctx.turns)
+        self.assertEqual(len(records), 1)
+        self.assertIs(records[0]["prev"], prev)
+
+        out = []
+        ac.section_cold_cache(out, [l])
+        line = next(x for x in out if x.strip().startswith("main") and "cold turns" in x)
+        self.assertRegex(line, r"cold turns\s+1 of\s+1\b")
+
+    def test_cache_write_lifetime_reported_per_kind(self):
+        main_turn = self._turn(BASE, usage(input_tokens=0, cache_creation=30000,
+                                           split={"ephemeral_5m_input_tokens": 0,
+                                                  "ephemeral_1h_input_tokens": 30000}))
+        sub_turn = self._turn(BASE, usage(input_tokens=0, cache_creation=20000,
+                                          split={"ephemeral_5m_input_tokens": 20000,
+                                                 "ephemeral_1h_input_tokens": 0}))
+        window = (BASE - timedelta(minutes=1), BASE + timedelta(minutes=1))
+        lm = ac.Loaded(self._context([main_turn], kind="main"), *window)
+        ls = ac.Loaded(self._context([sub_turn], kind="subagent"), *window)
+        out = []
+        ac.section_cold_cache(out, [lm, ls])
+        main_line = next(x for x in out if x.strip().startswith("main") and "cache writes" in x)
+        sub_line = next(x for x in out if x.strip().startswith("subagent") and "cache writes" in x)
+        self.assertIn("1-hour 100% (30k)", main_line)
+        self.assertIn("5-minute 0%", main_line)
+        self.assertIn("5-minute 100% (20k)", sub_line)
+        self.assertIn("1-hour 0%", sub_line)
+
+    def test_no_split_recorded_says_so(self):
+        turn = self._turn(BASE, usage(input_tokens=0, cache_creation=5000))
+        l = ac.Loaded(self._context([turn], kind="main"), BASE - timedelta(minutes=1),
+                      BASE + timedelta(minutes=1))
+        out = []
+        ac.section_cold_cache(out, [l])
+        line = next(x for x in out if x.strip().startswith("main") and "cache writes" in x)
+        self.assertIn("no lifetime recorded", line)
+
+    def test_report_says_none_in_this_window_when_nothing_is_cold(self):
+        fx = FixtureRoot(self)
+        fx.main_session(entries=[
+            assistant("m1", ts_str(BASE), usage(input_tokens=0, cache_read=5000)),
+            assistant("m2", ts_str(BASE + timedelta(seconds=30)), usage(input_tokens=0, cache_read=6000)),
+        ])
+        loaded = ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
+        report = ac.build_report(loaded, 12)
+        self.assertIn("=== Cold cache ===", report)
+        self.assertIn("none in this window", report)
+
+    def test_gap_boundary_299_not_cold_300_and_301_are(self):
+        # prev_ctx = 1000; cache_read 0 in the test turn throughout, so only the gap varies.
+        prev = self._turn(BASE, usage(input_tokens=1000, cache_read=0))
+        just_under = self._turn(BASE + timedelta(seconds=299), usage(input_tokens=0, cache_read=0))
+        at_gap = self._turn(BASE + timedelta(seconds=300), usage(input_tokens=0, cache_read=0))
+        over_gap = self._turn(BASE + timedelta(seconds=301), usage(input_tokens=0, cache_read=0))
+        self.assertEqual(ac.cold_turns([prev, just_under]), [])
+        self.assertEqual(len(ac.cold_turns([prev, at_gap])), 1)
+        self.assertEqual(len(ac.cold_turns([prev, over_gap])), 1)
+
+    def test_read_boundary_half_of_previous_context(self):
+        # prev_ctx = 100000, gap 600s (well over the 300s floor) throughout; only cache_read varies.
+        prev = self._turn(BASE, usage(input_tokens=100000, cache_read=0))
+        half_read = self._turn(BASE + timedelta(seconds=600), usage(input_tokens=0, cache_read=50000))
+        just_under_half = self._turn(BASE + timedelta(seconds=600), usage(input_tokens=0, cache_read=49999))
+        self.assertEqual(ac.cold_turns([prev, half_read]), [])
+        self.assertEqual(len(ac.cold_turns([prev, just_under_half])), 1)
+
+    def test_pricing_pro_rata_split_when_written_exceeds_previous_context(self):
+        u = usage(input_tokens=0, cache_read=0, cache_creation=150000,
+                   split={"ephemeral_5m_input_tokens": 60000, "ephemeral_1h_input_tokens": 90000})
+        rewritten, extra = ac.cold_rewrite_cost(u, 120000)
+        self.assertEqual(rewritten, 120000)
+        self.assertAlmostEqual(extra, 120000 * (0.4 * 1.25 + 0.6 * 2.0) - 120000 * 0.1)
+
+    def test_pricing_no_cache_write_uses_uncached_rate(self):
+        u = usage(input_tokens=80000, cache_read=0, cache_creation=0)
+        rewritten, extra = ac.cold_rewrite_cost(u, 150000)
+        self.assertEqual(rewritten, 80000)
+        self.assertAlmostEqual(extra, 72000.0)
+
+
+class ColdCacheTableAndWindowTests(unittest.TestCase):
+    """The main-only gap x size table, and rendering when a context's only cold arrival falls
+    outside the reporting window."""
+
+    def test_table_quadrants_and_boundaries(self):
+        fx = FixtureRoot(self)
+        t0 = BASE
+        t1 = t0 + timedelta(seconds=600)
+        t2 = t1 + timedelta(seconds=600)
+        t3 = t2 + timedelta(seconds=7200)
+        t4 = t3 + timedelta(seconds=7200)
+        t5 = t4 + timedelta(seconds=3600)   # boundary: gap exactly 3600s -> "over 1h"
+        t6 = t5 + timedelta(seconds=600)    # boundary: prev ctx exactly 100000 -> "100k and over"
+        entries = [
+            assistant("m0", ts_str(t0), usage(input_tokens=0, cache_creation=50000)),   # ctx 50000
+            assistant("m1", ts_str(t1), usage(input_tokens=0, cache_creation=150000, cache_read=0)),  # gap 600, prev 50000
+            assistant("m2", ts_str(t2), usage(input_tokens=0, cache_creation=50000, cache_read=0)),   # gap 600, prev 150000
+            assistant("m3", ts_str(t3), usage(input_tokens=0, cache_creation=150000, cache_read=0)),  # gap 7200, prev 50000
+            assistant("m4", ts_str(t4), usage(input_tokens=0, cache_creation=20000, cache_read=0)),   # gap 7200, prev 150000
+            assistant("m5", ts_str(t5), usage(input_tokens=0, cache_creation=100000, cache_read=0)),  # gap 3600, prev 20000
+            assistant("m6", ts_str(t6), usage(input_tokens=0, cache_creation=1, cache_read=0)),       # gap 600, prev 100000
+        ]
+        fx.main_session(entries=entries)
+        loaded = ac.load_all(fx.root, None, t0 - timedelta(minutes=1), t6 + timedelta(hours=1))
+        out = []
+        ac.section_cold_cache(out, loaded)
+        report = "\n".join(out)
+        self.assertIn("cold turns    6 of      7", report)
+
+        header = next(l for l in out if l.strip().startswith("gap"))
+        cols = header.split()
+        self.assertEqual(cols[1:], ["under", "100k", "100k", "and", "over"])  # sanity on the header text
+
+        row_5m = next(l for l in out if l.strip().startswith("5m to 1h"))
+        row_over = next(l for l in out if l.strip().startswith("over 1h"))
+        # (gap, prev): (600,50000)->under100k/5m-1h; (600,150000)->100k-and-over/5m-1h (+ boundary m6, gap600/prev100000)
+        # (7200,50000)->under100k/over1h (+ boundary m5, gap3600/prev20000); (7200,150000)->100k-and-over/over1h
+        self.assertRegex(row_5m, r"\(1 turn\).*\(2 turns\)")
+        self.assertRegex(row_over, r"\(2 turns\).*\(1 turn\)")
+
+    def test_arrival_outside_window_renders_none_in_this_window(self):
+        fx = FixtureRoot(self)
+        t_cold = BASE - timedelta(hours=4)
+        t_warm = BASE + timedelta(minutes=10)
+        entries = [
+            assistant("m0", ts_str(t_cold - timedelta(hours=1)), usage(input_tokens=0, cache_read=100000)),
+            assistant("m1", ts_str(t_cold), usage(input_tokens=0, cache_read=0, cache_creation=100000)),
+            assistant("m2", ts_str(t_warm), usage(input_tokens=0, cache_read=100000)),
+        ]
+        fx.main_session(entries=entries)
+        loaded = ac.load_all(fx.root, None, BASE, BASE + timedelta(hours=1))
+        out = []
+        ac.section_cold_cache(out, loaded)
+        report = "\n".join(out)
+        self.assertIn("none in this window", report)
+
+    def test_zero_cold_records_for_main_prints_the_exact_spacing(self):
+        # Add a subagent with a genuine in-window cold turn so the report doesn't take the
+        # "none in this window" shortcut, and main's own zero-record line can be checked.
+        fx = FixtureRoot(self)
+        t_cold = BASE - timedelta(hours=4)
+        t_warm = BASE + timedelta(minutes=10)
+        fx.main_session(entries=[
+            assistant("m0", ts_str(t_cold - timedelta(hours=1)), usage(input_tokens=0, cache_read=100000)),
+            assistant("m1", ts_str(t_cold), usage(input_tokens=0, cache_read=0, cache_creation=100000)),
+            assistant("m2", ts_str(t_warm), usage(input_tokens=0, cache_read=100000)),
+        ])
+        fx.subagent(agent="a1", entries=[
+            assistant("s0", ts_str(t_warm), usage(input_tokens=0, cache_read=100000)),
+            assistant("s1", ts_str(t_warm + timedelta(seconds=600)), usage(input_tokens=0, cache_read=0, cache_creation=100000)),
+        ])
+        loaded = ac.load_all(fx.root, None, BASE, BASE + timedelta(hours=1))
+        out = []
+        ac.section_cold_cache(out, loaded)
+        report = "\n".join(out)
+        self.assertIn("cold turns    0 of", report)
+        main_line = next(l for l in out if l.strip().startswith("main") and "cold turns" in l)
+        self.assertIn("cold turns    0 of", main_line)
+
+
 class WindowBoundaryTests(unittest.TestCase):
     def test_until_is_exclusive_so_back_to_back_windows_never_double_count(self):
         c = ac.Context("subagent", "/tmp/w.jsonl", "proj", "sess", "w")
@@ -547,7 +781,8 @@ class EndToEndTests(unittest.TestCase):
                      "--until", str(ts_str(BASE + timedelta(hours=1)))])
         output = buf.getvalue()
         for header in ("=== Totals ===", "=== Per day", "=== Concentration ===", "=== Turn shape ===",
-                       "=== What fills the context ===", "=== Fixed start ===", "=== Largest contexts"):
+                       "=== Cold cache ===", "=== What fills the context ===", "=== Fixed start ===",
+                       "=== Largest contexts"):
             self.assertIn(header, output)
 
 
@@ -628,6 +863,131 @@ class EncodingTests(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertNotIn("Traceback", run.stderr)
         self.assertRegex(run.stdout, r"subagent\s+contexts\s+1\b")
+
+
+class SubagentColdBreakdownTests(unittest.TestCase):
+    """What subagent cold turns were waiting on: after a Bash call, after another tool, after no
+    tool call — and, for the Bash group, which commands and how concentrated across agents."""
+
+    def _turn(self, ts, tools, u):
+        return dict(ts=ts, ctx=ac.context_size(u), usage=u, model="claude-sonnet-5", n_tools=len(tools),
+                    tools=tools)
+
+    def _context(self, turns, events, kind="subagent"):
+        c = ac.Context(kind, "/tmp/subcold.jsonl", "proj", "sess", "c")
+        c.turns = turns
+        c.events = events
+        return c
+
+    def _records_by_context(self, contexts):
+        out = []
+        for ctx in contexts:
+            in_window = {id(t) for t in ctx.turns}
+            recs = [r for r in ac.cold_turns(ctx.turns) if id(r["turn"]) in in_window]
+            out.append((ctx, recs))
+        return out
+
+    def setUp(self):
+        t0 = BASE
+        # Context A: one cold turn following a Bash call, prev_ctx 50000, gap 300s, extra 45000.
+        a_prev = self._turn(t0, {"Bash": 1}, usage(input_tokens=0, cache_read=50000))
+        a_cold = self._turn(t0 + timedelta(seconds=300), {},
+                            usage(input_tokens=50000, cache_read=0, cache_creation=0))
+        self.ctx_a = self._context([a_prev, a_cold], [(1, "bash: raw swift build/test", 500)])
+
+        # Context D: two cold turns, both following Bash, gaps 600s/900s, prev_ctx 100000/150000,
+        # extras 90000/135000 — exercises the "two or more" grouping.
+        d0 = self._turn(t0, {"Bash": 1}, usage(input_tokens=0, cache_read=100000))
+        d1 = self._turn(t0 + timedelta(seconds=600), {},
+                        usage(input_tokens=100000, cache_read=0, cache_creation=0))
+        d2 = self._turn(t0 + timedelta(seconds=700), {"Bash": 1}, usage(input_tokens=0, cache_read=150000))
+        d3 = self._turn(t0 + timedelta(seconds=1600), {},
+                        usage(input_tokens=150000, cache_read=0, cache_creation=0))
+        self.ctx_d = self._context([d0, d1, d2, d3],
+                                    [(1, "bash: grep", 500), (3, "bash: raw swift build/test", 500)])
+
+        # Context B: one cold turn following a Read (a tool, but not Bash). prev_ctx 20000, extra 18000.
+        b_prev = self._turn(t0, {"Read": 1}, usage(input_tokens=0, cache_read=20000))
+        b_cold = self._turn(t0 + timedelta(seconds=400), {},
+                            usage(input_tokens=20000, cache_read=0, cache_creation=0))
+        self.ctx_b = self._context([b_prev, b_cold], [])
+
+        # Context C: one cold turn following a text-only turn (no tool call). prev_ctx 10000, extra 9000.
+        c_prev = self._turn(t0, {}, usage(input_tokens=0, cache_read=10000))
+        c_cold = self._turn(t0 + timedelta(seconds=350), {},
+                            usage(input_tokens=10000, cache_read=0, cache_creation=0))
+        self.ctx_c = self._context([c_prev, c_cold], [])
+
+        self.records_by_context = self._records_by_context(
+            [self.ctx_a, self.ctx_b, self.ctx_c, self.ctx_d])
+
+    def test_group_counts_and_avoidable(self):
+        bd = ac.subagent_cold_breakdown(self.records_by_context)
+        self.assertEqual(len(bd["bash"]), 3)
+        self.assertAlmostEqual(sum(r["extra"] for r in bd["bash"]), 270000)
+        self.assertEqual(len(bd["other_tool"]), 1)
+        self.assertAlmostEqual(sum(r["extra"] for r in bd["other_tool"]), 18000)
+        self.assertEqual(len(bd["no_tool"]), 1)
+        self.assertAlmostEqual(sum(r["extra"] for r in bd["no_tool"]), 9000)
+
+    def test_bash_group_median_wait_and_context(self):
+        bd = ac.subagent_cold_breakdown(self.records_by_context)
+        self.assertEqual(ac.median(r["gap"] for r in bd["bash"]), 600)
+        self.assertEqual(ac.median(r["prev_ctx"] for r in bd["bash"]), 100000)
+
+    def test_by_command_top_categories(self):
+        bd = ac.subagent_cold_breakdown(self.records_by_context)
+        by_command = {cat: (av, n) for cat, av, n in bd["by_command"]}
+        self.assertEqual(by_command["bash: raw swift build/test"], (45000 + 135000, 2))
+        self.assertEqual(by_command["bash: grep"], (90000, 1))
+
+    def test_contexts_with_cold_and_two_or_more_share(self):
+        bd = ac.subagent_cold_breakdown(self.records_by_context)
+        self.assertEqual(bd["total_contexts"], 4)
+        self.assertEqual(bd["contexts_with_cold"], 4)
+        self.assertEqual(bd["contexts_multi"], 1)
+        self.assertAlmostEqual(bd["total_avoidable"], 297000)
+        self.assertAlmostEqual(bd["multi_avoidable"], 225000)
+
+    def test_section_renders_the_breakdown_for_subagent_cold_turns(self):
+        loaded = [ac.Loaded(ctx, BASE - timedelta(minutes=1), BASE + timedelta(hours=1))
+                  for ctx in (self.ctx_a, self.ctx_b, self.ctx_c, self.ctx_d)]
+        out = []
+        ac.section_cold_cache(out, loaded)
+        report = "\n".join(out)
+        self.assertIn("what the cold turns were waiting on", report)
+        self.assertIn("after a Bash call", report)
+        self.assertIn("median wait 10m, median context 100k", report)
+        self.assertIn("agents with a cold turn: 4 of 4", report)
+
+    def test_a_cold_turn_outside_its_contexts_window_is_not_counted(self):
+        t_early = BASE - timedelta(hours=2)
+        t_cold = BASE - timedelta(hours=1)
+        prev = self._turn(t_early, {"Bash": 1}, usage(input_tokens=0, cache_read=50000))
+        cold = self._turn(t_cold, {}, usage(input_tokens=50000, cache_read=0, cache_creation=0))
+        ctx_outside = self._context([prev, cold], [(1, "bash: raw swift build/test", 500)])
+
+        loaded = [ac.Loaded(ctx, BASE - timedelta(minutes=1), BASE + timedelta(hours=1))
+                  for ctx in (self.ctx_a, self.ctx_b, self.ctx_c, self.ctx_d)]
+        # This context's only turns are both before the window, so it has no window turns at all —
+        # its cold turn must not be counted toward the breakdown.
+        loaded.append(ac.Loaded(ctx_outside, BASE, BASE + timedelta(hours=1)))
+        out = []
+        ac.section_cold_cache(out, loaded)
+        report = "\n".join(out)
+        self.assertIn("agents with a cold turn: 4 of 5", report)
+
+    def test_main_only_cold_turns_do_not_print_the_subagent_breakdown(self):
+        t0 = BASE
+        main_prev = self._turn(t0, {}, usage(input_tokens=0, cache_read=5000))
+        main_cold = self._turn(t0 + timedelta(seconds=400), {},
+                               usage(input_tokens=5000, cache_read=0, cache_creation=0))
+        ctx_main = self._context([main_prev, main_cold], [], kind="main")
+        loaded = [ac.Loaded(ctx_main, BASE - timedelta(minutes=1), BASE + timedelta(hours=1))]
+        out = []
+        ac.section_cold_cache(out, loaded)
+        report = "\n".join(out)
+        self.assertNotIn("what the cold turns were waiting on", report)
 
 
 class EmptyWindowTests(unittest.TestCase):
