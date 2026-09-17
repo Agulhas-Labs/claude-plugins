@@ -1,7 +1,7 @@
 {
   "name": "agent-cost",
-  "version": "0.1.0",
-  "description": "Shows where your Claude Code tokens went, from the transcripts already on your disk: totals by model and agent type, how concentrated the spend is, single-call turns, cold-cache turns, what fills the contexts you keep re-sending, and what every agent pays before it does any work. It changes nothing and nothing leaves your machine.",
+  "version": "0.2.0",
+  "description": "Shows where your Claude Code tokens went, from the transcripts already on your disk: for your own sessions and for subagents separately: totals by model, the costliest projects and sessions, how concentrated the spend is, single-call turns, cold-cache turns, what fills the contexts you keep re-sending, and what every context pays before it does any work. It changes nothing and nothing leaves your machine.",
   "author": {
     "name": "Agulhas Labs"
   },

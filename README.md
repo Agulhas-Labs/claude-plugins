@@ -22,9 +22,10 @@ installs `agent-cost` with it.
 
 ## agent-cost
 
-Ask "where did my tokens go this week?" and it answers from your local transcripts: totals by model and
-agent type, how concentrated the spend is, how many turns made a single tool call, what went on turns
-sent into an expired cache, what fills the contexts you keep re-sending, and what every agent pays
+Ask "where did my tokens go this week?" and it answers from your local transcripts, for your own sessions
+and for any subagents they started: totals by model, which projects and sessions cost the most, how
+concentrated the spend is, how many turns made a single tool call, what went on turns
+sent into an expired cache, what fills the contexts you keep re-sending, and what every context pays
 before it does any work. Each section says what to do about what it shows, and `--since`/`--until`
 compare the days before a change with the days after it.
 
