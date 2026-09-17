@@ -17,6 +17,9 @@ out before you change how you work, install `agent-cost` on its own first.
 
 Start a new session and carry on working as you were. There is nothing to configure.
 
+Updating from 0.1.x? Run `/plugin install agent-cost@agulhas-labs` as well. An update does not install
+the new dependency, and `orchestration` stays off until it is there.
+
 Its sibling in this marketplace is [`cache-guard`](../cache-guard/README.md), which warns you before a
 message goes into a large context whose prompt cache has expired.
 

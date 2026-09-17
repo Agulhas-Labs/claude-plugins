@@ -97,6 +97,11 @@ Marketplaces, `agulhas-labs`, Enable auto-update. Claude Code then refreshes the
 installed plugins when it starts. The `"autoUpdate": true` line above does the same for a repository.
 To update by hand, run `/plugin marketplace update agulhas-labs`.
 
+Updating `orchestration` from 0.1.x: since 0.2.0 it depends on `agent-cost`, which used to be part of it.
+A new install brings `agent-cost` with it. An update does not (tested on Claude Code 2.1.274), and
+`orchestration` stays off, with an error under `/plugin`, until you run
+`/plugin install agent-cost@agulhas-labs`.
+
 Plugins, agents and hooks load when a session starts, so start a new one after installing or updating.
 An organisation's managed settings can restrict which marketplaces and models are allowed; check them
 first.
