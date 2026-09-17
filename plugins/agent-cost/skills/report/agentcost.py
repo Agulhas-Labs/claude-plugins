@@ -88,9 +88,30 @@ def text_of(c):
     return json.dumps(c) if c is not None else ""
 
 
+# A stage that only narrows another stage's output. A pipeline is the command that feeds them: a
+# nine-minute build piped through grep is a build.
+PURE_FILTER = re.compile(r"^(grep|rg|tail|head|sed|awk|sort|uniq|wc|tee)\b")
+
+
+# A loop that sleeps until a log shows a verdict line. What it costs is the wait on the run it watches,
+# whatever it greps for meanwhile.
+WAIT_LOOP = re.compile(r"\b(for|while|until)\b[\s\S]*\b(sleep|caffeinate -t)\b")
+
+
 def bash_class(cmd):
     c = cmd.strip()
-    c = re.sub(r"^(cd [^;&]+(&&|;)\s*)+", "", c)
+    c = re.sub(r"^(cd [^;&\n]+(&&|;|\n)\s*)+", "", c)
+    if WAIT_LOOP.search(c): return "bash: wait loop (polling a run)"
+    for stage in re.split(r"(?<!\|)\|(?!\|)", c):
+        stage = stage.strip()
+        if stage and not PURE_FILTER.match(stage):
+            found = stage_class(stage)
+            if found != "bash: other": return found
+            break
+    return stage_class(c)
+
+
+def stage_class(c):
     if re.search(r"\bswift (test|build)\b|xcodebuild", c): return "bash: raw swift build/test"
     if re.search(r"^(npm|pnpm|yarn|bun) (run )?(test|build)\b", c): return "bash: build/test"
     if re.search(r"^cargo (build|test)\b", c): return "bash: build/test"

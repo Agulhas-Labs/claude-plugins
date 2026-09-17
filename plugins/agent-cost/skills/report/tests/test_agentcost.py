@@ -715,6 +715,28 @@ class BashClassTests(unittest.TestCase):
         self.assertEqual(ac.bash_class("npm run lint"), "bash: lint/format/gates")
         self.assertEqual(ac.bash_class("cargo build"), "bash: build/test")
         self.assertEqual(ac.bash_class("cargo clippy"), "bash: lint/format/gates")
+
+    def test_a_pipeline_is_classified_by_the_stage_that_feeds_its_filters(self):
+        self.assertEqual(ac.bash_class("swift build 2>&1 | grep -E 'error|warning'"), "bash: raw swift build/test")
+        self.assertEqual(ac.bash_class("npm test | tail -20"), "bash: build/test")
+        self.assertEqual(ac.bash_class("cd pkg && cargo test 2>&1 | grep FAILED | head -5"), "bash: build/test")
+        self.assertEqual(ac.bash_class("git log --oneline | grep fix"), "bash: git log/status/etc")
+
+    def test_a_loop_that_sleeps_until_a_log_shows_a_verdict_is_a_wait_not_a_grep(self):
+        poll = 'L=run.log; for i in $(seq 1 58); do if grep -q "Test run with" "$L"; then break; fi; sleep 10; done; tail -3 "$L"'
+        self.assertEqual(ac.bash_class(poll), "bash: wait loop (polling a run)")
+        self.assertEqual(ac.bash_class("until grep -q DONE out.log; do caffeinate -t 20; done"),
+                         "bash: wait loop (polling a run)")
+        self.assertEqual(ac.bash_class("for f in a b; do grep -c x $f; done"), "bash: grep")
+
+    def test_a_cd_on_its_own_line_is_transparent(self):
+        self.assertEqual(ac.bash_class("cd /some/dir\nmake test | tail -5"), "bash: build/test")
+
+    def test_a_pipeline_of_filters_only_keeps_the_whole_command_rule(self):
+        self.assertEqual(ac.bash_class("grep -rn Foo Sources/ | head -5"), "bash: grep")
+        self.assertEqual(ac.bash_class("grep -E 'a|b' file.txt"), "bash: grep")
+        self.assertEqual(ac.bash_class("echo hello | head -1"), "bash: cat/sed/head window")
+        self.assertEqual(ac.bash_class("ls || grep x f"), "bash: grep")
         self.assertEqual(ac.bash_class("go test ./..."), "bash: build/test")
         self.assertEqual(ac.bash_class("go vet ./..."), "bash: lint/format/gates")
         self.assertEqual(ac.bash_class("pytest -k foo"), "bash: build/test")
