@@ -520,9 +520,17 @@ def load_all(projects_dir, transcript, since, until):
     return loaded
 
 
+def kinds_in(loaded):
+    """The context kinds present in the window, in report order. A window with no subagent contexts
+    gets no subagent rows at all rather than zero-filled ones, and no "combined" row that would only
+    repeat main; a window with no main contexts (one agent transcript, say) is treated the same way."""
+    return [k for k in ("main", "subagent") if any(l.ctx.kind == k for l in loaded)]
+
+
 def section_totals(out, loaded):
     out.append("=== Totals ===")
-    for label, kind in (("main", "main"), ("subagent", "subagent")):
+    for kind in kinds_in(loaded):
+        label = kind
         group = [l for l in loaded if l.ctx.kind == kind]
         n_ctx = len(group)
         n_turns = sum(len(l.window_turns) for l in group)
@@ -549,6 +557,7 @@ def section_per_day(out, loaded):
     out.append("=== Per day (local day of the turn) ===")
     by_day = collections.defaultdict(list)          # day -> list of (context, turn)
     ctx_started_day = collections.defaultdict(list)  # day -> list of starting-context sizes
+    ie_by_day_kind = collections.defaultdict(collections.Counter)   # day -> kind -> input-eq
     for l in loaded:
         if l.first_in_window:
             day = l.ctx.turns[0]["ts"].astimezone().date()
@@ -556,7 +565,14 @@ def section_per_day(out, loaded):
         for t in l.window_turns:
             day = t["ts"].astimezone().date()
             by_day[day].append((l, t))
-    out.append(f"  {'day':12} {'contexts':>9} {'median start':>13} {'median turns':>13} {'input-eq':>9} {'top10% share':>13}")
+            ie_by_day_kind[day][l.ctx.kind] += t["ie"]
+    # The day's total splits into main and subagent only where both are in the window; with one kind
+    # the split columns would just repeat the total.
+    split = len(kinds_in(loaded)) > 1
+    header = f"  {'day':12} {'contexts':>9} {'median start':>13} {'median turns':>13} {'input-eq':>9}"
+    if split:
+        header += f" {'main':>9} {'subagent':>9}"
+    out.append(header + f" {'top10% share':>13}")
     for day in sorted(by_day):
         entries = by_day[day]
         ctxs = {id(l): l for l, t in entries}
@@ -568,31 +584,91 @@ def section_per_day(out, loaded):
         ranked = sorted(per_ctx_ie.values(), reverse=True)
         top_n = max(1, len(ranked) // 10)
         top_share = (sum(ranked[:top_n]) / day_ie * 100) if day_ie else 0.0
-        out.append(f"  {day.isoformat():12} {len(ctxs):9} {fmt_tok(median(ctx_started_day.get(day, []))):>13} "
-                    f"{median(per_ctx_turns.values()):13.0f} {fmt_tok(day_ie):>9} {top_share:12.1f}%")
+        row = (f"  {day.isoformat():12} {len(ctxs):9} {fmt_tok(median(ctx_started_day.get(day, []))):>13} "
+               f"{median(per_ctx_turns.values()):13.0f} {fmt_tok(day_ie):>9}")
+        if split:
+            row += f" {fmt_tok(ie_by_day_kind[day]['main']):>9} {fmt_tok(ie_by_day_kind[day]['subagent']):>9}"
+        out.append(row + f" {top_share:12.1f}%")
+    out.append("")
+
+
+def section_main_sessions(out, loaded, top_n):
+    """The main sessions' own picture: where a person's own sessions spent, by project and then by
+    session. Subagent spend is reported on its own elsewhere and is not folded in here."""
+    mains = [l for l in loaded if l.ctx.kind == "main"]
+    if not mains:
+        return
+    out.append("=== Main sessions ===")
+    by_project = collections.defaultdict(list)
+    for l in mains:
+        by_project[project_display_name(l.ctx.project_dir)].append(l)
+    out.append(f"  {'project':30} {'sessions':>9} {'turns':>7} {'input-eq':>9} {'output':>9}")
+    rows = []
+    for proj, group in by_project.items():
+        ie = sum(t["ie"] for l in group for t in l.window_turns)
+        turns = sum(len(l.window_turns) for l in group)
+        outp = sum(t["usage"].get("output_tokens", 0) for l in group for t in l.window_turns)
+        rows.append((ie, proj, len({l.ctx.session_id for l in group}), turns, outp))
+    for ie, proj, sessions, turns, outp in sorted(rows, key=lambda r: -r[0]):
+        out.append(f"  {proj[:30]:30} {sessions:9} {turns:7} {fmt_tok(ie):>9} {fmt_tok(outp):>9}")
+
+    out.append("")
+    out.append(f"  top {top_n} sessions by input-eq:")
+    out.append(f"    {'project':30} {'session':9} {'model':16} {'turns':>6} {'peak':>8} {'input-eq':>9}")
+    sessions = sorted(((sum(t["ie"] for t in l.window_turns), l) for l in mains), key=lambda r: -r[0])
+    for ie, l in sessions[:top_n]:
+        peak = max(t["ctx"] for t in l.window_turns)
+        model = l.window_turns[0]["model"]
+        out.append(f"    {project_display_name(l.ctx.project_dir)[:30]:30} {l.ctx.session_id[:8]:9}"
+                    f" {model[:16]:16} {len(l.window_turns):6} {fmt_tok(peak):>8} {fmt_tok(ie):>9}")
     out.append("")
 
 
 def section_concentration(out, loaded):
+    """Per kind, because where subagents are most of the spend a combined figure hides the main
+    session's own shape. A "top 10%" of fewer than ten contexts is one or two of them dressed up as a
+    decile, so under ten the largest context's share is reported instead — a true statement about a
+    small window rather than a misleading one."""
     out.append("=== Concentration ===")
-    per_ctx = []
-    for l in loaded:
-        ie = sum(t["ie"] for t in l.window_turns)
-        per_ctx.append((ie, len(l.window_turns)))
-    per_ctx.sort(key=lambda p: -p[0])
-    total_ie = sum(p[0] for p in per_ctx) or 1
-    top_n = max(1, len(per_ctx) // 10)
-    top = per_ctx[:top_n]
-    top_ie = sum(p[0] for p in top)
-    out.append(f"  top 10% of contexts ({top_n} of {len(per_ctx)}): {100*top_ie/total_ie:.1f}% of input-eq spend, median turns {median(p[1] for p in top):.0f}")
-    under50_ie = sum(p[0] for p in per_ctx if p[1] < 50)
-    out.append(f"  contexts under 50 turns: {100*under50_ie/total_ie:.1f}% of input-eq spend")
+    for label, kind in report_groups(loaded):
+        per_ctx = []
+        for l in loaded:
+            if kind is not None and l.ctx.kind != kind:
+                continue
+            per_ctx.append((sum(t["ie"] for t in l.window_turns), len(l.window_turns)))
+        per_ctx.sort(key=lambda p: -p[0])
+        n = len(per_ctx)
+        total_ie = sum(p[0] for p in per_ctx) or 1
+        if n >= 10:
+            top_n = n // 10
+            top = per_ctx[:top_n]
+            out.append(f"  {label:10} top 10% of contexts ({top_n} of {n}): {100*sum(p[0] for p in top)/total_ie:.1f}%"
+                        f" of input-eq spend, median turns {median(p[1] for p in top):.0f}")
+        elif n == 1:
+            ie, turns = per_ctx[0]
+            out.append(f"  {label:10} one context in this window: all of the input-eq spend, {turns} turns")
+        else:
+            ie, turns = per_ctx[0]
+            out.append(f"  {label:10} too few contexts ({n}) for a top 10%; the largest: "
+                        f"{100*ie/total_ie:.1f}% of input-eq spend, {turns} turns")
+        under50_ie = sum(p[0] for p in per_ctx if p[1] < 50)
+        out.append(f"  {label:10} contexts under 50 turns: {100*under50_ie/total_ie:.1f}% of input-eq spend")
     out.append("")
+
+
+def report_groups(loaded):
+    """(label, kind) pairs for a per-kind section: each kind present, plus `combined` only when both
+    are, since with one kind the combined figure is the same number twice."""
+    kinds = kinds_in(loaded)
+    groups = [(k, k) for k in kinds]
+    if len(kinds) > 1:
+        groups.append(("combined", None))
+    return groups
 
 
 def section_turn_shape(out, loaded):
     out.append("=== Turn shape ===")
-    for label, kind in (("main", "main"), ("subagent", "subagent"), ("combined", None)):
+    for label, kind in report_groups(loaded):
         turns = [t for l in loaded for t in l.window_turns if kind is None or l.ctx.kind == kind]
         n = len(turns) or 1
         total_ie = sum(t["ie"] for t in turns) or 1
@@ -676,7 +752,8 @@ def section_cold_cache(out, loaded):
                " the previous context from cache")
     per_kind = {}
     groups_by_kind = {}
-    for kind in ("main", "subagent"):
+    kinds = kinds_in(loaded)
+    for kind in kinds:
         group = [l for l in loaded if l.ctx.kind == kind]
         turns = [t for l in group for t in l.window_turns]
         in_window = {id(t) for t in turns}
@@ -690,7 +767,7 @@ def section_cold_cache(out, loaded):
         out.append("")
         return
 
-    for kind in ("main", "subagent"):
+    for kind in kinds:
         turns, records = per_kind[kind]
         total_ie = sum(t["ie"] for t in turns) or 1
         ie = sum(r["turn"]["ie"] for r in records)
@@ -701,26 +778,13 @@ def section_cold_cache(out, loaded):
 
     # Only main gets the gap x size table: a prompt guard fires before a prompt is sent, and only the
     # main session has a prompt a person is about to send.
-    out.append("")
-    out.append("  main, by gap and context size (avoidable input-eq):")
-    cells = collections.defaultdict(lambda: [0.0, 0])
-    for r in per_kind["main"][1]:
-        gap_key = "5m to 1h" if r["gap"] < COLD_LONG_GAP_SECONDS else "over 1h"
-        size_key = "under 100k" if r["prev_ctx"] < COLD_LARGE_CONTEXT else "100k and over"
-        cell = cells[(gap_key, size_key)]
-        cell[0] += r["extra"]
-        cell[1] += 1
-    out.append(f"    {'gap':14} {'under 100k':<16} {'100k and over'}")
-    for gap_key in ("5m to 1h", "over 1h"):
-        row = []
-        for size_key in ("under 100k", "100k and over"):
-            av, n = cells[(gap_key, size_key)]
-            unit = "turn" if n == 1 else "turns"
-            row.append(f"{fmt_tok(av)} ({n} {unit})")
-        out.append(f"    {gap_key:14} {row[0]:<16} {row[1]:<16}".rstrip())
+    if "main" in kinds:
+        out.append("")
+        out.append("  main, by gap and context size (avoidable input-eq):")
+        cold_gap_size_table(out, per_kind["main"][1])
 
     records_by_context = []
-    for l in groups_by_kind["subagent"]:
+    for l in groups_by_kind.get("subagent", []):
         in_window = {id(t) for t in l.window_turns}
         recs = [r for r in cold_turns(l.ctx.turns) if id(r["turn"]) in in_window]
         records_by_context.append((l.ctx, recs))
@@ -752,11 +816,33 @@ def section_cold_cache(out, loaded):
     out.append("")
 
 
+def cold_gap_size_table(out, records):
+    cells = collections.defaultdict(lambda: [0.0, 0])
+    for r in records:
+        gap_key = "5m to 1h" if r["gap"] < COLD_LONG_GAP_SECONDS else "over 1h"
+        size_key = "under 100k" if r["prev_ctx"] < COLD_LARGE_CONTEXT else "100k and over"
+        cell = cells[(gap_key, size_key)]
+        cell[0] += r["extra"]
+        cell[1] += 1
+    out.append(f"    {'gap':14} {'under 100k':<16} {'100k and over'}")
+    for gap_key in ("5m to 1h", "over 1h"):
+        row = []
+        for size_key in ("under 100k", "100k and over"):
+            av, n = cells[(gap_key, size_key)]
+            unit = "turn" if n == 1 else "turns"
+            row.append(f"{fmt_tok(av)} ({n} {unit})")
+        out.append(f"    {gap_key:14} {row[0]:<16} {row[1]:<16}".rstrip())
+
+
 def section_fills_context(out, loaded):
+    """One table over both kinds, with a re-sent share column per kind where both are in the window:
+    a category's share of its own kind's re-sent total, so main's biggest re-sent categories are
+    readable off the same rows as the subagents' rather than in a second full table."""
     out.append("=== What fills the context ===")
     agg = collections.Counter()
     reread = collections.Counter()
     calls = collections.Counter()
+    reread_by_kind = collections.defaultdict(collections.Counter)   # kind -> cat -> re-sent tokens
     for l in loaded:
         wt = l.window_turns
         if len(wt) < 2:
@@ -777,18 +863,32 @@ def section_fills_context(out, loaded):
                       else "(carried in) context accumulated before the window")
         agg[base_label] += base
         reread[base_label] += base * (n - 1)
+        reread_by_kind[l.ctx.kind][base_label] += base * (n - 1)
         for ti, cat, ch in later:
             tok = ch * ratio
             agg[cat] += tok
             # An event recorded after `ti` turns is first sent in turn index `ti` (0-based), so it is
             # re-sent on every later turn *after* that one: n - ti - 1 times, floored at 0.
-            reread[cat] += tok * max(n - ti - 1, 0)
+            rr = tok * max(n - ti - 1, 0)
+            reread[cat] += rr
+            reread_by_kind[l.ctx.kind][cat] += rr
             calls[cat] += 1
     tot_res = sum(agg.values()) or 1
     tot_rr = sum(reread.values()) or 1
-    out.append(f"  {'category':52} {'calls':>6} {'resident':>9} {'%':>5} {'re-sent':>10} {'%':>5}")
+    split = len(kinds_in(loaded)) > 1
+    kind_totals = {k: sum(reread_by_kind[k].values()) or 1 for k in ("main", "subagent")}
+    header = f"  {'category':52} {'calls':>6} {'resident':>9} {'%':>5} {'re-sent':>10} {'%':>5}"
+    if split:
+        header += f" {'main %':>7} {'sub %':>7}"
+        out.append("  the last two columns are each kind's own re-sent total, so they each add to 100%")
+    out.append(header)
     for cat, v in sorted(reread.items(), key=lambda kv: -kv[1]):
-        out.append(f"  {cat[:52]:52} {calls.get(cat,0):6} {fmt_tok(agg[cat]):>9} {100*agg[cat]/tot_res:5.1f} {fmt_tok(v):>10} {100*v/tot_rr:5.1f}")
+        row = (f"  {cat[:52]:52} {calls.get(cat,0):6} {fmt_tok(agg[cat]):>9} {100*agg[cat]/tot_res:5.1f}"
+               f" {fmt_tok(v):>10} {100*v/tot_rr:5.1f}")
+        if split:
+            row += (f" {100*reread_by_kind['main'][cat]/kind_totals['main']:7.1f}"
+                    f" {100*reread_by_kind['subagent'][cat]/kind_totals['subagent']:7.1f}")
+        out.append(row)
     out.append(f"  {'TOTAL':52} {'':6} {fmt_tok(tot_res):>9} {'':5} {fmt_tok(tot_rr):>10}")
     out.append("")
 
@@ -941,6 +1041,7 @@ def build_report(loaded, top_n, tools=False):
     out = []
     section_totals(out, loaded)
     section_per_day(out, loaded)
+    section_main_sessions(out, loaded, top_n)
     section_concentration(out, loaded)
     section_turn_shape(out, loaded)
     section_cold_cache(out, loaded)

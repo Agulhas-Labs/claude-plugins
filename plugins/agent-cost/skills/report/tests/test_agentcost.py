@@ -284,9 +284,39 @@ class ConcentrationTests(unittest.TestCase):
         loaded = make_loaded("subagent", ies)
         out = []
         ac.section_concentration(out, loaded)
-        line = next(l for l in out if l.strip().startswith("top 10%"))
+        line = next(l for l in out if l.strip().startswith("subagent") and "top 10%" in l)
         pct = float(re.search(r": ([\d.]+)%", line).group(1))
         self.assertAlmostEqual(pct, 100.0 * 100 / 270, places=1)
+        # Only subagent contexts are loaded, so there is no main row and no combined row repeating it.
+        self.assertFalse([l for l in out if l.strip().startswith("main")])
+        self.assertFalse([l for l in out if l.strip().startswith("combined")])
+
+    def test_under_ten_contexts_reports_the_largest_not_a_decile(self):
+        loaded = make_loaded("main", [60, 30, 10])   # sum = 100, largest = 60%
+        out = []
+        ac.section_concentration(out, loaded)
+        line = next(l for l in out if "largest" in l)
+        self.assertIn("too few contexts (3) for a top 10%", line)
+        self.assertIn("60.0% of input-eq spend", line)   # 60 of 100, not a "top 10%" of 3 contexts
+
+    def test_a_single_context_says_so_rather_than_quoting_a_share_of_itself(self):
+        out = []
+        ac.section_concentration(out, make_loaded("main", [42]))
+        text = "\n".join(out)
+        self.assertIn("one context in this window", text)
+        self.assertNotIn("top 10%", text)
+
+    def test_both_kinds_get_their_own_row_plus_a_combined_row(self):
+        # main: one context of 100. subagent: two of 50 and 50. combined total 200, largest 100.
+        loaded = make_loaded("main", [100]) + make_loaded("subagent", [50, 50])
+        out = []
+        ac.section_concentration(out, loaded)
+        main_line = next(l for l in out if l.strip().startswith("main") and "one context" in l)
+        sub_line = next(l for l in out if l.strip().startswith("subagent") and "largest" in l)
+        comb_line = next(l for l in out if l.strip().startswith("combined") and "largest" in l)
+        self.assertIn("all of the input-eq spend", main_line)
+        self.assertIn("50.0% of input-eq spend", sub_line)     # 50 of 100
+        self.assertIn("50.0% of input-eq spend", comb_line)    # 100 of 200
 
 
 def mcp_instructions_attachment(ts, added_names, added_blocks, removed_names=None):
@@ -1010,6 +1040,178 @@ class SubagentColdBreakdownTests(unittest.TestCase):
         ac.section_cold_cache(out, loaded)
         report = "\n".join(out)
         self.assertNotIn("what the cold turns were waiting on", report)
+
+
+def sections_of(report):
+    """The report split into its `=== X ===` sections: header text -> body text."""
+    bodies = {}
+    header = None
+    for line in report.split("\n"):
+        if line.startswith("==="):
+            header = line.strip("= ").strip()
+            bodies[header] = []
+        elif header:
+            bodies[header].append(line)
+    return {h: "\n".join(lines) for h, lines in bodies.items()}
+
+
+def section_body(report, name):
+    """The body of the one section whose header starts with `name`."""
+    bodies = sections_of(report)
+    matches = [b for h, b in bodies.items() if h.startswith(name)]
+    assert len(matches) == 1, f"{name}: {list(bodies)}"
+    return matches[0]
+
+
+def loaded_context(kind, sizes, events=(), name="c"):
+    """A Loaded over one context with `sizes` as its per-turn context sizes (input-eq == size, since
+    the usage is pure uncached input) and `events` as its (turn_index, category, chars) list."""
+    c = ac.Context(kind, f"/tmp/{name}.jsonl", "proj", "sess", name)
+    c.turns = build_turns([(BASE, s) for s in sizes])
+    c.events = list(events)
+    return ac.Loaded(c, BASE - timedelta(minutes=1), BASE + timedelta(minutes=1))
+
+
+class MainOnlyReportTests(unittest.TestCase):
+    """A window with no subagent context is reported as that person's own picture: no zero-filled
+    subagent rows, no combined row that only repeats main, no subagent cold-cache breakdown."""
+
+    def _main_only_report(self):
+        fx = FixtureRoot(self)
+        fx.main_session(session="sess1", entries=[
+            instructions_attachment(ts_str(BASE), [("/rules/a.md", "x" * 400)]),
+            assistant("m1", ts_str(BASE), usage(input_tokens=0, cache_read=20000),
+                      content=[tool_use_block("t1")]),
+            user_tool_result(ts_str(BASE + timedelta(seconds=1)), "t1", "result " * 200),
+            assistant("m2", ts_str(BASE + timedelta(seconds=30)), usage(input_tokens=0, cache_read=26000)),
+            assistant("m3", ts_str(BASE + timedelta(seconds=60)), usage(input_tokens=0, cache_read=30000)),
+        ])
+        loaded = ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
+        self.assertEqual([l.ctx.kind for l in loaded], ["main"])
+        return ac.build_report(loaded, 12)
+
+    def test_no_subagent_rows_and_the_session_is_listed_under_main_sessions(self):
+        report = self._main_only_report()
+        for name in ("Totals", "Per day", "Concentration", "Turn shape", "Cold cache",
+                     "What fills the context"):
+            self.assertNotIn("subagent", section_body(report, name).lower(),
+                             f"{name} still mentions subagents in a main-only window")
+        self.assertNotIn("combined", section_body(report, "Turn shape"))
+        main_sessions = section_body(report, "Main sessions")
+        self.assertIn("sess1", main_sessions)
+        self.assertIn("-Users-x-Developer-Proj", main_sessions)
+
+
+class SubagentOnlyReportTests(unittest.TestCase):
+    def test_no_main_sessions_section_and_no_main_rows_when_only_agents_ran(self):
+        fx = FixtureRoot(self)
+        fx.subagent(agent="a1", entries=[
+            assistant("s1", ts_str(BASE), usage(input_tokens=0, cache_read=5000)),
+            assistant("s2", ts_str(BASE + timedelta(seconds=30)), usage(input_tokens=0, cache_read=6000)),
+        ])
+        report = ac.build_report(ac.load_all(fx.root, None, BASE - timedelta(hours=1),
+                                             BASE + timedelta(hours=1)), 12)
+        self.assertNotIn("=== Main sessions ===", report)
+        for name in ("Totals", "Concentration", "Turn shape"):
+            body = section_body(report, name)
+            self.assertFalse([l for l in body.split("\n") if l.strip().startswith("main")], name)
+        self.assertNotIn("by gap and context size", section_body(report, "Cold cache"))
+
+
+class KindSplitTests(unittest.TestCase):
+    """Both kinds in the window: the sections that were combined figures now carry each kind's own."""
+
+    def _loaded(self):
+        # main A: 3 turns (1000, 2000, 3000) -> input-eq 6000; one event of 2000 chars first sent in
+        #   window-turn 1, so ratio (3000-1000)/2000 == 1 and it is re-sent 3-1-1 == 1 time -> 2000.
+        #   Its base (1000) is re-sent n-1 == 2 times -> 2000. main's own re-sent total: 4000.
+        # sub C: 3 turns (1000, 2000, 5000) -> input-eq 8000; event 4000 chars, ratio 1, re-sent once
+        #   -> 4000, base re-sent 2000. subagent's own re-sent total: 6000.
+        # main B and sub D are single-turn contexts: concentration counts them, the fills table skips
+        #   them (it needs two turns to see anything re-sent).
+        return [loaded_context("main", [1000, 2000, 3000], [(1, "cat-M", 2000)], "A"),
+                loaded_context("main", [500], name="B"),
+                loaded_context("subagent", [1000, 2000, 5000], [(1, "cat-S", 4000)], "C"),
+                loaded_context("subagent", [2000], name="D")]
+
+    def test_concentration_reports_each_kind_and_the_combination(self):
+        out = []
+        ac.section_concentration(out, self._loaded())
+        main_line = next(l for l in out if l.strip().startswith("main") and "largest" in l)
+        sub_line = next(l for l in out if l.strip().startswith("subagent") and "largest" in l)
+        comb_line = next(l for l in out if l.strip().startswith("combined") and "largest" in l)
+        self.assertIn("(2) for a top 10%", main_line)
+        self.assertIn("92.3% of input-eq spend", main_line)   # 6000 of 6500
+        self.assertIn("80.0% of input-eq spend", sub_line)    # 8000 of 10000
+        self.assertIn("(4) for a top 10%", comb_line)
+        self.assertIn("48.5% of input-eq spend", comb_line)   # 8000 of 16500
+
+    def test_fills_context_carries_a_share_column_per_kind(self):
+        out = []
+        ac.section_fills_context(out, self._loaded())
+        header = next(l for l in out if "category" in l)
+        self.assertTrue(header.rstrip().endswith("main %   sub %"), header)
+        shares = {}
+        for line in out:
+            for cat in ("cat-M", "cat-S", "(base)"):
+                if line.strip().startswith(cat):
+                    shares[cat] = (float(line.split()[-2]), float(line.split()[-1]))
+        self.assertEqual(shares["cat-M"], (50.0, 0.0))     # 2000 of main's 4000; none of it subagent
+        self.assertEqual(shares["cat-S"], (0.0, 66.7))     # 4000 of subagent's 6000
+        self.assertEqual(shares["(base)"], (50.0, 33.3))   # 2000 of 4000, 2000 of 6000
+
+    def test_per_day_splits_the_day_total_into_main_and_subagent(self):
+        out = []
+        ac.section_per_day(out, self._loaded())
+        header = next(l for l in out if l.strip().startswith("day"))
+        self.assertIn("main", header)
+        self.assertIn("subagent", header)
+        row = out[-2]
+        # day total 16500 ("16k" at this scale), main 6500, subagent 10000.
+        self.assertIn(ac.fmt_tok(16500), row)
+        self.assertIn(ac.fmt_tok(6500), row)
+        self.assertIn(ac.fmt_tok(10000), row)
+
+    def test_per_day_has_no_split_columns_with_one_kind(self):
+        out = []
+        ac.section_per_day(out, [loaded_context("main", [1000, 2000], name="A")])
+        header = next(l for l in out if l.strip().startswith("day"))
+        self.assertNotIn("subagent", header)
+
+
+class MainSessionsSectionTests(unittest.TestCase):
+    def _loaded(self):
+        fx = FixtureRoot(self)
+        alpha = "-Users-x-Developer-Alpha"
+        fx.main_session(project=alpha, session="s1", entries=[
+            assistant("a1", ts_str(BASE), usage(input_tokens=3000, output_tokens=10)),
+            assistant("a2", ts_str(BASE + timedelta(minutes=1)), usage(input_tokens=2000, output_tokens=10)),
+        ])
+        fx.main_session(project=alpha, session="s2", entries=[
+            assistant("b1", ts_str(BASE), usage(input_tokens=1000, output_tokens=5))])
+        fx.main_session(project="-Users-x-Developer-Beta", session="s3", entries=[
+            assistant("c1", ts_str(BASE), usage(input_tokens=10000, output_tokens=10))])
+        return ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
+
+    def test_per_project_totals_and_top_n_sessions(self):
+        out = []
+        ac.section_main_sessions(out, self._loaded(), 2)
+        text = "\n".join(out)
+        alpha = next(l for l in out if "Alpha" in l)
+        beta = next(l for l in out if "Beta" in l)
+        self.assertLess(out.index(beta), out.index(alpha))   # 10k before 6k
+        self.assertRegex(alpha, r"Alpha\s+2\s+3\s+6k\s+25")  # 2 sessions, 3 turns, 6k input-eq, 25 out
+        self.assertRegex(beta, r"Beta\s+1\s+1\s+10k\s+10")
+        self.assertIn("top 2 sessions by input-eq", text)
+        self.assertIn("s3", text)
+        self.assertIn("s1", text)
+        self.assertNotIn("s2", text)                          # --top 2 stops at two sessions
+
+    def test_session_row_carries_model_turns_peak_and_input_eq(self):
+        out = []
+        ac.section_main_sessions(out, self._loaded(), 12)
+        row = next(l for l in out if "s1" in l)
+        self.assertRegex(row, r"Alpha\s+s1\s+claude-sonnet-5\s+2\s+3k\s+5k")   # peak 3000, input-eq 5000
 
 
 class EmptyWindowTests(unittest.TestCase):
