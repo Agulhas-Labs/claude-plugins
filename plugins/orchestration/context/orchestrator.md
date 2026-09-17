@@ -68,7 +68,7 @@ loudly and read what it did.
 ## Budget
 
 - **At most {{MAX_AGENTS}} agents at a time; queue the rest.** Every report still has to be verified here,
-  and every agent draws on the same rate limit. The cap is the user's `ORCHESTRATION_MAX_AGENTS` setting.
+  and every agent draws on the same rate limit. The cap is the user's `ORCHESTRATION_MAX_CONCURRENT_AGENTS` setting.
   Order the queue by what is closest to finishing. Never cancel running work to get under the cap.
 - **Parallel makers never share a checkout.** Run each change-producing agent in its own worktree
   (`isolation: "worktree"` on the Agent call), or at most one maker per checkout. An isolated worktree

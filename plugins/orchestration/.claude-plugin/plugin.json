@@ -1,7 +1,7 @@
 {
   "name": "orchestration",
-  "version": "0.1.1",
-  "description": "A tiered agent roster, delegation rules with gates and a review budget, a context-budget hook, and agent-cost, a report of where Claude Code token spend goes.",
+  "version": "0.1.2",
+  "description": "Run Claude Code like a lead with a team: cheap models do the specified work, an expensive one designs and reviews, and nothing is done until a command proves it. Includes agent-cost, which shows where your tokens went.",
   "author": {
     "name": "Agulhas Labs"
   },

@@ -5,14 +5,14 @@
     "url": "https://github.com/Agulhas-Labs/claude-plugins"
   },
   "metadata": {
-    "description": "Claude Code plugins from Agulhas Labs: agent orchestration that measures its own cost."
+    "description": "Claude Code plugins from Agulhas Labs. Start with orchestration: a team of agents sized to the job, and a report of what they cost."
   },
   "plugins": [
     {
       "name": "orchestration",
       "source": "./plugins/orchestration",
-      "description": "A tiered agent roster, delegation rules with gates and a review budget, a context-budget hook, and agent-cost, a report of where Claude Code token spend goes.",
-      "version": "0.1.1",
+      "description": "Run Claude Code like a lead with a team: cheap models do the specified work, an expensive one designs and reviews, and nothing is done until a command proves it. Includes agent-cost, which shows where your tokens went.",
+      "version": "0.1.2",
       "author": {
         "name": "Agulhas Labs"
       },

@@ -22,11 +22,14 @@ def run(*args, env=None):
     return subprocess.run([SH, HOOK, *args], input="{}", capture_output=True, encoding="utf-8", env=env)
 
 
-def rendered(path, max_agents=None):
+def rendered(path, max_agents=None, old_name=None):
     env = dict(os.environ)
+    env.pop("ORCHESTRATION_MAX_CONCURRENT_AGENTS", None)
     env.pop("ORCHESTRATION_MAX_AGENTS", None)
     if max_agents is not None:
-        env["ORCHESTRATION_MAX_AGENTS"] = max_agents
+        env["ORCHESTRATION_MAX_CONCURRENT_AGENTS"] = max_agents
+    if old_name is not None:
+        env["ORCHESTRATION_MAX_AGENTS"] = old_name
     out = subprocess.run([SH, RENDER, path], input="{}", capture_output=True, encoding="utf-8", env=env)
     assert out.returncode == 0, out.stderr
     return out.stdout
@@ -86,6 +89,11 @@ class HookWiringTests(unittest.TestCase):
         self.assertIn("At most 12 agents at a time", rendered(path, "12"))
         for bad in ("", "abc", "0", "-3", "2.5", "08", " 3"):
             self.assertIn("At most 4 agents at a time", rendered(path, bad), repr(bad))
+
+    def test_the_settings_old_name_is_read_only_when_the_new_one_is_unset(self):
+        path = os.path.join(CONTEXT, "orchestrator.md")
+        self.assertIn("At most 6 agents at a time", rendered(path, old_name="6"))
+        self.assertIn("At most 8 agents at a time", rendered(path, "8", old_name="6"))
 
     def test_render_of_a_missing_file_prints_nothing_and_exits_zero(self):
         out = subprocess.run([SH, RENDER, os.path.join(CONTEXT, "absent.md")], input="{}", capture_output=True, encoding="utf-8")
