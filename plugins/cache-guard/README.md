@@ -78,11 +78,11 @@ file if you want to commit them.
 
 ## Is it worth it for you?
 
-On the machine this was built on, one week of `agent-cost` (in the `orchestration` plugin) showed 6%
-of main-session spend going on ten messages, every one sent after more than an hour away into a context
-over 100k tokens. The guard's trigger is exactly that cell. Run `agent-cost` and read its Cold cache
-section for your own number; it also shows whether your sessions get the five-minute or the one-hour
-lifetime.
+On the machine this was built on, one week of [`agent-cost`](../agent-cost/README.md), its own plugin
+in this marketplace, showed 6% of main-session spend going on ten messages, every one sent after more
+than an hour away into a context over 100k tokens. The guard's trigger is exactly that cell. Run
+`agent-cost` and read its Cold cache section for your own number; it also shows whether your sessions
+get the five-minute or the one-hour lifetime.
 
 The dollar figures are API list prices. On a subscription they are not a bill, but the same tokens come
 out of your usage limit.

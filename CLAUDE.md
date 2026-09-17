@@ -18,7 +18,9 @@ written for them.
 ## Layout
 - `.claude-plugin/marketplace.json` — the marketplace: one entry per plugin.
 - `plugins/orchestration/` — the roster (`agents/`), the conventions it injects (`context/`), its hooks
-  (`hooks/`), the `agent-cost` skill (`skills/`), and tests (`tests/`, plus the skill's own).
+  (`hooks/`), and tests (`tests/`).
+- `plugins/agent-cost/` — the `report` skill (`skills/report/`): `agentcost.py`, which reads local
+  transcripts and reports where tokens went, and its tests beside it.
 - `plugins/cache-guard/` — a `UserPromptSubmit` hook (`hooks/`) that holds a message back when the
   context's prompt cache has expired, the handoff it offers instead (written by script, summarised by a
   detached headless run), a `SessionStart` hook that points the next session at it, and tests (`tests/`).

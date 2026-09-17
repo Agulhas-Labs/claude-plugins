@@ -5,10 +5,10 @@ changes that are already spelled out, and Opus writes the code that still has de
 reviews the result without having seen how it was made. Every handoff ends in commands that prove the
 work, and the lead runs them again itself before it believes the report.
 
-It comes with `agent-cost`, which reads the transcripts already on your disk and shows where your
-tokens went. Run it before you change how you work. It alters nothing, and it tells you whether you
-have the problem the rest of this solves: a few long-running agents taking most of your spend. It is
-worth the install even if you ignore everything else.
+Installing it also installs [`agent-cost`](../agent-cost/README.md), which reads the transcripts
+already on your disk and shows where your tokens went. It alters nothing, and it tells you whether you
+have the problem this plugin solves: a few long-running agents taking most of your spend. To find that
+out before you change how you work, install `agent-cost` on its own first.
 
 ```text
 /plugin marketplace add Agulhas-Labs/claude-plugins
@@ -69,29 +69,11 @@ check the first would cost a whole context.
 
 ## See your own bill
 
-Ask "where did my tokens go this week?" and `agent-cost` answers from your local transcripts. Nothing
-leaves your machine. It reports totals by model and by agent type, how concentrated the spend is, how
-many turns made a single tool call, what every agent pays before it does any work, and what is sitting
-in the contexts you keep re-sending. Part of that last table, from two days on the machine this was
-built on:
-
-```text
-=== What fills the context ===
-  category                                         calls  resident     %    re-sent     %
-  (base) system prompt + tools + first prompt          0      3.0M  23.3     148.3M  23.6
-  assistant: tool-call inputs (edits, commands)     4973      2.2M  17.7      96.6M  15.3
-  Read (ranged)                                      398      1.2M   9.6      84.9M  13.5
-  bash: cat/sed/head window                          519      954k   7.5      56.6M   9.0
-  Read (whole file)                                  276      1.1M   8.5      42.6M   6.8
-  bash: grep                                         725      583k   4.6      27.4M   4.4
-```
-
-`resident` is how much of each kind of content sat in those contexts. `re-sent` is what it cost to
-carry, because every turn sends the whole context again. Read the first row that way: 3M tokens of
-system prompt and tool definitions, paid for as 148M, about fifty times over, before any work was done.
-
-Each section of the report says what to do about what it shows, and `--since`/`--until` let you compare
-the days before a change with the days after it.
+[`agent-cost`](../agent-cost/README.md), its own plugin in this marketplace, reads your local transcripts
+and shows where your tokens went: by model and agent type, how concentrated the spend is, how many turns
+made a single tool call, and what every agent pays before it does any work. `--since`/`--until` let you
+compare the days before a change with the days after it, which is how to find out what this plugin
+saved you.
 
 ## Why it is built this way
 
@@ -137,10 +119,8 @@ The conventions reach the main session and every subagent through hooks that nee
 POSIX shell with `cat`, `sed`, `awk` and `tr`. The context-budget hook needs Python 3 (standard library
 only), found as `python3` or `python` (also `py` on Windows); without it that one hook is silently
 skipped, so agents are not told when their context passes the budget, and nothing else changes. It
-runs after every tool call, including in the main session, where it exits straight away. `agent-cost`
-also needs Python 3; the session runs `agentcost.py` itself, with `python3`, or `py` or `python` where
-that is the Python 3, so without Python it fails visibly instead. On Windows, hooks need Git Bash (Claude Code's usual
-setup); Windows is untested.
+runs after every tool call, including in the main session, where it exits straight away. On Windows,
+hooks need Git Bash (Claude Code's usual setup); Windows is untested.
 
 ## Models
 
@@ -166,7 +146,7 @@ job only runs commands or reads. `reviewer` keeps `Bash`, so its read-only rule 
 its prompt, not a limit the tool list enforces. The deny list was written against current
 Claude Code builds. If it names a tool your version doesn't have, that name is ignored.
 
-Run `agent-cost --tools` to see what each agent type on your machine actually called, then edit the
+Ask `agent-cost` for its `--tools` section to see what each agent type on your machine actually called, then edit the
 agent files:
 
 - To add a tool, remove it from `disallowedTools`, or add it to `tools:` on `runner`. An MCP server's

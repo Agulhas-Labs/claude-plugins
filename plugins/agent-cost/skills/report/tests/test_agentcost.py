@@ -1,4 +1,4 @@
-"""Tests for agentcost.py. Run: python3 -m unittest discover -s skills/agent-cost/tests"""
+"""Tests for agentcost.py. Run: python3 -m unittest discover -s skills/report/tests"""
 import importlib.util
 import io
 import json

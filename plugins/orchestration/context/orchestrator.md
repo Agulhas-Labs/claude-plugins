@@ -107,7 +107,7 @@ only report candidates; recording them is yours.
 
 ## Measuring
 
-Run the `agent-cost` skill to see where tokens go: totals, turn shape, what fills each context, and what
+Run the `agent-cost` plugin's `report` skill to see where tokens go: totals, turn shape, what fills each context, and what
 a subagent starts with. Compare windows with `--since`/`--until` around a change. Agent definitions and
 plugin settings load when a session starts, so verify a change from a fresh session, not from the
 subagents of the session that made it.

@@ -1,7 +1,10 @@
 {
   "name": "orchestration",
-  "version": "0.1.3",
-  "description": "Run Claude Code like a lead with a team: cheap models do the specified work, an expensive one designs and reviews, and nothing is done until a command proves it. Includes agent-cost, which shows where your tokens went.",
+  "version": "0.2.0",
+  "description": "Run Claude Code like a lead with a team: cheap models do the specified work, an expensive one designs and reviews, and nothing is done until a command proves it. Measure what it saves with the agent-cost plugin.",
+  "dependencies": [
+    "agent-cost"
+  ],
   "author": {
     "name": "Agulhas Labs"
   },

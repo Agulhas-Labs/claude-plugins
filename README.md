@@ -1,20 +1,35 @@
 # Agulhas Labs plugins for Claude Code
 
-Two plugins about the same thing: what your tokens are spent on, and how to stop paying for the part
-that buys nothing. Both came out of measuring real sessions, and the measuring tool ships with them.
+Three plugins about the same thing: what your tokens are spent on, and how to stop paying for the part
+that buys nothing. One measures, and the other two fix what the measuring found.
 
 ```text
 /plugin marketplace add Agulhas-Labs/claude-plugins
+/plugin install agent-cost@agulhas-labs
 /plugin install orchestration@agulhas-labs
 /plugin install cache-guard@agulhas-labs
 ```
 
-Install either or both, then start a new session. Neither needs configuring.
+Install any of them, then start a new session. None needs configuring. Start with `agent-cost`: it
+changes nothing, and its report says which of the other two your own numbers ask for. `orchestration`
+installs `agent-cost` with it.
 
 | Plugin | What it does | When it earns its place |
 | --- | --- | --- |
-| [`orchestration`](plugins/orchestration/README.md) | Your session leads a team: cheap models do the specified work, an expensive one designs and reviews, and nothing is done until a command proves it. Includes `agent-cost`. | You delegate to subagents, or want to know where your tokens went. |
-| [`cache-guard`](plugins/cache-guard/README.md) | Holds a message back, once, when it is about to go into a large context whose prompt cache has expired, and tells you what it will cost. | You leave long sessions open and come back to them. |
+| [`agent-cost`](plugins/agent-cost/README.md) | Reads the transcripts already on your disk and shows where your tokens went. It changes nothing and nothing leaves your machine. | Always, and first. |
+| [`orchestration`](plugins/orchestration/README.md) | Your session leads a team: cheap models do the specified work, an expensive one designs and reviews, and nothing is done until a command proves it. | A few long-running subagents take most of your spend. |
+| [`cache-guard`](plugins/cache-guard/README.md) | Holds a message back, once, when it is about to go into a large context whose prompt cache has expired, and tells you what it will cost. | You come back to long sessions after the cache has expired. |
+
+## agent-cost
+
+Ask "where did my tokens go this week?" and it answers from your local transcripts: totals by model and
+agent type, how concentrated the spend is, how many turns made a single tool call, what went on turns
+sent into an expired cache, what fills the contexts you keep re-sending, and what every agent pays
+before it does any work. Each section says what to do about what it shows, and `--since`/`--until`
+compare the days before a change with the days after it.
+
+[Read more](plugins/agent-cost/README.md): a sample of the report, what each section points to, and how
+the numbers are weighted.
 
 ## orchestration
 
@@ -27,11 +42,6 @@ An agent re-sends its whole context on every turn, so its cost grows with the sq
 one measured week the longest 10% of subagents were 45% of all subagent spend. So each agent gets one
 job, a hook tells a subagent to hand back once its context passes 150k tokens, reviews stop after two
 rounds, and at most 4 agents run at once (a setting).
-
-It comes with the `agent-cost` skill, which reads the transcripts already on your disk and shows where
-your tokens went: by model and agent type, how concentrated the spend is, what fills the contexts you
-keep re-sending, and what every agent pays before it does any work. It alters nothing and nothing
-leaves your machine. Run it first; it tells you whether you have the problem the rest solves.
 
 [Read more](plugins/orchestration/README.md): the roster, a handoff from start to finish, the numbers
 behind each rule, and how to tailor the models, tools and conventions.
@@ -55,13 +65,6 @@ file.
 [Read more](plugins/cache-guard/README.md): what you see, how the handoff is written, the settings, and
 what the guard never does.
 
-## How they fit together
-
-`agent-cost` is the instrument for both. Its Concentration and Turn shape sections show whether a few
-long agents are taking most of your spend, which is what `orchestration` fixes. Its Cold cache section
-shows how much goes on messages sent into an expired cache, which is what `cache-guard` stops. Measure
-first, and install what your own numbers ask for.
-
 ## Installing for a team
 
 The commands at the top install a plugin for you. To offer them to everyone working in a repository,
@@ -76,6 +79,7 @@ commit this to the repository's `.claude/settings.json`, keeping the plugins you
     }
   },
   "enabledPlugins": {
+    "agent-cost@agulhas-labs": true,
     "orchestration@agulhas-labs": true,
     "cache-guard@agulhas-labs": true
   }
@@ -99,8 +103,8 @@ first.
 
 ## Requirements
 
-Both plugins use Python 3, standard library only, and do nothing harmful without it: their Python hooks
-are skipped, and `agent-cost` fails visibly. `orchestration`'s conventions need only a POSIX shell. On
+All three use Python 3, standard library only, and do nothing harmful without it: the Python hooks are
+skipped, and `agent-cost` fails visibly. `orchestration`'s conventions need only a POSIX shell. On
 Windows, hooks need Git Bash; Windows is untested. Each plugin's README has the detail.
 
 ## Developing

@@ -5,14 +5,32 @@
     "url": "https://github.com/Agulhas-Labs/claude-plugins"
   },
   "metadata": {
-    "description": "Claude Code plugins from Agulhas Labs. orchestration: a team of agents sized to the job, and a report of what they cost. cache-guard: a warning before the one message that costs twenty times the rest."
+    "description": "Claude Code plugins from Agulhas Labs. agent-cost: a report of where your tokens went. orchestration: a team of agents sized to the job. cache-guard: a warning before the one message that costs twenty times the rest."
   },
   "plugins": [
     {
+      "name": "agent-cost",
+      "source": "./plugins/agent-cost",
+      "description": "Shows where your Claude Code tokens went, from the transcripts already on your disk: totals by model and agent type, how concentrated the spend is, single-call turns, cold-cache turns, what fills the contexts you keep re-sending, and what every agent pays before it does any work. It changes nothing and nothing leaves your machine.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Agulhas Labs"
+      },
+      "homepage": "https://github.com/Agulhas-Labs/claude-plugins",
+      "repository": "https://github.com/Agulhas-Labs/claude-plugins",
+      "license": "Apache-2.0",
+      "keywords": [
+        "token-cost",
+        "usage",
+        "subagents",
+        "prompt-cache"
+      ]
+    },
+    {
       "name": "orchestration",
       "source": "./plugins/orchestration",
-      "description": "Run Claude Code like a lead with a team: cheap models do the specified work, an expensive one designs and reviews, and nothing is done until a command proves it. Includes agent-cost, which shows where your tokens went.",
-      "version": "0.1.3",
+      "description": "Run Claude Code like a lead with a team: cheap models do the specified work, an expensive one designs and reviews, and nothing is done until a command proves it. Measure what it saves with the agent-cost plugin.",
+      "version": "0.2.0",
       "author": {
         "name": "Agulhas Labs"
       },

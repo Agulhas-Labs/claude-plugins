@@ -1,5 +1,5 @@
 ---
-name: agent-cost
+name: report
 description: >-
   Report where Claude Code token spend goes — totals, per-day trend, concentration, turn shape, cold
   cache, what fills the context, and the fixed start every context pays. Use when asked where tokens/usage went,

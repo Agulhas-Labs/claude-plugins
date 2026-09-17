@@ -18,7 +18,7 @@ if [ -z "$py" ]; then
   exit 1
 fi
 "$py" -m unittest discover -s plugins/orchestration/tests
-"$py" -m unittest discover -s plugins/orchestration/skills/agent-cost/tests
+"$py" -m unittest discover -s plugins/agent-cost/skills/report/tests
 "$py" -m unittest discover -s plugins/cache-guard/tests
 
 # A plugin's version is written twice, in its manifest and in the marketplace entry; they must agree.
