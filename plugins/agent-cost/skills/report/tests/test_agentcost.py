@@ -1101,6 +1101,11 @@ class MainOnlyReportTests(unittest.TestCase):
         self.assertIn("sess1", main_sessions)
         self.assertIn("-Users-x-Developer-Proj", main_sessions)
 
+    def test_a_day_with_under_ten_contexts_claims_no_top_decile(self):
+        per_day = section_body(self._main_only_report(), "Per day")
+        self.assertNotIn("100.0%", per_day)
+        self.assertTrue(per_day.rstrip().endswith("-"), per_day)
+
 
 class SubagentOnlyReportTests(unittest.TestCase):
     def test_no_main_sessions_section_and_no_main_rows_when_only_agents_ran(self):
@@ -1224,6 +1229,18 @@ class EmptyWindowTests(unittest.TestCase):
         output = buf.getvalue()
         self.assertIn("no turns between", output)
         self.assertNotIn("=== Totals ===", output)
+
+
+
+
+class NameTailTests(unittest.TestCase):
+    def test_a_long_name_keeps_the_end_that_tells_a_worktree_from_its_repository(self):
+        repo = "Developer-Some-Long-Repository-Name"
+        a, b = ac.name_tail(repo), ac.name_tail(repo + "--claude-worktrees-agent-1")
+        self.assertNotEqual(a, b)
+        self.assertEqual(len(b), 30)
+        self.assertTrue(b.endswith("worktrees-agent-1"))
+        self.assertEqual(ac.name_tail("short"), "short")
 
 
 if __name__ == "__main__":

@@ -582,14 +582,20 @@ def section_per_day(out, loaded):
             per_ctx_ie[id(l)] += t["ie"]
         day_ie = sum(per_ctx_ie.values())
         ranked = sorted(per_ctx_ie.values(), reverse=True)
-        top_n = max(1, len(ranked) // 10)
-        top_share = (sum(ranked[:top_n]) / day_ie * 100) if day_ie else 0.0
+        # under ten contexts there is no decile: a one-context day would read 100%
+        top_n = len(ranked) // 10
+        top_share = f"{sum(ranked[:top_n]) / day_ie * 100:12.1f}%" if top_n and day_ie else f"{'-':>13}"
         row = (f"  {day.isoformat():12} {len(ctxs):9} {fmt_tok(median(ctx_started_day.get(day, []))):>13} "
                f"{median(per_ctx_turns.values()):13.0f} {fmt_tok(day_ie):>9}")
         if split:
             row += f" {fmt_tok(ie_by_day_kind[day]['main']):>9} {fmt_tok(ie_by_day_kind[day]['subagent']):>9}"
-        out.append(row + f" {top_share:12.1f}%")
+        out.append(row + f" {top_share}")
     out.append("")
+
+
+def name_tail(name, width=30):
+    """A long project name keeps its end: a repository and its worktrees share their beginning."""
+    return name if len(name) <= width else "…" + name[-(width - 1):]
 
 
 def section_main_sessions(out, loaded, top_n):
@@ -610,7 +616,7 @@ def section_main_sessions(out, loaded, top_n):
         outp = sum(t["usage"].get("output_tokens", 0) for l in group for t in l.window_turns)
         rows.append((ie, proj, len({l.ctx.session_id for l in group}), turns, outp))
     for ie, proj, sessions, turns, outp in sorted(rows, key=lambda r: -r[0]):
-        out.append(f"  {proj[:30]:30} {sessions:9} {turns:7} {fmt_tok(ie):>9} {fmt_tok(outp):>9}")
+        out.append(f"  {name_tail(proj):30} {sessions:9} {turns:7} {fmt_tok(ie):>9} {fmt_tok(outp):>9}")
 
     out.append("")
     out.append(f"  top {top_n} sessions by input-eq:")
@@ -619,7 +625,7 @@ def section_main_sessions(out, loaded, top_n):
     for ie, l in sessions[:top_n]:
         peak = max(t["ctx"] for t in l.window_turns)
         model = l.window_turns[0]["model"]
-        out.append(f"    {project_display_name(l.ctx.project_dir)[:30]:30} {l.ctx.session_id[:8]:9}"
+        out.append(f"    {name_tail(project_display_name(l.ctx.project_dir)):30} {l.ctx.session_id[:8]:9}"
                     f" {model[:16]:16} {len(l.window_turns):6} {fmt_tok(peak):>8} {fmt_tok(ie):>9}")
     out.append("")
 
