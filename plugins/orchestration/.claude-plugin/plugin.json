@@ -1,6 +1,6 @@
 {
   "name": "orchestration",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Run Claude Code like a lead with a team: cheap models do the specified work, an expensive one designs and reviews, and nothing is done until a command proves it. Measure what it saves with the agent-cost plugin.",
   "dependencies": [
     "agent-cost"

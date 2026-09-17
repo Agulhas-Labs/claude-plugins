@@ -33,13 +33,16 @@ message goes into a large context whose prompt cache has expired.
 
 The plugin never changes your session's model, and it works the same with Opus or Fable in that seat.
 If you do pay for Fable, this is where to spend it: the planning and the judging stay with it, and the
-long contexts full of file reads run on cheaper models. [Models](#models) has more. Around the roster sit four rules, injected into the
+long contexts full of file reads run on cheaper models. [Models](#models) has more. Around the roster sit five rules, injected into the
 session by hooks:
 
 - A handoff ends in gates: one command per outcome, with the output to expect. A fix counts only if its
   test fails with the fix taken out.
 - One job per agent. When a subagent's context passes 150k tokens, a hook tells it to finish what it is
   holding and hand the rest back, and a fresh agent picks it up.
+- A subagent does not stop while a command it put in the background is still running. A hook holds it
+  back once and names the run: wait for the verdict, or stop the run, then report. Measured before the
+  hook: about 20 turns of the main session in one day, each woken by an agent with nothing to report.
 - Two review rounds at most. Minor findings go in an issue.
 - At most 4 agents run at the same time, however many the session uses in total. The 4 is a setting.
 
@@ -116,10 +119,10 @@ It isn't tied to a language. Agents use whatever code intelligence you have inst
 plugin or a code-index server, and plain search when you have none.
 
 The conventions reach the main session and every subagent through hooks that need nothing beyond a
-POSIX shell with `cat`, `sed`, `awk` and `tr`. The context-budget hook needs Python 3 (standard library
-only), found as `python3` or `python` (also `py` on Windows); without it that one hook is silently
-skipped, so agents are not told when their context passes the budget, and nothing else changes. It
-runs after every tool call, including in the main session, where it exits straight away. On Windows,
+POSIX shell with `cat`, `sed`, `awk` and `tr`. The context-budget hook and the background-run hook need Python 3
+(standard library only), found as `python3` or `python` (also `py` on Windows); without it those two
+are silently skipped, so agents are not told when their context passes the budget or held back from
+stopping on a live run, and nothing else changes. The budget hook runs after every tool call, including in the main session, where it exits straight away. On Windows,
 hooks need Git Bash (Claude Code's usual setup); Windows is untested.
 
 ## Models

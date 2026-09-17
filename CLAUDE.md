@@ -11,7 +11,10 @@ written for them.
 - **Verify before concluding:** `scripts/check.sh` passes — the unit tests, `claude plugin validate
   --strict` on the marketplace and each plugin, and the privacy scan.
 - **A behaviour change to a plugin is proven from a fresh session:** plugins, agents and hooks load when a
-  session starts. Load the working copy with `claude --plugin-dir plugins/<name>`.
+  session starts. Load the working copy with `claude --plugin-dir plugins/<name>`. An installed plugin
+  of the same name shadows it: measured on Claude Code 2.1.275, the working copy's hooks never
+  registered and the proof runs passed for the wrong reason. Where the plugin is installed, load a
+  scratch copy under another name and delete it afterwards.
 - **A change to a plugin's `dependencies` is proven by a real install and a real update:** `claude plugin
   install` and `claude plugin update` from the marketplace, then `claude plugin list`. `validate --strict`
   passes either way. Measured on Claude Code 2.1.274: a fresh install brings the dependency, an update
