@@ -12,6 +12,10 @@ written for them.
   --strict` on the marketplace and each plugin, and the privacy scan.
 - **A behaviour change to a plugin is proven from a fresh session:** plugins, agents and hooks load when a
   session starts. Load the working copy with `claude --plugin-dir plugins/<name>`.
+- **A change to a plugin's `dependencies` is proven by a real install and a real update:** `claude plugin
+  install` and `claude plugin update` from the marketplace, then `claude plugin list`. `validate --strict`
+  passes either way. Measured on Claude Code 2.1.274: a fresh install brings the dependency, an update
+  does not, and the dependent plugin stays off until it is installed by hand.
 - **Commit on a branch; never merge to `main` unprompted.** Bump a plugin's `version` in both its
   `plugin.json` and the marketplace entry when its behaviour changes.
 
