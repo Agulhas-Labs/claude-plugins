@@ -52,6 +52,10 @@ of all subagent spend: each one re-sent the whole context to do one small thing.
   single Bash call, after a median wait of nine minutes in a 178k context. So run a suite or build
   that takes that long once, when the work is ready for it, and the narrowest test that covers the
   change between edits.
+- Run a build or suite in the foreground, with a timeout long enough for it. Background a command only
+  when you have other work to do meanwhile, never to wait on it, and never end your turn while one you
+  started is still running: a subagent that does wakes the main session with nothing to report. In one
+  measured day that was about 20 main-session turns that could do nothing.
 - When told your context has passed its budget, finish the item in hand, commit it once verified, and
   hand back with the remaining items listed. Don't start another.
 
@@ -75,5 +79,9 @@ Other sessions and agents run beside you, and they follow the same naming habits
 - Commit each verified, self-contained unit on a feature branch with a clear message; if you are on the
   default branch, branch off it first. Never merge or push to the default branch without an explicit
   instruction.
+- A subagent's report is read whole by the main session and re-sent on each of its later turns. Give it
+  four parts: the commits, each gate's result in one line, the decisions that need review, and what
+  remains with what you learned about it. No account of what you tried. Where reports were measured
+  they ran 1.5k to 3k tokens each; aim for a quarter of that.
 - A subagent that learns how something should be done names it in its report as a candidate
   convention; it doesn't write the rule, skill or guideline itself.
