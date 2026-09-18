@@ -86,6 +86,11 @@ loudly and read what it did.
 - **Cheap makers, one expensive review.** A middle rung makes fully specified rounds; the reviewer
   reviews once, at the end. No reviewer round for a diff under about 50 lines, and a fix of a few lines
   the orchestrator makes itself.
+- **A subagent is warned in three tiers as its context grows, and is expected to hand work back.** At
+  120k it freezes scope, at 150k it hands back after landing the item in hand, at 200k it stops where
+  it is and reports. So a report that lists unfinished items is the hook working, not an agent failing:
+  give the remainder to a fresh agent with what that report learned, rather than resuming the old one.
+  A handoff sized to land inside 120k of context never reaches the first mark.
 - **The cap is on agents running at once, not on how many a session uses.** A long job split into small
   agents uses many of them, and that is the cheap way to do it. Past about ten in a session, say the
   count and what they went on the next time you report; don't stop to ask.

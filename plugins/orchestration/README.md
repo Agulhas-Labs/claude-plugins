@@ -38,8 +38,9 @@ session by hooks:
 
 - A handoff ends in gates: one command per outcome, with the output to expect. A fix counts only if its
   test fails with the fix taken out.
-- One job per agent. When a subagent's context passes 150k tokens, a hook tells it to finish what it is
-  holding and hand the rest back, and a fresh agent picks it up.
+- One job per agent. A hook warns a subagent in three tiers as its context grows, each asking for
+  something different: at 120k freeze scope and start no new deliverable, at 150k finish what it is
+  holding and hand the rest back, at 200k stop where it is and report. A fresh agent picks up the rest.
 - A subagent does not stop while a command it put in the background is still running. A hook holds it
   back once and names the run: wait for the verdict, or stop the run, then report. Measured before the
   hook: about 20 turns of the main session in one day, each woken by an agent with nothing to report.
@@ -86,8 +87,11 @@ asked for.
 An agent re-sends its whole context on every turn, so its cost grows with the square of its length. The
 longest 10% of subagents were 45% of all subagent spend, and 55% of spend across 219 subagents came in
 turns above 200k tokens. One 340-turn job, split into three agents, would have cost less than half as
-much. So an agent gets one job, and a hook watches each subagent's context: past 150k tokens it is told
-to finish the item in hand and leave the rest for a fresh agent.
+much. So an agent gets one job, and a hook watches each subagent's context. One warning repeated at
+every step told an agent nothing it did not already know, so there are three, and they differ in kind:
+at 120k it freezes scope and is told a hand-back is coming, at 150k it finishes the item in hand and
+leaves the rest for a fresh agent, at 200k it stops where it is and reports. The last one repeats every
+further 50k as a backstop.
 
 Resuming an agent pays for its past again. One builder, resumed across six review rounds, sent 112M
 input tokens, and 80% of them were old conversation. So each review round gets a fresh agent, and
