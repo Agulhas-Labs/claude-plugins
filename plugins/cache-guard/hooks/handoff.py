@@ -42,7 +42,7 @@ KILL_REAP_TIMEOUT = 5
 CHEAP_MODEL = "haiku"
 LARGE_MODEL = "sonnet"
 SUMMARY_LINE_PREFIX = "Summary:"
-PENDING_SUMMARY = "Summary: being written"
+PENDING_SUMMARY = cache_guard.SUMMARY_PENDING_TEXT  # defined there so the guard can read it cheaply
 COMMAND_NOISE = ("<local-command-", "<command-name>")
 EDIT_TOOLS = ("Edit", "Write", "NotebookEdit")
 DROPPED_MARKER = "[earlier turns dropped: the transcript was too long to summarise in full]"
@@ -333,6 +333,15 @@ def split_document(document):
     return title, re.sub(r"\n{3,}", "\n\n", body).strip("\n")
 
 
+def read_text(path):
+    """The file's text, or "" when it cannot be read: no caller here has anything better to do."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
 def write_atomically(path, text):
     """A reader of this file never sees half of it, whichever process is writing."""
     directory = os.path.dirname(path) or "."
@@ -471,6 +480,23 @@ def start_summariser(condensed, out_path, model, env):
     return condensed_path
 
 
+def record_pending(payload, out_path, env):
+    """Note that this session is waiting on a background summary, so the next prompt can report it.
+
+    The summariser is detached and writes to no terminal, so without this the only sign it ever
+    finished was the file changing under the user. Best effort: a handoff is not worth failing over a
+    marker, and the guard treats a missing record as nothing to say.
+    """
+    session = cache_guard.session_of(payload)
+    directory = cache_guard.usable_state_dir(state_dir(env))
+    if not session or directory is None:
+        return
+    try:
+        write_atomically(cache_guard.pending_record(directory, session), out_path + "\n")
+    except OSError:
+        pass
+
+
 def no_summary_reason(condensed, env):
     """Why this handoff gets no summary written on top of it, or None when it should have one."""
     if str(env.get("CACHE_GUARD_HANDOFF_SUMMARY") or "").strip() == "0":
@@ -510,6 +536,7 @@ def write_handoff(payload, now, env):
         write_atomically(out_path, document)
         result["no_summary_reason"] = "the summariser could not be started"
         return result
+    record_pending(payload, out_path, env)
     result["summary_model"] = model
     result["est_cost"] = estimate_cost(model, est_tokens)
     return result
