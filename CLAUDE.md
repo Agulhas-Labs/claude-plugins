@@ -14,7 +14,9 @@ written for them.
   session starts. Load the working copy with `claude --plugin-dir plugins/<name>`. An installed plugin
   of the same name shadows it: measured on Claude Code 2.1.275, the working copy's hooks never
   registered and the proof runs passed for the wrong reason. Where the plugin is installed, load a
-  scratch copy under another name and delete it afterwards.
+  scratch copy under another name and delete it afterwards. Where the change is to what a hook
+  *shows* the user, hook stdout reaches only the model — use the `prove-hook-output` skill, whose
+  `prove-render.sh` drives a real PTY and reports what the terminal actually received.
 - **A change to a plugin's `dependencies` is proven by a real install and a real update:** `claude plugin
   install` and `claude plugin update` from the marketplace, then `claude plugin list`. `validate --strict`
   passes either way. Measured on Claude Code 2.1.274: a fresh install brings the dependency, an update
