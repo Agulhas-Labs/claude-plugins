@@ -10,7 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 
 SCRIPT = os.path.join(os.path.dirname(__file__), "..", "agentcost.py")
@@ -1251,6 +1251,117 @@ class NameTailTests(unittest.TestCase):
         self.assertEqual(len(b), 30)
         self.assertTrue(b.endswith("worktrees-agent-1"))
         self.assertEqual(ac.name_tail("short"), "short")
+
+
+# the heading each --sections name prints, written out rather than read back from the registry: a test
+# that recomputes the name from the code under test pins nothing.
+SECTION_HEADINGS = {
+    "totals": "=== Totals ===",
+    "per-day": "=== Per day",
+    "main-sessions": "=== Main sessions ===",
+    "concentration": "=== Concentration ===",
+    "turn-shape": "=== Turn shape ===",
+    "cold-cache": "=== Cold cache ===",
+    "what-fills-the-context": "=== What fills the context ===",
+    "fixed-start": "=== Fixed start ===",
+    "largest-contexts": "=== Largest contexts",
+    "tools-called": "=== Tools called",
+}
+
+
+class SectionSelectionTests(unittest.TestCase):
+    """--sections: a follow-up question costs the lines it needs, not the whole report."""
+
+    def _loaded(self):
+        fx = FixtureRoot(self)
+        fx.main_session(entries=[
+            instructions_attachment(ts_str(BASE), [("/rules/a.md", "x" * 100)]),
+            assistant("m1", ts_str(BASE), usage(cache_read=5000), content=[tool_use_block("t1")]),
+            user_tool_result(ts_str(BASE + timedelta(seconds=1)), "t1", "result text"),
+            assistant("m2", ts_str(BASE + timedelta(seconds=2)), usage(cache_read=6000)),
+        ])
+        fx.subagent(agent_type="mechanic", entries=[
+            instructions_attachment(ts_str(BASE), [("/rules/a.md", "x" * 100)]),
+            deferred_attachment(ts_str(BASE), ["mcp__codeindex__digest"]),
+            assistant("m1", ts_str(BASE), usage(cache_read=3000), content=[tool_use_block("t1")]),
+            user_tool_result(ts_str(BASE + timedelta(seconds=1)), "t1", "result text"),
+            assistant("m2", ts_str(BASE + timedelta(seconds=2)), usage(cache_read=4000)),
+        ])
+        self.fx = fx
+        return ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
+
+    def test_every_section_can_be_asked_for_on_its_own(self):
+        loaded = self._loaded()
+        self.assertEqual(sorted(SECTION_HEADINGS), sorted(ac.SECTION_NAMES))
+        for name, heading in SECTION_HEADINGS.items():
+            with self.subTest(section=name):
+                report = ac.build_report(loaded, 12, sections=[name])
+                self.assertIn(heading, report)
+                headings = [l for l in report.splitlines() if l.startswith("=== ")]
+                self.assertEqual(len(headings), 1, headings)
+
+    def test_default_report_is_every_section_but_tools(self):
+        report = ac.build_report(self._loaded(), 12)
+        for name, heading in SECTION_HEADINGS.items():
+            if name == "tools-called":
+                self.assertNotIn(heading, report)
+            else:
+                self.assertIn(heading, report)
+
+    def test_names_match_by_case_insensitive_prefix(self):
+        self.assertEqual(ac.resolve_sections("TOTALS, Main ,cold"),
+                         ["totals", "main-sessions", "cold-cache"])
+
+    def test_selection_prints_in_report_order_not_the_order_given(self):
+        self.assertEqual(ac.resolve_sections("cold,totals"), ["totals", "cold-cache"])
+        report = ac.build_report(self._loaded(), 12, sections=ac.resolve_sections("cold,totals"))
+        self.assertLess(report.index("=== Totals ==="), report.index("=== Cold cache ==="))
+
+    def test_a_name_repeated_renders_its_section_once(self):
+        self.assertEqual(ac.resolve_sections("cold,cold-cache"), ["cold-cache"])
+
+    def test_an_unknown_name_lists_the_sections_that_exist(self):
+        with self.assertRaises(ValueError) as e:
+            ac.resolve_sections("totals,collder")
+        self.assertIn("'collder'", str(e.exception))
+        for name in ac.SECTION_NAMES:
+            self.assertIn(name, str(e.exception))
+
+    def test_an_ambiguous_prefix_names_the_sections_it_matched(self):
+        with self.assertRaises(ValueError) as e:
+            ac.resolve_sections("t")
+        for name in ("totals", "turn-shape", "tools-called"):
+            self.assertIn(name, str(e.exception))
+
+    def test_an_empty_selection_is_refused(self):
+        with self.assertRaises(ValueError):
+            ac.resolve_sections(" , ")
+
+    def test_tools_flag_adds_its_section_to_a_selection(self):
+        report = ac.build_report(self._loaded(), 12, tools=True, sections=["totals"])
+        self.assertIn("=== Totals ===", report)
+        self.assertIn("=== Tools called", report)
+
+    def test_main_prints_only_the_sections_asked_for(self):
+        loaded = self._loaded()  # for its fixture tree
+        del loaded
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            ac.main(["--projects", self.fx.root, "--since", ts_str(BASE - timedelta(hours=1)),
+                     "--until", ts_str(BASE + timedelta(hours=1)), "--sections", "totals,cold"])
+        output = buf.getvalue()
+        self.assertIn("=== Totals ===", output)
+        self.assertIn("=== Cold cache ===", output)
+        self.assertNotIn("=== Per day", output)
+        self.assertNotIn("=== Fixed start ===", output)
+        self.assertIn("note: input-eq is", output)  # the unit still explains itself
+
+    def test_main_refuses_an_unknown_name_before_it_reads_a_transcript(self):
+        err = io.StringIO()
+        with self.assertRaises(SystemExit), redirect_stderr(err):
+            ac.main(["--projects", "/nonexistent-projects-dir", "--sections", "collder"])
+        self.assertIn("collder", err.getvalue())
+        self.assertIn("what-fills-the-context", err.getvalue())
 
 
 if __name__ == "__main__":
