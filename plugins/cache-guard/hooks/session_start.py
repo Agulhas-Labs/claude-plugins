@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import cache_guard  # noqa: E402
 import handoff  # noqa: E402
 
 DEFAULT_FRESH_MINUTES = 30
@@ -30,8 +31,8 @@ ANNOUNCING_SOURCES = ("clear", "startup")
 
 # What the user reads in the terminal, and what the model reads in its context. They say the same
 # thing to two different readers, so they are written separately rather than one quoting the other.
-Announcement = namedtuple("Announcement", "spoken context")
-NOTHING = Announcement("", "")
+Announcement = namedtuple("Announcement", "spoken context headline")
+NOTHING = Announcement("", "", "")
 
 
 def newest_handoff(directory):
@@ -92,8 +93,15 @@ def announcement(payload, now, env):
         if age_minutes >= fresh_limit(env) or age_minutes < 0:
             return NOTHING
         pending = handoff.PENDING_SUMMARY in handoff.read_text(path)
+        headline = (
+            "handoff waiting, its summary still being written"
+            if pending
+            else "handoff waiting from your last session"
+        )
         return Announcement(
-            spoken_line(path, age_minutes, pending), context_line(path, age_minutes, pending)
+            spoken_line(path, age_minutes, pending),
+            context_line(path, age_minutes, pending),
+            headline,
         )
     except Exception:
         return NOTHING
@@ -115,13 +123,17 @@ def main():
     note = announcement(payload, datetime.now(timezone.utc), os.environ)
     if not note.context:
         return
-    print(json.dumps({
+    output = {
         "systemMessage": note.spoken,
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
             "additionalContext": note.context,
         },
-    }))
+    }
+    sequence = cache_guard.notification_sequence(note.headline, os.environ)
+    if sequence:
+        output["terminalSequence"] = sequence
+    print(json.dumps(output))
 
 
 if __name__ == "__main__":

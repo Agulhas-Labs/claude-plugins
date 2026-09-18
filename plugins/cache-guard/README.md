@@ -61,11 +61,18 @@ Send the single word `handoff`. The hook takes it before it reaches the model an
    be careful of. Sessions too long for Haiku go to Sonnet, and a session of a few lines gets no summary
    because the script-written file already says it all.
 3. tells you the path, and tells you again when the background summary lands, since a detached
-   process cannot write to your terminal itself: the report is made by the next prompt you send. Until
-   then the file's own `Summary:` line says whether it is still being written.
+   process cannot write to your terminal itself: the report is made by the next prompt you send, with
+   a desktop notification beside it. Until then the file's own `Summary:` line says whether it is
+   still being written.
 4. `/clear`, and the new session tells you — in the terminal, not only in the model's context — that a
    fresh handoff is waiting, where it is, and whether its summary is in yet. Every session started in
    that directory inside the freshness window is told, so closing one without reading it costs nothing.
+
+Both of those come with a desktop notification, raised through the escape sequence Claude Code emits on
+a hook's behalf: OSC 9, or OSC 99 under kitty. A terminal that does not do notifications ignores it.
+Hooks only run when you do something, though, and the background summary finishing is not something you
+did — so the notification arrives with your next prompt or your next session, not at the instant the
+summary is written. `CACHE_GUARD_NOTIFY=0` turns it off and leaves the messages themselves alone.
 
 The background run has no tools, no MCP servers, no plugins and none of your settings, so it cannot act
 on anything it reads, and it cannot trigger the guard. Its reply is only accepted if it has the shape of
@@ -107,6 +114,7 @@ All optional, set under `env` in `~/.claude/settings.json` or a repository's `.c
 | `CACHE_GUARD_HANDOFF_MODEL` | `haiku`, or `sonnet` when long | The model that writes the summary. |
 | `CACHE_GUARD_HANDOFF_SUMMARY` | on | `0` writes the script-only handoff and starts nothing. |
 | `CACHE_GUARD_HANDOFF_FRESH_MINUTES` | `30` | How recent a handoff must be for a new session to be told about it. |
+| `CACHE_GUARD_NOTIFY` | on | `0` sends no desktop notifications; the terminal messages are unchanged. |
 | `CACHE_GUARD_STATE_DIR` | `~/.claude/cache-guard` | Where the guard keeps its few small marker files. |
 | `CACHE_GUARD_DISABLE` | off | `1` switches the guard off. |
 

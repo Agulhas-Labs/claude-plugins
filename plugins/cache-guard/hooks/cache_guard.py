@@ -59,6 +59,13 @@ HANDOFF_PENDING_PREFIX = "pending-"  # one per session that has a background sum
 SUMMARY_PENDING_TEXT = "Summary: being written"
 SUMMARY_FAILED_PREFIX = "Summary failed"
 SUMMARY_ANY_PREFIX = "Summary"
+# A desktop notification, emitted through the host's `terminalSequence` field rather than written to
+# the terminal here: the host validates it against its own allowlist and wraps it for tmux and screen.
+# Only OSC 0, 1, 2, 9, 99 and 777 are permitted, the whole sequence must be under 4096 bytes, and an
+# OSC 9 body may not begin with a digit. Most terminals that notify at all take OSC 9; kitty takes 99.
+NOTIFY_BELL = "\x07"
+NOTIFY_MAX_CHARS = 120
+NOTIFY_LEAD = "cache-guard: "  # every body starts here, which is also what keeps it off a digit
 FAILURE_MAX_CHARS = 120  # a failed handoff is reported in one line, not with a traceback
 
 # Published API list prices in US dollars per million input tokens, keyed by a run of characters of the
@@ -93,6 +100,8 @@ EFFORT_PREFIX = "<local-command-stdout>Set effort level to "
 SETTINGS_HINT = b"<local-command-stdout>Set "  # cheap prefilter before any line is parsed
 
 Turn = namedtuple("Turn", "position time size split model")
+# What the user is told, and the few words of it that fit in a desktop notification.
+Notice = namedtuple("Notice", "message headline")
 
 
 def positive_int(env, name, default):
@@ -444,6 +453,39 @@ def slash_handoff_reason(size, cost, confirm_seconds, min_tokens):
     )
 
 
+def is_kitty(env):
+    """kitty answers OSC 99 and not OSC 9; everything else that notifies at all answers OSC 9."""
+    return "kitty" in str(env.get("TERM") or "").lower() or bool(env.get("KITTY_WINDOW_ID"))
+
+
+def notification_body(headline):
+    """The headline reduced to what an OSC payload may carry: printable, no separator, and short.
+
+    A semicolon would end the payload for a terminal that reads further fields after it, so it goes.
+    """
+    kept = "".join(c for c in str(headline) if 32 <= ord(c) < 127 or ord(c) > 159)
+    return kept.replace(";", ",").strip()[:NOTIFY_MAX_CHARS]
+
+
+def notification_sequence(headline, env):
+    """The escape sequence for a desktop notification, or None when there is not one to send.
+
+    This is the only moment a notification can be raised: a hook is the one thing here that the host
+    will emit on behalf of, and hooks run when the user does something. The background summariser
+    finishing is not such a moment, so the notification lands on the next prompt or the next session
+    start rather than the instant the summary is written.
+    """
+    if str(env.get("CACHE_GUARD_NOTIFY") or "").strip() == "0":
+        return None
+    said = notification_body(headline)
+    if not said:
+        return None  # nothing printable to say, and a notification of the lead alone is only noise
+    body = notification_body(NOTIFY_LEAD + said)
+    if body[0].isdigit():
+        return None  # an OSC 9 body that opens with a digit is a progress report, and is rejected
+    return f"\x1b]99;;{body}{NOTIFY_BELL}" if is_kitty(env) else f"\x1b]9;{body}{NOTIFY_BELL}"
+
+
 def session_of(payload):
     """The session id reduced to the characters a file name may hold, or "" when there is none."""
     return re.sub(r"[^A-Za-z0-9_-]", "", str(payload.get("session_id") or ""))
@@ -463,15 +505,20 @@ def summary_line_of(document):
 
 
 def landed_reason(path, document):
-    """What the user is told once the background summary is no longer running."""
+    """What the user is told once the background summary is no longer running.
+
+    The headline is the same news in the few words a desktop notification has room for.
+    """
     line = summary_line_of(document)
     if line.startswith(SUMMARY_FAILED_PREFIX):
-        return (
+        return Notice(
             f"The handoff's background summary did not finish — {line} The script-written handoff at "
-            f"{path} is complete and readable as it is."
+            f"{path} is complete and readable as it is.",
+            "handoff summary failed, the handoff itself is complete",
         )
-    return (
-        f"The handoff's background summary has landed: {path} is complete. /clear when you are ready."
+    return Notice(
+        f"The handoff's background summary has landed: {path} is complete. /clear when you are ready.",
+        "handoff summary ready",
     )
 
 
@@ -669,7 +716,10 @@ def main():
     if reason:
         output.update({"decision": "block", "reason": reason})
     if notice:
-        output["systemMessage"] = notice
+        output["systemMessage"] = notice.message
+        sequence = notification_sequence(notice.headline, env)
+        if sequence:
+            output["terminalSequence"] = sequence
     if output:
         print(json.dumps(output))
 

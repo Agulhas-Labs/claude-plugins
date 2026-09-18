@@ -779,6 +779,8 @@ class SessionStartTests(HandoffTestCase):
         self.assertIn(path, emitted["systemMessage"])
         self.assertEqual(emitted["hookSpecificOutput"]["hookEventName"], "SessionStart")
         self.assertIn(path, emitted["hookSpecificOutput"]["additionalContext"])
+        self.assertTrue(emitted["terminalSequence"].startswith("\x1b]9;cache-guard: "))
+        self.assertTrue(emitted["terminalSequence"].endswith("\x07"))
 
     def test_a_handoff_from_before_the_window_is_not_worth_mentioning(self):
         self.handoff_file(minutes_old=45)
@@ -852,17 +854,19 @@ class SummaryNoticeTests(HandoffTestCase):
     def test_the_landed_summary_is_reported_once(self):
         self.write("# Handoff\n\nSummary written by haiku.\n\n# Goal\n")
         self.record()
-        message = self.notice()
-        self.assertIn("has landed", message)
-        self.assertIn(self.path, message)
+        notice = self.notice()
+        self.assertIn("has landed", notice.message)
+        self.assertIn(self.path, notice.message)
+        self.assertEqual(notice.headline, "handoff summary ready")
         self.assertIsNone(self.notice())  # the record is spent, so it is not repeated every prompt
 
     def test_a_failed_summary_is_reported_as_failed_and_not_as_landed(self):
         self.write("# Handoff\n\nSummary failed (claude exited 1); the extracted sections below are complete.\n")
         self.record()
-        message = self.notice()
-        self.assertIn("did not finish", message)
-        self.assertNotIn("has landed", message)
+        notice = self.notice()
+        self.assertIn("did not finish", notice.message)
+        self.assertNotIn("has landed", notice.message)
+        self.assertIn("failed", notice.headline)
 
     def test_a_session_with_no_handoff_waiting_is_told_nothing(self):
         self.assertIsNone(self.notice())
@@ -876,6 +880,34 @@ class SummaryNoticeTests(HandoffTestCase):
         self.write("# Handoff\n\nSummary written by haiku.\n")
         self.record()
         self.assertIsNone(self.notice(env=dict(self.env, CACHE_GUARD_DISABLE="1")))
+
+    def test_the_hook_emits_the_landed_notice_and_a_notification_without_blocking(self):
+        self.write("# Handoff\n\nSummary written by haiku.\n")
+        self.record()
+        payload = {"session_id": "sess", "prompt": "carry on", "transcript_path": ""}
+        out = io.StringIO()
+        with mock.patch.object(cache_guard.sys, "stdin", io.StringIO(json.dumps(payload))):
+            with mock.patch.object(cache_guard.os, "environ", self.env):
+                with contextlib.redirect_stdout(out):
+                    cache_guard.main()
+        emitted = json.loads(out.getvalue())
+        self.assertIn("has landed", emitted["systemMessage"])
+        self.assertEqual(emitted["terminalSequence"], "\x1b]9;cache-guard: handoff summary ready\x07")
+        self.assertNotIn("decision", emitted)  # news, not a reason to hold the message back
+
+    def test_the_notification_is_left_out_when_the_user_has_switched_it_off(self):
+        self.write("# Handoff\n\nSummary written by haiku.\n")
+        self.record()
+        payload = {"session_id": "sess", "prompt": "carry on", "transcript_path": ""}
+        out = io.StringIO()
+        env = dict(self.env, CACHE_GUARD_NOTIFY="0")
+        with mock.patch.object(cache_guard.sys, "stdin", io.StringIO(json.dumps(payload))):
+            with mock.patch.object(cache_guard.os, "environ", env):
+                with contextlib.redirect_stdout(out):
+                    cache_guard.main()
+        emitted = json.loads(out.getvalue())
+        self.assertIn("has landed", emitted["systemMessage"])
+        self.assertNotIn("terminalSequence", emitted)
 
     def test_a_handoff_records_what_the_next_prompt_should_watch(self):
         self.with_a_summariser()
@@ -899,6 +931,67 @@ class SummaryNoticeTests(HandoffTestCase):
         handoff.write_handoff({"session_id": "sess", "transcript_path": transcript}, NOW, self.env)
         directory = cache_guard.usable_state_dir(self.state)
         self.assertFalse(os.path.isfile(cache_guard.pending_record(directory, "sess")))
+
+
+class NotificationSequenceTests(unittest.TestCase):
+    """The host validates what it is handed, so these assert the shape it accepts.
+
+    Its rules, from its own error text: only OSC 0, 1, 2, 9, 99 and 777, terminated by BEL or ST, the
+    whole sequence under 4096 bytes, and an OSC 9 body that may not begin with a digit unless it is
+    the `9;4` progress form.
+    """
+
+    ALLOWED_PS = {0, 1, 2, 9, 99, 777}
+
+    def parse(self, sequence):
+        """(ps, payload), asserting the sequence is one the host would accept."""
+        self.assertLess(len(sequence.encode("utf-8")), 4096)
+        self.assertTrue(sequence.startswith("\x1b]"), sequence)
+        self.assertTrue(sequence.endswith("\x07"), sequence)
+        body = sequence[2:-1]
+        head, _, payload = body.partition(";")
+        self.assertTrue(head.isdigit(), head)
+        self.assertIn(int(head), self.ALLOWED_PS)
+        for character in payload:
+            self.assertFalse(ord(character) < 32 or ord(character) == 127, repr(character))
+            self.assertFalse(128 <= ord(character) <= 159, repr(character))
+        return int(head), payload
+
+    def test_the_default_is_osc_9_with_the_headline_in_it(self):
+        ps, payload = self.parse(cache_guard.notification_sequence("handoff summary ready", {}))
+        self.assertEqual(ps, 9)
+        self.assertEqual(payload, "cache-guard: handoff summary ready")
+
+    def test_kitty_gets_osc_99_which_is_the_one_it_answers(self):
+        for env in ({"TERM": "xterm-kitty"}, {"KITTY_WINDOW_ID": "3"}):
+            ps, payload = self.parse(cache_guard.notification_sequence("ready", env))
+            self.assertEqual(ps, 99)
+            self.assertTrue(payload.startswith(";"), payload)  # OSC 99 takes metadata before the body
+
+    def test_the_body_never_begins_with_a_digit(self):
+        """An OSC 9 body opening with a digit is read as a progress report and rejected outright."""
+        _, payload = self.parse(cache_guard.notification_sequence("4;3 done", {}))
+        self.assertFalse(payload[0].isdigit())
+
+    def test_control_characters_and_separators_are_taken_out(self):
+        _, payload = self.parse(
+            cache_guard.notification_sequence("a\x1b[31mb\nc;d\x7fe\x9ff", {}))
+        self.assertNotIn(";", payload.split(":", 1)[1])
+        for banned in ("\x1b", "\n", "\x7f", "\x9f"):
+            self.assertNotIn(banned, payload)
+
+    def test_a_long_headline_is_cut_well_under_the_hosts_limit(self):
+        sequence = cache_guard.notification_sequence("x" * 5000, {})
+        self.assertLess(len(sequence.encode("utf-8")), 4096)
+        self.parse(sequence)
+
+    def test_notifications_can_be_switched_off_on_their_own(self):
+        self.assertIsNone(
+            cache_guard.notification_sequence("ready", {"CACHE_GUARD_NOTIFY": "0"}))
+        self.assertIsNotNone(cache_guard.notification_sequence("ready", {"CACHE_GUARD_NOTIFY": "1"}))
+
+    def test_a_headline_with_nothing_printable_in_it_sends_no_notification(self):
+        self.assertIsNone(cache_guard.notification_sequence("\x01\x02", {"CACHE_GUARD_NOTIFY": ""}))
 
 
 class StateDirectoryTests(unittest.TestCase):
