@@ -56,8 +56,12 @@ of all subagent spend: each one re-sent the whole context to do one small thing.
   when you have other work to do meanwhile, never to wait on it, and never end your turn while one you
   started is still running: a subagent that does wakes the main session with nothing to report. In one
   measured day that was about 20 main-session turns that could do nothing.
-- When told your context has passed its budget, finish the item in hand, commit it once verified, and
-  hand back with the remaining items listed. Don't start another.
+- Your context has three budget marks, and a hook tells you as you pass each. They ask for different
+  things, so read which one arrived. At 120k, freeze scope: start no new deliverable, and put
+  everything into landing what is already open. At 150k, hand back: finish the item in hand, commit it
+  once verified, and end with the remaining items listed. At 200k, stop where you are: commit only what
+  is already verified and report, even mid-item, listing everything unfinished. Knowing the later marks
+  are coming is the point of the earlier ones — don't take on work you cannot land before the next.
 
 ## Shared machine
 

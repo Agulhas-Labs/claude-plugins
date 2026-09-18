@@ -41,7 +41,8 @@ ends in commands that prove the work, and the lead runs them again itself before
 
 An agent re-sends its whole context on every turn, so its cost grows with the square of its length. In
 one measured week the longest 10% of subagents were 45% of all subagent spend. So each agent gets one
-job, a hook tells a subagent to hand back once its context passes 150k tokens, reviews stop after two
+job, a hook warns a subagent in three tiers as its context grows — freeze scope at 120k, hand back at
+150k, stop where you are at 200k — reviews stop after two
 rounds, and at most 4 agents run at once (a setting).
 
 [Read more](plugins/orchestration/README.md): the roster, a handoff from start to finish, the numbers

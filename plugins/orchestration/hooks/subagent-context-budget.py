@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""PostToolUse: tell a subagent to wrap up once its context passes a budget.
+"""PostToolUse: warn a subagent, in three tiers, as its context passes a budget.
 
 An agent's spend is its context summed over every turn, so it grows with the square of the agent's
-length. Measured over 219 subagents: 55% of subagent spend came in turns above 200k.
-When a subagent's context crosses 150k, and each further 50k, it is told to finish the item in hand
-and hand the rest back, so the orchestrator can give the remainder to a fresh agent.
+length. A single warning repeated verbatim tells an agent nothing it does not already know: measured
+over six subagents carrying this hook, each started near 30k and ran on to between 180k and 252k,
+because the warning arrived after the agent had already committed to work it then had to finish.
+
+So the tiers differ in kind, and each says what the next one will ask for:
+
+- 120k, scope freeze: start no new deliverable; a hand-back is coming at 150k.
+- 150k, hand back: finish the item in hand, get it to a verified commit, end listing what remains.
+- 200k, stop: commit what is already verified and report now, even mid-item. Repeats every 50k
+  beyond as a backstop; the first two fire once each.
 
 Only subagent calls carry `agent_id`, so the main session is never told. Anything unexpected exits
 silently: a budget nudge is never worth breaking a tool call.
@@ -14,8 +21,10 @@ import json
 import os
 import sys
 
-FIRST = 150_000
-STEP = 50_000
+FREEZE = 120_000
+HAND_BACK = 150_000
+STOP = 200_000
+STEP = 50_000  # beyond STOP, the stop tier repeats at each step as a backstop
 TAIL = 1024 * 1024  # enough of the transcript's end to hold its last two assistant turns
 
 
@@ -60,7 +69,40 @@ def turns(path):
 
 
 def level(size):
-    return 0 if size < FIRST else 1 + (size - FIRST) // STEP
+    """0 below the first tier, then 1 freeze, 2 hand back, 3+ stop (one level per STEP beyond)."""
+    if size < FREEZE:
+        return 0
+    if size < HAND_BACK:
+        return 1
+    if size < STOP:
+        return 2
+    return 3 + (size - STOP) // STEP
+
+
+def nudge(size):
+    """The tier's own words. They differ in kind, and the first two name what the next tier will ask."""
+    opening = (
+        f"Context budget: this agent's context is now {size // 1000}k tokens, and every further turn "
+        "re-sends all of it. "
+    )
+    tier = level(size)
+    if tier == 1:
+        return opening + (
+            "Scope freeze: start no new deliverable. Everything from here goes toward landing what is "
+            "already open — finishing it, verifying it, committing it. At 150k you will be asked to hand "
+            "back whatever is still unfinished, so take on nothing you cannot land before then."
+        )
+    if tier == 2:
+        return opening + (
+            "Finish only the item in hand: get it to a verified commit, or, for a read-only job, write "
+            "up what you have. Then end, listing every item not yet done so the orchestrator can hand it "
+            "to a fresh agent. Don't start another item."
+        )
+    return opening + (
+        "Stop here, even mid-item. Commit only what is already verified — start no further run to "
+        "verify the rest — and report now. List everything unfinished, with what you learned about "
+        "each, so the orchestrator can hand it to a fresh agent."
+    )
 
 
 def advice(payload):
@@ -76,12 +118,7 @@ def advice(payload):
     before = history[index - 1][0] if index > 0 else 0
     if level(size) <= level(before):
         return None
-    return (
-        f"Context budget: this agent's context is now {size // 1000}k tokens, and every further turn "
-        "re-sends all of it. Finish only the item in hand: get it to a verified commit, or, for a "
-        "read-only job, write up what you have. Then end, listing every item not yet done so the "
-        "orchestrator can hand it to a fresh agent. Don't start another item."
-    )
+    return nudge(size)
 
 
 def main():
