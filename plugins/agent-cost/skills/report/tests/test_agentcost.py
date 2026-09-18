@@ -1356,6 +1356,19 @@ class SectionSelectionTests(unittest.TestCase):
         self.assertNotIn("=== Fixed start ===", output)
         self.assertIn("note: input-eq is", output)  # the unit still explains itself
 
+    def test_a_section_asked_for_by_name_says_so_when_the_window_holds_nothing_for_it(self):
+        fx = FixtureRoot(self)
+        fx.subagent(agent="a1", entries=[
+            assistant("s1", ts_str(BASE), usage(input_tokens=0, cache_read=5000)),
+            assistant("s2", ts_str(BASE + timedelta(seconds=30)), usage(input_tokens=0, cache_read=6000)),
+        ])
+        loaded = ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
+        asked = ac.build_report(loaded, 12, sections=["main-sessions"])
+        self.assertIn("=== Main sessions ===", asked)
+        self.assertIn("none in this window", asked)
+        # ... while the whole report still leaves out a kind the window does not hold
+        self.assertNotIn("=== Main sessions ===", ac.build_report(loaded, 12))
+
     def test_main_refuses_an_unknown_name_before_it_reads_a_transcript(self):
         err = io.StringIO()
         with self.assertRaises(SystemExit), redirect_stderr(err):

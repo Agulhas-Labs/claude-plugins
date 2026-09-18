@@ -45,14 +45,15 @@ python3 agentcost.py [--since X] [--until X] [--projects DIR] [--transcript PATH
 
 ## Reading the report
 
-The section names `--sections` takes are the headings below, lowercased and hyphenated.
+The section names `--sections` takes are the headings below, lowercased and hyphenated, plus
+`tools-called` for the `--tools` section.
 
 Every section shows main sessions and subagents separately, and leaves out a kind the window does not
 hold: someone who has never started a subagent gets no subagent rows. Read the rows for the kind that
 holds the spend first, and give advice for that kind. Delegation advice means nothing to a person whose
 spend is all in their own sessions.
 
-- **Totals / by model** — the top-line number, main and subagent each on its own row.
+- **Totals** (`/ by model`) — the top-line number, main and subagent each on its own row.
 - **Per day** — trend, with each day's main and subagent spend. A rising top-10% share or rising median
   turns over days means contexts are running longer, not that more work is happening. A day with under
   ten contexts shows `-` for the top-10% share: there is no decile to take.

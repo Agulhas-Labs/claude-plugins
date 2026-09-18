@@ -1074,18 +1074,19 @@ def section_tools(out, loaded, per_type=25):
 # The report's sections in order, by the name --sections takes for each: the heading's words, lowercased
 # and hyphenated, with what only decorates the heading (the window, the top-n) left out.
 SECTIONS = (
-    ("totals", lambda out, loaded, top_n: section_totals(out, loaded)),
-    ("per-day", lambda out, loaded, top_n: section_per_day(out, loaded)),
-    ("main-sessions", section_main_sessions),
-    ("concentration", lambda out, loaded, top_n: section_concentration(out, loaded)),
-    ("turn-shape", lambda out, loaded, top_n: section_turn_shape(out, loaded)),
-    ("cold-cache", lambda out, loaded, top_n: section_cold_cache(out, loaded)),
-    ("what-fills-the-context", lambda out, loaded, top_n: section_fills_context(out, loaded)),
-    ("fixed-start", lambda out, loaded, top_n: section_fixed_start(out, loaded)),
-    ("largest-contexts", section_largest),
-    ("tools-called", lambda out, loaded, top_n: section_tools(out, loaded)),
+    ("totals", "Totals", lambda out, loaded, top_n: section_totals(out, loaded)),
+    ("per-day", "Per day", lambda out, loaded, top_n: section_per_day(out, loaded)),
+    ("main-sessions", "Main sessions", section_main_sessions),
+    ("concentration", "Concentration", lambda out, loaded, top_n: section_concentration(out, loaded)),
+    ("turn-shape", "Turn shape", lambda out, loaded, top_n: section_turn_shape(out, loaded)),
+    ("cold-cache", "Cold cache", lambda out, loaded, top_n: section_cold_cache(out, loaded)),
+    ("what-fills-the-context", "What fills the context",
+     lambda out, loaded, top_n: section_fills_context(out, loaded)),
+    ("fixed-start", "Fixed start", lambda out, loaded, top_n: section_fixed_start(out, loaded)),
+    ("largest-contexts", "Largest contexts", section_largest),
+    ("tools-called", "Tools called", lambda out, loaded, top_n: section_tools(out, loaded)),
 )
-SECTION_NAMES = [name for name, _ in SECTIONS]
+SECTION_NAMES = [name for name, _, _ in SECTIONS]
 DEFAULT_SECTIONS = [name for name in SECTION_NAMES if name != "tools-called"]
 
 
@@ -1093,8 +1094,8 @@ def resolve_sections(spec):
     """The names given to --sections as canonical section names, in the report's own order.
 
     A name matches by case-insensitive prefix, so `main` is Main sessions and `cold` is Cold cache.
-    An unknown or ambiguous name raises ValueError naming the sections that exist: a report is
-    expensive to compute, so a typo has to fail before anything is read.
+    An unknown name raises ValueError listing the sections that exist, an ambiguous one the sections it
+    matched: a report is expensive to compute, so a typo has to fail before anything is read.
     """
     chosen = set()
     for raw in spec.split(","):
@@ -1119,9 +1120,17 @@ def build_report(loaded, top_n, tools=False, sections=None):
     if tools and "tools-called" not in chosen:
         chosen.append("tools-called")
     out = []
-    for name, render in SECTIONS:
-        if name in chosen:
-            render(out, loaded, top_n)
+    for name, title, render in SECTIONS:
+        if name not in chosen:
+            continue
+        before = len(out)
+        render(out, loaded, top_n)
+        if sections is not None and len(out) == before:
+            # a section the window holds nothing for is left out of the whole report, but a section
+            # asked for by name says so: on its own it would otherwise read as the flag having failed
+            out.append(f"=== {title} ===")
+            out.append("  none in this window")
+            out.append("")
     versions = sorted({v for l in loaded for v in l.ctx.versions})
     out.append(f"harness versions in this window: {', '.join(versions) if versions else '(none found)'}")
     out.append("note: input-eq is a price comparison against the uncached input rate, not a token count.")
