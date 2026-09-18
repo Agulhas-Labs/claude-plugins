@@ -51,12 +51,17 @@ Each section of the report says what to do about what it shows.
 
 ```text
 python3 agentcost.py [--since X] [--until X] [--projects DIR] [--transcript PATH] [--top N] [--tools]
+                     [--sections NAMES]
 ```
 
 The session runs the script for you; these are what you can ask for. `--since` and `--until` take
 `today`, `yesterday`, `<N>d`, a date or an ISO datetime, and default to the last 7 days. To compare
 before and after a change, ask for two windows that bracket it. `--transcript` reports on one session,
 with its subagents, or on one subagent file.
+
+`--sections` prints only the sections you name — `--sections totals,main,cold`, each name any prefix of
+a heading. The whole report is about 200 lines, so ask for the whole thing once and then for the one
+section a follow-up question is about.
 
 ## How to read the numbers
 

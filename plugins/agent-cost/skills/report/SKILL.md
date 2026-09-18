@@ -17,6 +17,7 @@ the first), the window-vs-mtime prefilter, and the pricing formula below.
 
 ```
 python3 agentcost.py [--since X] [--until X] [--projects DIR] [--transcript PATH] [--top N] [--tools]
+                     [--sections NAMES]
 ```
 
 - On Windows run it with `py` or `python`, whichever is the Python 3 on the machine: a bare `python3`
@@ -31,15 +32,28 @@ python3 agentcost.py [--since X] [--until X] [--projects DIR] [--transcript PATH
   context re-sent on every one of its turns, and a tool its jobs need but its list drops is a failure.
 - `--transcript PATH` reports on one session (its `subagents/` come along) or one subagent file,
   ignoring the window — use it to inspect a single agent's start or shape.
+- `--sections NAMES` prints only those sections, comma-separated, each named by any prefix of it:
+  `totals, per-day, main-sessions, concentration, turn-shape, cold-cache, what-fills-the-context,
+  fixed-start, largest-contexts, tools-called`. An unknown name fails before any transcript is read
+  and lists the ones that exist.
+- **Ask for the sections the question needs.** The full report is about 200 lines and every line of it
+  lands in the context. "Why was yesterday expensive?" is `--sections totals,per-day,main-sessions`,
+  not Fixed start; "did that change help?" is the one or two sections that measure it, run over each
+  window; "what should this agent's `tools:` be?" is `--sections tools-called`. Run the whole report
+  when the question is open ("where did my tokens go?"), and a selection for every follow-up after it —
+  re-reading a section you already have costs as much as reading it the first time.
 
 ## Reading the report
+
+The section names `--sections` takes are the headings below, lowercased and hyphenated, plus
+`tools-called` for the `--tools` section.
 
 Every section shows main sessions and subagents separately, and leaves out a kind the window does not
 hold: someone who has never started a subagent gets no subagent rows. Read the rows for the kind that
 holds the spend first, and give advice for that kind. Delegation advice means nothing to a person whose
 spend is all in their own sessions.
 
-- **Totals / by model** — the top-line number, main and subagent each on its own row.
+- **Totals** (`/ by model`) — the top-line number, main and subagent each on its own row.
 - **Per day** — trend, with each day's main and subagent spend. A rising top-10% share or rising median
   turns over days means contexts are running longer, not that more work is happening. A day with under
   ten contexts shows `-` for the top-10% share: there is no decile to take.
