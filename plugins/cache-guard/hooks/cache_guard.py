@@ -48,7 +48,17 @@ HANDOFF_WORD = "handoff"  # a message that is only this word asks for a handoff 
 HANDOFF_COMMANDS = ("/handoff", "/cache-guard:handoff")  # the same thing, but written by the model
 UNDER_A_CENT = "under $0.01"
 MARKER_NAME = re.compile(r"[A-Za-z0-9_-]+\Z")  # a sanitised session id, and nothing else
-SWEPT_PREFIXES = ("announced-", "condensed-")  # the plugin's other files, which carry a suffix
+# The plugin's other files, which carry a suffix. `announced-` is no longer written — the session-start
+# announcement is made to every fresh session inside the freshness window — but it stays in the sweep so
+# that the ones an earlier version left behind are cleared out like everything else.
+SWEPT_PREFIXES = ("announced-", "condensed-", "pending-")
+HANDOFF_PENDING_PREFIX = "pending-"  # one per session that has a background summary still running
+# The line handoff.py writes under the title while the background summary is running. It lives here so
+# that this hook can tell a finished handoff from an unfinished one without importing handoff.py, whose
+# import costs more than the check and which imports this module in turn.
+SUMMARY_PENDING_TEXT = "Summary: being written"
+SUMMARY_FAILED_PREFIX = "Summary failed"
+SUMMARY_ANY_PREFIX = "Summary"
 FAILURE_MAX_CHARS = 120  # a failed handoff is reported in one line, not with a traceback
 
 # Published API list prices in US dollars per million input tokens, keyed by a run of characters of the
@@ -374,12 +384,18 @@ def handoff_reason(result, env):
     model = result.get("summary_model")
     if model:
         priced = f"{about(cost)} at API list prices for " if cost is not None and show_cost else ""
-        middle = f"A summary by {model} is being added in the background (shortly, {priced}~{tokens} tokens)."
+        # The background run is a detached process, not a subagent, so nothing about it appears in the
+        # session while it works. Saying where the state is written is what makes it observable.
+        middle = (
+            f"A summary by {model} is being added in the background (shortly, {priced}~{tokens} "
+            "tokens). The file's Summary line says which it is until then, and you will be told here "
+            "when it lands."
+        )
     else:
         middle = f"No summary was added ({result.get('no_summary_reason')})."
     return (
         f"Handoff written without using this session's model: {result['path']}. {middle} When you are "
-        "ready: /clear, and the new session will be told where the file is."
+        "ready: /clear, and the new session says so and where the file is."
     )
 
 
@@ -426,6 +442,81 @@ def slash_handoff_reason(size, cost, confirm_seconds, min_tokens):
         f"{humanize_window(confirm_seconds)} to use the model anyway. "
         f"(cache-guard; threshold CACHE_GUARD_MIN_TOKENS={min_tokens})"
     )
+
+
+def session_of(payload):
+    """The session id reduced to the characters a file name may hold, or "" when there is none."""
+    return re.sub(r"[^A-Za-z0-9_-]", "", str(payload.get("session_id") or ""))
+
+
+def pending_record(marker_dir, session):
+    """Where a session records that it started a background summary it has not yet reported on."""
+    return os.path.join(marker_dir, HANDOFF_PENDING_PREFIX + session)
+
+
+def summary_line_of(document):
+    """The handoff's `Summary...` line, whichever of the three states it is in, or "" when it has none."""
+    for line in document.split("\n"):
+        if line.startswith(SUMMARY_ANY_PREFIX):
+            return line.strip()
+    return ""
+
+
+def landed_reason(path, document):
+    """What the user is told once the background summary is no longer running."""
+    line = summary_line_of(document)
+    if line.startswith(SUMMARY_FAILED_PREFIX):
+        return (
+            f"The handoff's background summary did not finish — {line} The script-written handoff at "
+            f"{path} is complete and readable as it is."
+        )
+    return (
+        f"The handoff's background summary has landed: {path} is complete. /clear when you are ready."
+    )
+
+
+def summary_notice(payload, env, marker_dir):
+    """Tell the user, once, that the summary promised by an earlier `handoff` in this session is in.
+
+    A detached background process cannot write to the terminal, so the report has to be made by the
+    next hook that runs. Silence while it is still running is deliberate: starting it was announced
+    already, and repeating that on every prompt would be the noise this plugin exists to avoid.
+    """
+    try:
+        if str(env.get("CACHE_GUARD_DISABLE") or "").strip() == "1":
+            return None
+        session = session_of(payload)
+        if not session:
+            return None
+        marker_dir = usable_state_dir(marker_dir)
+        if marker_dir is None:
+            return None
+        record = pending_record(marker_dir, session)
+        try:
+            with open(record, encoding="utf-8") as f:
+                path = f.read().strip()
+        except OSError:
+            return None  # no handoff of this session's is waiting on a summary
+        document = ""
+        if path:
+            try:
+                with open(path, encoding="utf-8") as f:
+                    document = f.read()
+            except OSError:
+                document = ""  # the file was moved or deleted: stop watching for it
+        if document and SUMMARY_PENDING_TEXT in document:
+            return None  # still running
+        forget(record)
+        return landed_reason(path, document) if document else None
+    except Exception:
+        return None
+
+
+def forget(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def state_dir(env):
@@ -511,7 +602,7 @@ def decide(payload, now, env, marker_dir):
         skill = handoff_command(prompt)
         if prompt.lstrip().startswith("/") and not skill:
             return None  # a slash command is the escape route, including the /clear we recommend
-        session = re.sub(r"[^A-Za-z0-9_-]", "", str(payload.get("session_id") or ""))
+        session = session_of(payload)
         if not session:
             return None
         marker_dir = usable_state_dir(marker_dir)
@@ -568,9 +659,19 @@ def main():
         payload = json.load(sys.stdin)
     except Exception:
         return
-    reason = decide(payload, datetime.now(timezone.utc), os.environ, state_dir(os.environ))
+    now, env = datetime.now(timezone.utc), os.environ
+    directory = state_dir(env)
+    # The notice is read before `decide` may prune the record it lives in, and it never blocks: a
+    # finished summary is news, not a reason to hold a message back.
+    notice = summary_notice(payload, env, directory)
+    reason = decide(payload, now, env, directory)
+    output = {}
     if reason:
-        print(json.dumps({"decision": "block", "reason": reason}))
+        output.update({"decision": "block", "reason": reason})
+    if notice:
+        output["systemMessage"] = notice
+    if output:
+        print(json.dumps(output))
 
 
 if __name__ == "__main__":

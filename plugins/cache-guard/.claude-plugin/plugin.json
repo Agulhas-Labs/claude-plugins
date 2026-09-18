@@ -1,6 +1,6 @@
 {
   "name": "cache-guard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Warns once before a message that will cost far more than usual: a large Claude Code context whose prompt cache has expired, or a model or effort change that resets it. Shows the estimated cost, and offers a handoff file written by a cheap model in the background so you can /clear instead.",
   "author": {
     "name": "Agulhas Labs"

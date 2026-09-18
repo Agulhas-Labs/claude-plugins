@@ -60,7 +60,12 @@ Send the single word `handoff`. The hook takes it before it reaches the model an
    has a proper summary on top: goal, decisions and why, current state, what is left, next step, what to
    be careful of. Sessions too long for Haiku go to Sonnet, and a session of a few lines gets no summary
    because the script-written file already says it all.
-3. tells you the path. `/clear`, and the new session is told a fresh handoff exists and where it is.
+3. tells you the path, and tells you again when the background summary lands, since a detached
+   process cannot write to your terminal itself: the report is made by the next prompt you send. Until
+   then the file's own `Summary:` line says whether it is still being written.
+4. `/clear`, and the new session tells you — in the terminal, not only in the model's context — that a
+   fresh handoff is waiting, where it is, and whether its summary is in yet. Every session started in
+   that directory inside the freshness window is told, so closing one without reading it costs nothing.
 
 The background run has no tools, no MCP servers, no plugins and none of your settings, so it cannot act
 on anything it reads, and it cannot trigger the guard. Its reply is only accepted if it has the shape of

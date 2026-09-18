@@ -6,6 +6,8 @@ Nothing here starts a real `claude` or a real detached process: the two places o
 module-level functions, and every test replaces them. Nothing is written outside its own temp
 directory: the state directory and the handoff directory are both given in the environment.
 """
+import contextlib
+import io
 import json
 import os
 import signal
@@ -740,49 +742,163 @@ class SessionStartTests(HandoffTestCase):
 
     def announce(self, source="clear", env=None):
         payload = {"session_id": "new", "cwd": "/work/project", "source": source}
-        return session_start.announcement(payload, NOW, env or self.env, self.state)
+        return session_start.announcement(payload, NOW, env or self.env)
 
-    def test_a_fresh_handoff_is_announced_once(self):
+    def context(self, **kwargs):
+        return self.announce(**kwargs).context
+
+    def spoken(self, **kwargs):
+        return self.announce(**kwargs).spoken
+
+    def test_a_fresh_handoff_is_announced_to_the_model_and_to_the_user(self):
         path = self.handoff_file(minutes_old=5)
-        message = self.announce()
-        self.assertIn("written 5 minutes ago", message)
-        self.assertIn(path, message)
-        self.assertIn("Read it before starting", message)
-        self.assertEqual(self.announce(), "")  # announced once, never again
+        note = self.announce()
+        self.assertIn("written 5 minutes ago", note.context)
+        self.assertIn(path, note.context)
+        self.assertIn("Read it before starting", note.context)
+        self.assertIn(path, note.spoken)
+        self.assertIn("a handoff from 5 minutes ago is waiting", note.spoken)
+
+    def test_every_fresh_session_in_the_window_is_told_not_only_the_first(self):
+        """A session that is started and closed again must not swallow the only announcement made."""
+        self.handoff_file(minutes_old=5)
+        self.assertNotEqual(self.context(), "")
+        self.assertNotEqual(self.context(), "")
+        self.assertNotEqual(self.context(source="startup"), "")
+
+    def test_the_hook_emits_the_user_facing_field_as_well_as_the_context(self):
+        path = self.handoff_file()
+        os.utime(path, None)  # main() reads the real clock, so the file has to be fresh by that one
+        payload = {"session_id": "new", "cwd": "/work/project", "source": "startup"}
+        out = io.StringIO()
+        with mock.patch.object(session_start.sys, "stdin", io.StringIO(json.dumps(payload))):
+            with mock.patch.object(session_start.os, "environ", self.env):
+                with contextlib.redirect_stdout(out):
+                    session_start.main()
+        emitted = json.loads(out.getvalue())
+        self.assertIn(path, emitted["systemMessage"])
+        self.assertEqual(emitted["hookSpecificOutput"]["hookEventName"], "SessionStart")
+        self.assertIn(path, emitted["hookSpecificOutput"]["additionalContext"])
 
     def test_a_handoff_from_before_the_window_is_not_worth_mentioning(self):
         self.handoff_file(minutes_old=45)
-        self.assertEqual(self.announce(), "")
+        self.assertEqual(self.context(), "")
+        self.assertEqual(self.spoken(), "")
 
     def test_the_window_is_configurable(self):
         self.handoff_file(minutes_old=45)
-        self.assertNotEqual(self.announce(env=dict(self.env, CACHE_GUARD_HANDOFF_FRESH_MINUTES="60")), "")
+        self.assertNotEqual(self.context(env=dict(self.env, CACHE_GUARD_HANDOFF_FRESH_MINUTES="60")), "")
 
     def test_a_resumed_session_already_has_the_conversation(self):
         self.handoff_file(minutes_old=5)
-        self.assertEqual(self.announce(source="resume"), "")
-        self.assertEqual(self.announce(source="compact"), "")
-        self.assertNotEqual(self.announce(source="startup"), "")
+        self.assertEqual(self.context(source="resume"), "")
+        self.assertEqual(self.context(source="compact"), "")
+        self.assertNotEqual(self.context(source="startup"), "")
 
     def test_a_summary_still_being_written_is_worth_saying(self):
         self.handoff_file(body="# Handoff\n\nSummary: being written by haiku in the background.\n")
-        self.assertIn("Its summary is still being written", self.announce())
+        self.assertIn("Its summary is still being written", self.context())
+        self.assertIn("still being written", self.spoken())
 
-    def test_a_finished_handoff_says_nothing_about_a_summary(self):
+    def test_a_finished_handoff_says_it_is_complete(self):
         self.handoff_file(body="# Handoff\n\nSummary written by haiku.\n")
-        self.assertNotIn("still being written", self.announce())
+        self.assertNotIn("still being written", self.context())
+        self.assertIn("complete", self.spoken())
+
+    def test_one_minute_is_not_one_minutes(self):
+        self.handoff_file(minutes_old=1)
+        self.assertIn("1 minute ago", self.spoken())
+        self.assertNotIn("1 minutes", self.spoken())
 
     def test_the_newest_handoff_is_the_one_announced(self):
         self.handoff_file(name="20260102-100000.md", minutes_old=20)
         newest = self.handoff_file(name="20260102-115500.md", minutes_old=5)
-        self.assertIn(newest, self.announce())
+        self.assertIn(newest, self.context())
 
     def test_no_handoff_directory_and_no_handoff_say_nothing(self):
-        self.assertEqual(self.announce(), "")
+        self.assertEqual(self.context(), "")
         self.assertEqual(
-            self.announce(env=dict(self.env, CACHE_GUARD_HANDOFF_DIR=os.path.join(self.tmp.name, "none"))),
+            self.context(env=dict(self.env, CACHE_GUARD_HANDOFF_DIR=os.path.join(self.tmp.name, "none"))),
             "",
         )
+
+
+class SummaryNoticeTests(HandoffTestCase):
+    """The background summariser writes to no terminal, so the next prompt is what reports it."""
+
+    def setUp(self):
+        super().setUp()
+        os.makedirs(self.handoffs)
+        self.path = os.path.join(self.handoffs, "20260102-120000.md")
+
+    def write(self, body):
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write(body)
+
+    def record(self, target=None):
+        directory = cache_guard.usable_state_dir(self.state)
+        with open(cache_guard.pending_record(directory, "sess"), "w", encoding="utf-8") as f:
+            f.write((self.path if target is None else target) + "\n")
+
+    def notice(self, env=None):
+        payload = {"session_id": "sess"}
+        return cache_guard.summary_notice(payload, env or self.env, self.state)
+
+    def test_nothing_is_said_while_the_summary_is_still_running(self):
+        self.write("# Handoff\n\nSummary: being written by haiku in the background.\n")
+        self.record()
+        self.assertIsNone(self.notice())
+
+    def test_the_landed_summary_is_reported_once(self):
+        self.write("# Handoff\n\nSummary written by haiku.\n\n# Goal\n")
+        self.record()
+        message = self.notice()
+        self.assertIn("has landed", message)
+        self.assertIn(self.path, message)
+        self.assertIsNone(self.notice())  # the record is spent, so it is not repeated every prompt
+
+    def test_a_failed_summary_is_reported_as_failed_and_not_as_landed(self):
+        self.write("# Handoff\n\nSummary failed (claude exited 1); the extracted sections below are complete.\n")
+        self.record()
+        message = self.notice()
+        self.assertIn("did not finish", message)
+        self.assertNotIn("has landed", message)
+
+    def test_a_session_with_no_handoff_waiting_is_told_nothing(self):
+        self.assertIsNone(self.notice())
+
+    def test_a_handoff_that_has_gone_away_stops_being_watched(self):
+        self.record(target=os.path.join(self.handoffs, "deleted.md"))
+        self.assertIsNone(self.notice())
+        self.assertIsNone(self.notice())
+
+    def test_the_notice_is_silent_when_the_guard_is_switched_off(self):
+        self.write("# Handoff\n\nSummary written by haiku.\n")
+        self.record()
+        self.assertIsNone(self.notice(env=dict(self.env, CACHE_GUARD_DISABLE="1")))
+
+    def test_a_handoff_records_what_the_next_prompt_should_watch(self):
+        self.with_a_summariser()
+        transcript = self.transcript([
+            user(LONG_REQUEST),
+            assistant([text_block("Looking."), tool_use("Edit", {"file_path": "/work/project/a.py"})]),
+            assistant([text_block("Fixed the parser.")]),
+        ])
+        result = handoff.write_handoff(
+            {"session_id": "sess", "transcript_path": transcript}, NOW, self.env)
+        self.assertIsNotNone(result["summary_model"])
+        directory = cache_guard.usable_state_dir(self.state)
+        record = cache_guard.pending_record(directory, "sess")
+        self.assertTrue(os.path.isfile(record))
+        with open(record, encoding="utf-8") as f:
+            self.assertEqual(f.read().strip(), result["path"])
+
+    def test_a_handoff_with_no_summariser_records_nothing_to_wait_for(self):
+        self.patch("find_claude", lambda env: None)
+        transcript = self.transcript([user(LONG_REQUEST), assistant([text_block("Done.")])])
+        handoff.write_handoff({"session_id": "sess", "transcript_path": transcript}, NOW, self.env)
+        directory = cache_guard.usable_state_dir(self.state)
+        self.assertFalse(os.path.isfile(cache_guard.pending_record(directory, "sess")))
 
 
 class StateDirectoryTests(unittest.TestCase):
