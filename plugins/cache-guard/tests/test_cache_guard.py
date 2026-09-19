@@ -669,6 +669,13 @@ class WordingTests(GuardTestCase):
         self.assertIn("shortly", message)
         self.assertNotIn("a minute", message)
 
+    def test_the_landing_is_promised_to_the_session_that_clears_as_well_as_this_one(self):
+        """The same message recommends /clear, so a promise made only to this session has no carrier."""
+        result = {"path": "/tmp/h.md", "summary_model": "haiku", "est_tokens": 100, "est_cost": None}
+        message = cache_guard.handoff_reason(result, {})
+        self.assertIn("you will be told when it lands", message)
+        self.assertIn("the session you /clear into", message)
+
     def test_days_idle_read_as_days(self):
         entries = [assistant(NOW - timedelta(hours=72), LARGE, split_1h())]
         self.assertIn("idle 3d 0h", self.decide(entries))

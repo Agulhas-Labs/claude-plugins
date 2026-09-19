@@ -7,6 +7,7 @@ module-level functions, and every test replaces them. Nothing is written outside
 directory: the state directory and the handoff directory are both given in the environment.
 """
 import contextlib
+import errno
 import io
 import json
 import os
@@ -322,6 +323,28 @@ class WriteHandoffTests(HandoffTestCase):
 
     def fake_condense(self, text, meta=None):
         return mock.patch.object(handoff, "condense", lambda path: (text, dict(meta or META)))
+
+    def test_a_record_that_cannot_be_written_does_not_fail_the_handoff(self):
+        """By the time the record is written the file is on disk and the summariser is running.
+
+        An OSError escaping from there is reported to the user as the handoff itself having failed —
+        "Nothing was sent" — while the prompt stays blocked, and sending `handoff` again writes a
+        second one. The trigger is narrow, because the state directory passed its checks and the
+        summariser's own temporary succeeded moments earlier: a disk filling up mid-flight, the
+        directory going away underneath, file descriptors running out.
+        """
+        self.with_a_summariser()
+        real = tempfile.mkstemp
+
+        def full_disk(*args, **kwargs):
+            if kwargs.get("prefix") == cache_guard.TEMP_PREFIX:
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return real(*args, **kwargs)
+
+        with mock.patch.object(tempfile, "mkstemp", full_disk):
+            result = handoff.write_handoff(self.payload(), NOW, self.env)
+        self.assertEqual(result["summary_model"], "haiku")  # the summary was started, and is promised
+        self.assertEqual(self.written_handoffs(), ["20260102-120000.md"])  # written once, not twice
 
     def test_the_file_is_written_at_once_and_the_summariser_started_detached(self):
         self.with_a_summariser()
@@ -800,7 +823,32 @@ class SessionStartTests(HandoffTestCase):
     def test_a_summary_still_being_written_is_worth_saying(self):
         self.handoff_file(body="# Handoff\n\nSummary: being written by haiku in the background.\n")
         self.assertIn("Its summary is still being written", self.context())
-        self.assertIn("still being written", self.spoken())
+        self.assertIn("told here when its background summary lands", self.spoken())
+
+    def test_an_unfinished_handoff_is_watched_so_this_session_reports_the_landing(self):
+        """The promise in the announcement is only made because this record backs it."""
+        path = self.handoff_file(body="# Handoff\n\nSummary: being written by haiku in the background.\n")
+        self.assertIn("you will be told when it lands", self.context())
+        record = cache_guard.pending_record(cache_guard.usable_state_dir(self.state), "new")
+        self.assertEqual(self.read(record).split("\n")[0], path)
+        landed = "# Handoff\n\nSummary written by haiku.\n"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(landed)
+        notice = cache_guard.summary_notice({"session_id": "new"}, self.env, self.state)
+        self.assertIn("has landed", notice.message)
+        self.assertIn(path, notice.message)
+
+    def test_a_finished_handoff_is_not_watched_because_there_is_nothing_left_to_report(self):
+        self.handoff_file(body="# Handoff\n\nSummary written by haiku.\n")
+        self.assertNotIn("told here", self.spoken())
+        record = cache_guard.pending_record(cache_guard.usable_state_dir(self.state), "new")
+        self.assertFalse(os.path.exists(record))
+
+    def test_a_promise_is_not_made_when_the_record_could_not_be_written(self):
+        self.handoff_file(body="# Handoff\n\nSummary: being written by haiku in the background.\n")
+        with mock.patch.object(cache_guard, "watch_pending", lambda *a, **k: False):
+            self.assertIn("re-read it in a moment", self.spoken())
+            self.assertIn("re-read it if the summary section is missing", self.context())
 
     def test_a_finished_handoff_says_it_is_complete(self):
         self.handoff_file(body="# Handoff\n\nSummary written by haiku.\n")
@@ -823,6 +871,101 @@ class SessionStartTests(HandoffTestCase):
             self.context(env=dict(self.env, CACHE_GUARD_HANDOFF_DIR=os.path.join(self.tmp.name, "none"))),
             "",
         )
+
+
+class AdoptedHandoffTests(HandoffTestCase):
+    """`handoff` recommends /clear, and the session that clears is the one that must do the reporting.
+
+    The record of a running summary belongs to the session that started it, and that session takes no
+    further prompt once it has cleared. The session it clears into is in the same directory — /clear
+    keeps it — so it is the one announced to, and it takes the record over.
+    """
+
+    def setUp(self):
+        super().setUp()
+        os.makedirs(self.handoffs)
+        self.elsewhere = os.path.join(self.tmp.name, "elsewhere")
+        os.makedirs(self.elsewhere)
+
+    def written_here(self, body="# Handoff\n\nSummary: being written by haiku in the background.\n",
+                     minutes_old=1, directory=None):
+        path = os.path.join(directory or self.handoffs, "20260102-120000.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+        when = (NOW - timedelta(minutes=minutes_old)).timestamp()
+        os.utime(path, (when, when))
+        cache_guard.watch_pending(self.state, "old", path)
+        return path
+
+    def announce(self, session="new"):
+        payload = {"session_id": session, "cwd": "/work/project", "source": "clear"}
+        return session_start.announcement(payload, NOW, self.env)
+
+    def records(self):
+        return sorted(
+            name for name in os.listdir(cache_guard.usable_state_dir(self.state))
+            if name.startswith(cache_guard.HANDOFF_PENDING_PREFIX)
+        )
+
+    def test_the_landing_is_reported_on_the_first_prompt_of_the_session_that_cleared(self):
+        path = self.written_here()
+        self.assertIn("told here when its background summary lands", self.announce().spoken)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("# Handoff\n\nSummary written by haiku.\n")
+        notice = cache_guard.summary_notice({"session_id": "new"}, self.env, self.state)
+        self.assertIn("has landed", notice.message)
+        self.assertNotIn("/clear", notice.message)  # they have already cleared into this session
+
+    def test_the_record_of_the_session_that_started_the_summary_is_left_alone(self):
+        """Copied, never moved: that session may still be alive and owes its own user the same news."""
+        self.written_here()
+        self.announce()
+        self.assertEqual(self.records(), ["pending-new", "pending-old"])
+
+    def test_every_fresh_session_in_the_window_takes_it_over_not_only_the_first(self):
+        self.written_here()
+        self.assertIn("is waiting", self.announce(session="one").spoken)
+        self.assertIn("is waiting", self.announce(session="two").spoken)
+        self.assertEqual(self.records(), ["pending-old", "pending-one", "pending-two"])
+
+    def unwritable_state(self):
+        """A state directory that exists and is ours, but that nothing can be created inside.
+
+        usable_state_dir() passes it — makedirs(exist_ok=True) succeeds, it is no symlink, and the
+        owner matches — so every disk call after that point has to survive on its own.
+        """
+        directory = cache_guard.usable_state_dir(self.state)
+        os.chmod(directory, 0o500)
+        self.addCleanup(os.chmod, directory, 0o700)
+        return directory
+
+    def test_a_state_directory_that_cannot_be_written_to_still_announces_the_handoff(self):
+        """The wording degrades; the announcement itself must not. A hook never breaks a session."""
+        path = self.written_here()
+        self.unwritable_state()
+        note = self.announce()
+        self.assertIn(path, note.spoken)
+        self.assertIn("re-read it in a moment", note.spoken)
+        self.assertNotIn("told here", note.spoken)
+        self.assertIn("re-read it if the summary section is missing", note.context)
+
+    def test_a_record_that_cannot_be_written_is_reported_rather_than_raised(self):
+        self.unwritable_state()
+        self.assertFalse(cache_guard.watch_pending(self.state, "new", "/work/h.md"))
+
+    def test_the_temporary_a_record_is_written_through_is_swept_like_the_record(self):
+        """A process killed between mkstemp and the rename would otherwise leak it forever."""
+        self.assertTrue(cache_guard.swept(cache_guard.TEMP_PREFIX + "abc123.tmp"))
+
+    def test_a_handoff_in_another_directory_is_not_announced_here(self):
+        """A record is not a licence to announce: the handoff belongs to the directory it was in.
+
+        /clear keeps the working directory, so a session reading a record from somewhere else is a
+        session doing unrelated work, and the announcement would be noise.
+        """
+        self.written_here(directory=self.elsewhere)
+        self.assertEqual(self.announce().spoken, "")
+        self.assertEqual(self.records(), ["pending-old"])
 
 
 class SummaryNoticeTests(HandoffTestCase):

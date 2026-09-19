@@ -487,14 +487,7 @@ def record_pending(payload, out_path, env):
     finished was the file changing under the user. Best effort: a handoff is not worth failing over a
     marker, and the guard treats a missing record as nothing to say.
     """
-    session = cache_guard.session_of(payload)
-    directory = cache_guard.usable_state_dir(state_dir(env))
-    if not session or directory is None:
-        return
-    try:
-        write_atomically(cache_guard.pending_record(directory, session), out_path + "\n")
-    except OSError:
-        pass
+    cache_guard.watch_pending(state_dir(env), cache_guard.session_of(payload), out_path)
 
 
 def no_summary_reason(condensed, env):

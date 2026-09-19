@@ -53,6 +53,14 @@ MARKER_NAME = re.compile(r"[A-Za-z0-9_-]+\Z")  # a sanitised session id, and not
 # that the ones an earlier version left behind are cleared out like everything else.
 SWEPT_PREFIXES = ("announced-", "condensed-", "pending-")
 HANDOFF_PENDING_PREFIX = "pending-"  # one per session that has a background summary still running
+# A record's second line, written when a session took the record over from the session that started the
+# summary. It changes only what the notice says: an adopted handoff is one the reader has already
+# cleared into, so telling them to /clear would be telling them to do it twice.
+ADOPTED_MARK = "adopted"
+# The temporary a record is written through. It carries the `pending-` prefix so that `swept` knows
+# it: a process killed between mkstemp and the rename would otherwise leave a file nothing removes.
+# It is never mistaken for a record, which is only ever looked up by an exact session id.
+TEMP_PREFIX = HANDOFF_PENDING_PREFIX + "tmp-"
 # The line handoff.py writes under the title while the background summary is running. It lives here so
 # that this hook can tell a finished handoff from an unfinished one without importing handoff.py, whose
 # import costs more than the check and which imports this module in turn.
@@ -395,10 +403,13 @@ def handoff_reason(result, env):
         priced = f"{about(cost)} at API list prices for " if cost is not None and show_cost else ""
         # The background run is a detached process, not a subagent, so nothing about it appears in the
         # session while it works. Saying where the state is written is what makes it observable.
+        # The promise names both carriers, because the next sentence recommends /clear and usually
+        # there is no later prompt here to make the report. /clear keeps the working directory, so the
+        # session that clears is announced to at startup, takes the record over, and reports it.
         middle = (
             f"A summary by {model} is being added in the background (shortly, {priced}~{tokens} "
-            "tokens). The file's Summary line says which it is until then, and you will be told here "
-            "when it lands."
+            "tokens). The file's Summary line says which it is until then, and you will be told when "
+            "it lands — here, or by the session you /clear into."
         )
     else:
         middle = f"No summary was added ({result.get('no_summary_reason')})."
@@ -496,6 +507,40 @@ def pending_record(marker_dir, session):
     return os.path.join(marker_dir, HANDOFF_PENDING_PREFIX + session)
 
 
+def watch_pending(marker_dir, session, path, adopted=False):
+    """Have `session` report the landing of the background summary of the handoff at `path`.
+
+    True when the record is on disk. The caller uses that answer: a promise that the landing will be
+    reported is only made when there is something on disk to keep it.
+    """
+    if not session:
+        return False
+    directory = usable_state_dir(marker_dir)
+    if directory is None:
+        return False
+    import tempfile  # only a session with a handoff to watch pays for this, not every prompt
+
+    body = f"{path}\n{ADOPTED_MARK}\n" if adopted else f"{path}\n"
+    record = pending_record(directory, session)
+    # Everything that touches the disk is inside the guard, mkstemp included: a state directory that
+    # exists but cannot be written to passes usable_state_dir, and an OSError escaping from here
+    # reaches callers that treat any exception as the handoff itself having failed.
+    temporary = None
+    try:
+        handle, temporary = tempfile.mkstemp(dir=directory, prefix=TEMP_PREFIX, suffix=".tmp")
+        with os.fdopen(handle, "w", encoding="utf-8") as f:
+            f.write(body)  # a reader never sees half of it, whichever process is writing
+        os.replace(temporary, record)
+        return True
+    except OSError:
+        if temporary is not None:
+            try:
+                os.remove(temporary)
+            except OSError:
+                pass
+        return False
+
+
 def summary_line_of(document):
     """The handoff's `Summary...` line, whichever of the three states it is in, or "" when it has none."""
     for line in document.split("\n"):
@@ -504,10 +549,11 @@ def summary_line_of(document):
     return ""
 
 
-def landed_reason(path, document):
+def landed_reason(path, document, adopted=False):
     """What the user is told once the background summary is no longer running.
 
-    The headline is the same news in the few words a desktop notification has room for.
+    The headline is the same news in the few words a desktop notification has room for. An adopted
+    record belongs to a session that has already cleared into this one, so it is not offered /clear.
     """
     line = summary_line_of(document)
     if line.startswith(SUMMARY_FAILED_PREFIX):
@@ -516,8 +562,9 @@ def landed_reason(path, document):
             f"{path} is complete and readable as it is.",
             "handoff summary failed, the handoff itself is complete",
         )
+    tail = "" if adopted else " /clear when you are ready."
     return Notice(
-        f"The handoff's background summary has landed: {path} is complete. /clear when you are ready.",
+        f"The handoff's background summary has landed: {path} is complete.{tail}",
         "handoff summary ready",
     )
 
@@ -541,9 +588,11 @@ def summary_notice(payload, env, marker_dir):
         record = pending_record(marker_dir, session)
         try:
             with open(record, encoding="utf-8") as f:
-                path = f.read().strip()
+                lines = f.read().split("\n")
         except OSError:
-            return None  # no handoff of this session's is waiting on a summary
+            return None  # no handoff this session is watching is waiting on a summary
+        path = lines[0].strip()
+        adopted = ADOPTED_MARK in [line.strip() for line in lines[1:]]
         document = ""
         if path:
             try:
@@ -554,7 +603,7 @@ def summary_notice(payload, env, marker_dir):
         if document and SUMMARY_PENDING_TEXT in document:
             return None  # still running
         forget(record)
-        return landed_reason(path, document) if document else None
+        return landed_reason(path, document, adopted) if document else None
     except Exception:
         return None
 
