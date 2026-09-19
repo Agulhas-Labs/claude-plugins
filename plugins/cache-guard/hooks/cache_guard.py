@@ -395,10 +395,11 @@ def handoff_reason(result, env):
         priced = f"{about(cost)} at API list prices for " if cost is not None and show_cost else ""
         # The background run is a detached process, not a subagent, so nothing about it appears in the
         # session while it works. Saying where the state is written is what makes it observable.
+        # No promise that this session will report the landing: the next sentence recommends /clear,
+        # so usually there is no later prompt here to carry one. The Summary line is the observable.
         middle = (
             f"A summary by {model} is being added in the background (shortly, {priced}~{tokens} "
-            "tokens). The file's Summary line says which it is until then, and you will be told here "
-            "when it lands."
+            "tokens). The file's Summary line says which it is until then."
         )
     else:
         middle = f"No summary was added ({result.get('no_summary_reason')})."
