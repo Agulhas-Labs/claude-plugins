@@ -14,6 +14,13 @@ Only a recent one: the freshness window is what keeps this from being noise, and
 every fresh session in the directory is told, because every one of them needs it. An earlier version
 also marked each handoff as announced once and for all, which meant a session that started and was
 closed again swallowed the only announcement anyone would get. Anything unexpected prints nothing.
+
+The handoff directory is `<cwd>/.claude/handoffs`, and the session that clears is often not in the
+directory that wrote the file, so this hook also reads the records of handoffs whose background
+summary is still running, wherever they were written. When it announces one that is still running it
+takes the record over, so that this session's own guard reports the landing on its first prompt.
+Without that step nothing reported it at all: the session that started the summary had cleared, and
+the record it left was never claimed by anybody.
 """
 import json
 import os
@@ -58,49 +65,87 @@ def minutes_phrase(minutes):
     return "less than a minute ago" if count < 1 else f"{count} minute{'' if count == 1 else 's'} ago"
 
 
-def spoken_line(path, minutes, pending):
+def spoken_line(path, minutes, pending, watched):
     """The line the user sees. It leads with the fact, because it competes with an empty prompt."""
-    tail = (
-        "its background summary is still being written, so re-read it in a moment"
-        if pending
-        else "it is complete, summary included"
-    )
+    if not pending:
+        tail = "it is complete, summary included"
+    elif watched:
+        tail = "you will be told here when its background summary lands"
+    else:
+        tail = "its background summary is still being written, so re-read it in a moment"
     return f"cache-guard: a handoff from {minutes_phrase(minutes)} is waiting — {tail}.\n{path}"
 
 
-def context_line(path, minutes, pending):
+def context_line(path, minutes, pending, watched):
     """The line the model sees: where the file is, and whether it is worth reading again shortly."""
     message = (
-        f"A handoff from an earlier session in this directory was written {minutes_phrase(minutes)}: "
-        f"{path}. Read it before starting if the user's request continues that work."
+        f"A handoff from an earlier session was written {minutes_phrase(minutes)}: {path}. Read it "
+        "before starting if the user's request continues that work."
     )
-    if pending:
+    if pending and watched:
+        message += " Its summary is still being written; you will be told when it lands."
+    elif pending:
         message += " Its summary is still being written; re-read it if the summary section is missing."
     return message
 
 
+def fresh(written, now, env):
+    """True for a handoff written recently enough to be the work this session is about to continue."""
+    age_minutes = (now.timestamp() - written) / 60
+    return 0 <= age_minutes < fresh_limit(env)
+
+
+def candidate(payload, now, env):
+    """(path, modification time) of the handoff worth announcing here, or None when there is none.
+
+    This directory's newest first: that is the work a fresh session started here is most likely
+    continuing. Failing that, a handoff some session is still waiting on a summary for, whatever
+    directory it was written in — `handoff` recommends /clear, and the session that clears is often
+    somewhere else, which used to leave the landing reported by nobody.
+    """
+    newest = newest_handoff(handoff.handoff_dir(payload, {}, env))
+    if newest is not None and fresh(newest[1], now, env):
+        return newest
+    state = cache_guard.usable_state_dir(cache_guard.state_dir(env))
+    if state is None:
+        return None
+    for path in cache_guard.pending_handoffs(state, cache_guard.session_of(payload)):
+        try:
+            written = os.path.getmtime(path)
+        except OSError:
+            continue  # the record outlived the handoff it points at
+        if fresh(written, now, env):
+            return (path, written)
+    return None
+
+
 def announcement(payload, now, env):
-    """What to tell the new session and its user, or two empty strings when there is nothing to say."""
+    """What to tell the new session and its user, or empty strings when there is nothing to say.
+
+    One side effect, because the answer depends on whether it worked: a handoff whose summary is still
+    running is watched by this session, so its guard reports the landing on the first prompt. Only a
+    record that reached the disk is promised.
+    """
     try:
         if payload.get("source") not in ANNOUNCING_SOURCES:
             return NOTHING  # a resumed session already has the conversation the handoff was written from
-        directory = handoff.handoff_dir(payload, {}, env)
-        newest = newest_handoff(directory)
-        if newest is None:
+        found = candidate(payload, now, env)
+        if found is None:
             return NOTHING
-        path, written = newest
+        path, written = found
         age_minutes = (now.timestamp() - written) / 60
-        if age_minutes >= fresh_limit(env) or age_minutes < 0:
-            return NOTHING
         pending = handoff.PENDING_SUMMARY in handoff.read_text(path)
+        watched = pending and cache_guard.watch_pending(
+            cache_guard.state_dir(env), cache_guard.session_of(payload), path, adopted=True
+        )
         headline = (
             "handoff waiting, its summary still being written"
             if pending
             else "handoff waiting from your last session"
         )
         return Announcement(
-            spoken_line(path, age_minutes, pending),
-            context_line(path, age_minutes, pending),
+            spoken_line(path, age_minutes, pending, watched),
+            context_line(path, age_minutes, pending, watched),
             headline,
         )
     except Exception:

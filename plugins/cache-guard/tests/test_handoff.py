@@ -800,7 +800,32 @@ class SessionStartTests(HandoffTestCase):
     def test_a_summary_still_being_written_is_worth_saying(self):
         self.handoff_file(body="# Handoff\n\nSummary: being written by haiku in the background.\n")
         self.assertIn("Its summary is still being written", self.context())
-        self.assertIn("still being written", self.spoken())
+        self.assertIn("told here when its background summary lands", self.spoken())
+
+    def test_an_unfinished_handoff_is_watched_so_this_session_reports_the_landing(self):
+        """The promise in the announcement is only made because this record backs it."""
+        path = self.handoff_file(body="# Handoff\n\nSummary: being written by haiku in the background.\n")
+        self.assertIn("you will be told when it lands", self.context())
+        record = cache_guard.pending_record(cache_guard.usable_state_dir(self.state), "new")
+        self.assertEqual(self.read(record).split("\n")[0], path)
+        landed = "# Handoff\n\nSummary written by haiku.\n"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(landed)
+        notice = cache_guard.summary_notice({"session_id": "new"}, self.env, self.state)
+        self.assertIn("has landed", notice.message)
+        self.assertIn(path, notice.message)
+
+    def test_a_finished_handoff_is_not_watched_because_there_is_nothing_left_to_report(self):
+        self.handoff_file(body="# Handoff\n\nSummary written by haiku.\n")
+        self.assertNotIn("told here", self.spoken())
+        record = cache_guard.pending_record(cache_guard.usable_state_dir(self.state), "new")
+        self.assertFalse(os.path.exists(record))
+
+    def test_a_promise_is_not_made_when_the_record_could_not_be_written(self):
+        self.handoff_file(body="# Handoff\n\nSummary: being written by haiku in the background.\n")
+        with mock.patch.object(cache_guard, "watch_pending", lambda *a, **k: False):
+            self.assertIn("re-read it in a moment", self.spoken())
+            self.assertIn("re-read it if the summary section is missing", self.context())
 
     def test_a_finished_handoff_says_it_is_complete(self):
         self.handoff_file(body="# Handoff\n\nSummary written by haiku.\n")
@@ -823,6 +848,91 @@ class SessionStartTests(HandoffTestCase):
             self.context(env=dict(self.env, CACHE_GUARD_HANDOFF_DIR=os.path.join(self.tmp.name, "none"))),
             "",
         )
+
+
+class AdoptedHandoffTests(HandoffTestCase):
+    """`handoff` recommends /clear, and the session that clears is often in another directory.
+
+    The handoff directory is `<cwd>/.claude/handoffs`, so the fresh session's own directory scan finds
+    nothing at all. What is left is the record the old session wrote, and it is not directory-scoped.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.elsewhere = os.path.join(self.tmp.name, "elsewhere")
+        os.makedirs(self.elsewhere)
+        os.makedirs(self.handoffs)  # this session's own directory, and it stays empty
+
+    def written_elsewhere(self, body="# Handoff\n\nSummary: being written by haiku in the background.\n",
+                          minutes_old=1):
+        path = os.path.join(self.elsewhere, "20260102-120000.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+        when = (NOW - timedelta(minutes=minutes_old)).timestamp()
+        os.utime(path, (when, when))
+        cache_guard.watch_pending(self.state, "old", path)
+        return path
+
+    def announce(self, session="new"):
+        payload = {"session_id": session, "cwd": "/work/other", "source": "clear"}
+        return session_start.announcement(payload, NOW, self.env)
+
+    def records(self):
+        return sorted(
+            name for name in os.listdir(cache_guard.usable_state_dir(self.state))
+            if name.startswith(cache_guard.HANDOFF_PENDING_PREFIX)
+        )
+
+    def test_a_handoff_from_another_directory_is_announced_to_the_session_that_cleared(self):
+        path = self.written_elsewhere()
+        note = self.announce()
+        self.assertIn(path, note.spoken)
+        self.assertIn(path, note.context)
+        self.assertIn("told here when its background summary lands", note.spoken)
+
+    def test_the_landing_is_then_reported_on_the_first_prompt_of_that_session(self):
+        path = self.written_elsewhere()
+        self.announce()
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("# Handoff\n\nSummary written by haiku.\n")
+        notice = cache_guard.summary_notice({"session_id": "new"}, self.env, self.state)
+        self.assertIn("has landed", notice.message)
+        self.assertNotIn("/clear", notice.message)  # they have already cleared into this session
+
+    def test_the_record_of_the_session_that_started_the_summary_is_left_alone(self):
+        """Copied, never moved: that session may still be alive and owes its own user the same news."""
+        self.written_elsewhere()
+        self.announce()
+        self.assertEqual(self.records(), ["pending-new", "pending-old"])
+
+    def test_every_fresh_session_in_the_window_is_told_not_only_the_first(self):
+        self.written_elsewhere()
+        self.assertIn("is waiting", self.announce(session="one").spoken)
+        self.assertIn("is waiting", self.announce(session="two").spoken)
+        self.assertEqual(self.records(), ["pending-old", "pending-one", "pending-two"])
+
+    def test_a_handoff_from_before_the_window_is_not_worth_mentioning(self):
+        self.written_elsewhere(minutes_old=45)
+        self.assertEqual(self.announce().spoken, "")
+
+    def test_a_record_pointing_at_a_handoff_that_is_gone_says_nothing(self):
+        cache_guard.watch_pending(self.state, "old", os.path.join(self.elsewhere, "deleted.md"))
+        self.assertEqual(self.announce().spoken, "")
+
+    def test_this_directorys_own_handoff_comes_first(self):
+        """The record is the fallback: a handoff written here is the work this session is continuing."""
+        self.written_elsewhere()
+        mine = os.path.join(self.handoffs, "20260102-115900.md")
+        with open(mine, "w", encoding="utf-8") as f:
+            f.write("# Handoff\n\nSummary written by haiku.\n")
+        when = (NOW - timedelta(minutes=2)).timestamp()
+        os.utime(mine, (when, when))
+        self.assertIn(mine, self.announce().spoken)
+
+    def test_a_session_does_not_adopt_its_own_record(self):
+        """Its own guard already watches it; re-announcing it every startup would be the noise."""
+        self.written_elsewhere()
+        self.assertEqual(self.announce(session="old").spoken, "")
 
 
 class SummaryNoticeTests(HandoffTestCase):
