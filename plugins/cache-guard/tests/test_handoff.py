@@ -7,6 +7,7 @@ module-level functions, and every test replaces them. Nothing is written outside
 directory: the state directory and the handoff directory are both given in the environment.
 """
 import contextlib
+import errno
 import io
 import json
 import os
@@ -322,6 +323,28 @@ class WriteHandoffTests(HandoffTestCase):
 
     def fake_condense(self, text, meta=None):
         return mock.patch.object(handoff, "condense", lambda path: (text, dict(meta or META)))
+
+    def test_a_record_that_cannot_be_written_does_not_fail_the_handoff(self):
+        """By the time the record is written the file is on disk and the summariser is running.
+
+        An OSError escaping from there is reported to the user as the handoff itself having failed —
+        "Nothing was sent" — while the prompt stays blocked, and sending `handoff` again writes a
+        second one. The trigger is narrow, because the state directory passed its checks and the
+        summariser's own temporary succeeded moments earlier: a disk filling up mid-flight, the
+        directory going away underneath, file descriptors running out.
+        """
+        self.with_a_summariser()
+        real = tempfile.mkstemp
+
+        def full_disk(*args, **kwargs):
+            if kwargs.get("prefix") == cache_guard.TEMP_PREFIX:
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return real(*args, **kwargs)
+
+        with mock.patch.object(tempfile, "mkstemp", full_disk):
+            result = handoff.write_handoff(self.payload(), NOW, self.env)
+        self.assertEqual(result["summary_model"], "haiku")  # the summary was started, and is promised
+        self.assertEqual(self.written_handoffs(), ["20260102-120000.md"])  # written once, not twice
 
     def test_the_file_is_written_at_once_and_the_summariser_started_detached(self):
         self.with_a_summariser()
@@ -904,6 +927,35 @@ class AdoptedHandoffTests(HandoffTestCase):
         self.assertIn("is waiting", self.announce(session="one").spoken)
         self.assertIn("is waiting", self.announce(session="two").spoken)
         self.assertEqual(self.records(), ["pending-old", "pending-one", "pending-two"])
+
+    def unwritable_state(self):
+        """A state directory that exists and is ours, but that nothing can be created inside.
+
+        usable_state_dir() passes it — makedirs(exist_ok=True) succeeds, it is no symlink, and the
+        owner matches — so every disk call after that point has to survive on its own.
+        """
+        directory = cache_guard.usable_state_dir(self.state)
+        os.chmod(directory, 0o500)
+        self.addCleanup(os.chmod, directory, 0o700)
+        return directory
+
+    def test_a_state_directory_that_cannot_be_written_to_still_announces_the_handoff(self):
+        """The wording degrades; the announcement itself must not. A hook never breaks a session."""
+        path = self.written_here()
+        self.unwritable_state()
+        note = self.announce()
+        self.assertIn(path, note.spoken)
+        self.assertIn("re-read it in a moment", note.spoken)
+        self.assertNotIn("told here", note.spoken)
+        self.assertIn("re-read it if the summary section is missing", note.context)
+
+    def test_a_record_that_cannot_be_written_is_reported_rather_than_raised(self):
+        self.unwritable_state()
+        self.assertFalse(cache_guard.watch_pending(self.state, "new", "/work/h.md"))
+
+    def test_the_temporary_a_record_is_written_through_is_swept_like_the_record(self):
+        """A process killed between mkstemp and the rename would otherwise leak it forever."""
+        self.assertTrue(cache_guard.swept(cache_guard.TEMP_PREFIX + "abc123.tmp"))
 
     def test_a_handoff_in_another_directory_is_not_announced_here(self):
         """A record is not a licence to announce: the handoff belongs to the directory it was in.

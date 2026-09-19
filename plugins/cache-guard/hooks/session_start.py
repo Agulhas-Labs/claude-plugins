@@ -80,8 +80,8 @@ def spoken_line(path, minutes, pending, watched):
 def context_line(path, minutes, pending, watched):
     """The line the model sees: where the file is, and whether it is worth reading again shortly."""
     message = (
-        f"A handoff from an earlier session was written {minutes_phrase(minutes)}: {path}. Read it "
-        "before starting if the user's request continues that work."
+        f"A handoff from an earlier session in this directory was written {minutes_phrase(minutes)}: "
+        f"{path}. Read it before starting if the user's request continues that work."
     )
     if pending and watched:
         message += " Its summary is still being written; you will be told when it lands."

@@ -32,7 +32,6 @@ import os
 import re
 import stat
 import sys
-import tempfile
 from collections import namedtuple
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
@@ -58,6 +57,10 @@ HANDOFF_PENDING_PREFIX = "pending-"  # one per session that has a background sum
 # summary. It changes only what the notice says: an adopted handoff is one the reader has already
 # cleared into, so telling them to /clear would be telling them to do it twice.
 ADOPTED_MARK = "adopted"
+# The temporary a record is written through. It carries the `pending-` prefix so that `swept` knows
+# it: a process killed between mkstemp and the rename would otherwise leave a file nothing removes.
+# It is never mistaken for a record, which is only ever looked up by an exact session id.
+TEMP_PREFIX = HANDOFF_PENDING_PREFIX + "tmp-"
 # The line handoff.py writes under the title while the background summary is running. It lives here so
 # that this hook can tell a finished handoff from an unfinished one without importing handoff.py, whose
 # import costs more than the check and which imports this module in turn.
@@ -515,19 +518,26 @@ def watch_pending(marker_dir, session, path, adopted=False):
     directory = usable_state_dir(marker_dir)
     if directory is None:
         return False
+    import tempfile  # only a session with a handoff to watch pays for this, not every prompt
+
     body = f"{path}\n{ADOPTED_MARK}\n" if adopted else f"{path}\n"
     record = pending_record(directory, session)
-    handle, temporary = tempfile.mkstemp(dir=directory, prefix=".pending-", suffix=".tmp")
+    # Everything that touches the disk is inside the guard, mkstemp included: a state directory that
+    # exists but cannot be written to passes usable_state_dir, and an OSError escaping from here
+    # reaches callers that treat any exception as the handoff itself having failed.
+    temporary = None
     try:
+        handle, temporary = tempfile.mkstemp(dir=directory, prefix=TEMP_PREFIX, suffix=".tmp")
         with os.fdopen(handle, "w", encoding="utf-8") as f:
             f.write(body)  # a reader never sees half of it, whichever process is writing
         os.replace(temporary, record)
         return True
     except OSError:
-        try:
-            os.remove(temporary)
-        except OSError:
-            pass
+        if temporary is not None:
+            try:
+                os.remove(temporary)
+            except OSError:
+                pass
         return False
 
 
