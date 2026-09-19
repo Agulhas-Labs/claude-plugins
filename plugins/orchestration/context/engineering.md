@@ -28,7 +28,12 @@ never edits, even in a project whose `CLAUDE.md` says to fix what you find.
   diffed against the branch you started from so it still works once the fix is committed
   (`git diff <base> -- <the fix's paths, not the test's> > <scratch>/x.patch && git apply -R
   <scratch>/x.patch`; `git add -N` new files first), run the test, restore with
-  `git apply <scratch>/x.patch`. A test that passes either way pins nothing.
+  `git apply <scratch>/x.patch`. A test that passes either way pins nothing. Set aside the fix's **own**
+  lines: breaking a neighbour, even one in the same file, proves nothing about the fix. In a compiled
+  project, read the build line before believing any verdict — a set-aside that fails to compile can
+  leave the previous build's products in place and be reported green — and rebuild after the last
+  restore, so the next run is not still running the sabotaged products. A run in which zero tests
+  executed is not a pass.
 
 ## Scope
 
