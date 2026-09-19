@@ -68,11 +68,12 @@ Send the single word `handoff`. The hook takes it before it reaches the model an
    fresh handoff is waiting, where it is, and whether its summary is in yet. Every session started in
    that directory inside the freshness window is told, so closing one without reading it costs nothing.
 
-Step 3 and step 4 are the same report, and which one makes it depends on how quickly you clear. Handoffs
-are written under the working directory, so a session that clears into a different one finds nothing to
-announce there; the record of a summary still being written is not directory-scoped, and the new session
-takes it over at startup and reports the landing itself. The session that started the summary keeps its
-own record, so if it is still open it reports the landing too.
+Step 3 and step 4 are the same report, and which one makes it depends on how quickly you clear. The
+session that types `/clear` sends no further prompt, so on its own it would never make the report at
+all; the new session takes over the record of the summary at startup and makes it instead. `/clear`
+keeps the working directory, so that is the same session the handoff is announced to. The session that
+started the summary keeps its own record, so if it is still open it reports the landing too, and a
+handoff is never announced outside the directory it was written in.
 
 Both of those come with a desktop notification, raised through the escape sequence Claude Code emits on
 a hook's behalf: OSC 9, or OSC 99 under kitty. A terminal that does not do notifications ignores it.

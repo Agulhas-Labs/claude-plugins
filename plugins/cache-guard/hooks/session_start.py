@@ -15,12 +15,13 @@ every fresh session in the directory is told, because every one of them needs it
 also marked each handoff as announced once and for all, which meant a session that started and was
 closed again swallowed the only announcement anyone would get. Anything unexpected prints nothing.
 
-The handoff directory is `<cwd>/.claude/handoffs`, and the session that clears is often not in the
-directory that wrote the file, so this hook also reads the records of handoffs whose background
-summary is still running, wherever they were written. When it announces one that is still running it
-takes the record over, so that this session's own guard reports the landing on its first prompt.
-Without that step nothing reported it at all: the session that started the summary had cleared, and
-the record it left was never claimed by anybody.
+When the handoff it announces is one whose background summary is still running, this hook takes over
+the record of it, so that this session's own guard reports the landing on its first prompt. Without
+that step nothing reported it at all: the record belongs to the session that started the summary, and
+that session has just cleared and will take no further prompt. `/clear` keeps the working directory,
+so the session that clears is the one this hook is speaking to, and no record from another directory
+is ever read: a handoff belongs to the directory it was written in, and announcing it anywhere else
+would be noise in a session doing unrelated work.
 """
 import json
 import os
@@ -98,25 +99,12 @@ def fresh(written, now, env):
 def candidate(payload, now, env):
     """(path, modification time) of the handoff worth announcing here, or None when there is none.
 
-    This directory's newest first: that is the work a fresh session started here is most likely
-    continuing. Failing that, a handoff some session is still waiting on a summary for, whatever
-    directory it was written in — `handoff` recommends /clear, and the session that clears is often
-    somewhere else, which used to leave the landing reported by nobody.
+    This directory's newest, and only this directory's: `/clear` keeps the working directory, so the
+    session that clears is already here, and a handoff written anywhere else belongs to work this
+    session is not doing.
     """
     newest = newest_handoff(handoff.handoff_dir(payload, {}, env))
-    if newest is not None and fresh(newest[1], now, env):
-        return newest
-    state = cache_guard.usable_state_dir(cache_guard.state_dir(env))
-    if state is None:
-        return None
-    for path in cache_guard.pending_handoffs(state, cache_guard.session_of(payload)):
-        try:
-            written = os.path.getmtime(path)
-        except OSError:
-            continue  # the record outlived the handoff it points at
-        if fresh(written, now, env):
-            return (path, written)
-    return None
+    return newest if newest is not None and fresh(newest[1], now, env) else None
 
 
 def announcement(payload, now, env):

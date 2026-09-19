@@ -401,8 +401,8 @@ def handoff_reason(result, env):
         # The background run is a detached process, not a subagent, so nothing about it appears in the
         # session while it works. Saying where the state is written is what makes it observable.
         # The promise names both carriers, because the next sentence recommends /clear and usually
-        # there is no later prompt here to make the report. The session that clears takes the record
-        # over at startup, wherever its directory is, and reports the landing itself.
+        # there is no later prompt here to make the report. /clear keeps the working directory, so the
+        # session that clears is announced to at startup, takes the record over, and reports it.
         middle = (
             f"A summary by {model} is being added in the background (shortly, {priced}~{tokens} "
             "tokens). The file's Summary line says which it is until then, and you will be told when "
@@ -529,37 +529,6 @@ def watch_pending(marker_dir, session, path, adopted=False):
         except OSError:
             pass
         return False
-
-
-def pending_handoffs(marker_dir, session):
-    """The handoffs other sessions are still waiting on a summary for, newest record first.
-
-    Read, never removed. The session that wrote a record may still be alive and owes its own user the
-    same news, so a session that adopts one copies it rather than taking it away; and inside the
-    freshness window every fresh session needs the news as much as the first, which is the same reason
-    the session-start announcement is made to each of them.
-    """
-    try:
-        names = os.listdir(marker_dir)
-    except OSError:
-        return []
-    mine = HANDOFF_PENDING_PREFIX + session if session else None
-    found = []
-    for name in names:
-        if not name.startswith(HANDOFF_PENDING_PREFIX) or name == mine:
-            continue
-        record = os.path.join(marker_dir, name)
-        try:
-            when = os.lstat(record)
-            if not stat.S_ISREG(when.st_mode):
-                continue
-            with open(record, encoding="utf-8") as f:
-                target = f.read().split("\n")[0].strip()
-        except OSError:
-            continue
-        if target:
-            found.append((when.st_mtime, target))
-    return [target for _, target in sorted(found, reverse=True)]
 
 
 def summary_line_of(document):
