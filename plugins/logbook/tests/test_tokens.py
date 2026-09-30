@@ -1,4 +1,4 @@
-"""Tests for the token totals: a subagent's, read from its transcript when it stops, and the main
+"""Tests for the peak context sizes: a subagent's, read from its transcript when it stops, and the main
 session's, read from its own transcript at the end of each turn.
 
 Run: python3 -m unittest discover -s plugins/logbook/tests
@@ -26,15 +26,15 @@ class TranscriptTokens(unittest.TestCase):
                 handle.write("\n".join(lines) + "\n" if raw is None else raw)
             return board_hook.transcript_tokens(path)
 
-    def test_every_kind_of_token_is_counted(self):
+    def test_the_size_of_a_context_counts_input_and_both_cache_kinds_but_not_output(self):
         line = usage("m1", input_tokens=10, cache_creation_input_tokens=200, cache_read_input_tokens=3000, output_tokens=4)
-        self.assertEqual(self.read(line), 3214)
+        self.assertEqual(self.read(line), 3210)
 
-    def test_a_message_written_in_blocks_counts_once(self):
-        self.assertEqual(self.read(usage("m1", input_tokens=5, output_tokens=1), usage("m1", input_tokens=5, output_tokens=9)), 14)
+    def test_the_largest_message_wins_and_turns_are_never_summed(self):
+        self.assertEqual(self.read(usage("m1", cache_read_input_tokens=1000), usage("m2", cache_read_input_tokens=3000), usage("m3", cache_read_input_tokens=2000)), 3000)
 
     def test_lines_that_are_not_usage_are_skipped(self):
-        self.assertEqual(self.read("not json with \"usage\" in it", '{"type":"user"}', usage("m2", output_tokens=7)), 7)
+        self.assertEqual(self.read("not json with \"usage\" in it", '{"type":"user"}', usage("m2", input_tokens=7)), 7)
 
     def test_a_missing_file_or_no_usage_is_none(self):
         self.assertIsNone(board_hook.transcript_tokens("/nonexistent/x.jsonl"))

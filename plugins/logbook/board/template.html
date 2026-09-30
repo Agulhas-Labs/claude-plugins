@@ -314,9 +314,11 @@ var PB = (function () {
   }
 
   function totalTokens(state) {
-    var agents = list(state, 'agents').reduce(function (sum, a) { return sum + (typeof a.tokens === 'number' ? a.tokens : 0); }, 0);
+    // Each count is one context's peak size, so the agents' figure is the largest, never a sum: a sum would
+    // count the same context again on every turn and every agent.
+    var agents = list(state, 'agents').reduce(function (top, a) { return typeof a.tokens === 'number' ? Math.max(top, a.tokens) : top; }, 0);
     var main = typeof state.tokens === 'number' ? state.tokens : 0;
-    return { main: main, agents: agents, all: main + agents };
+    return { main: main, agents: agents };
   }
 
   var TAB_IDS = ['built', 'changed', 'verified', 'commands', 'agents'];
@@ -350,7 +352,7 @@ var PB = (function () {
         var running = all.filter(function (a) { return a.outcome === 'running'; }).length;
         var tok = formatTokens(totalTokens(state).agents);
         t.label = 'Agents'; t.big = String(all.length);
-        t.sub = (running ? running + ' running' : 'all finished') + (tok ? ' · ' + tok : '');
+        t.sub = (running ? running + ' running' : 'all finished') + (tok ? ' · largest ' + tok : '');
       }
       out.push(t);
     });
@@ -1051,10 +1053,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       add(meta, add(el('span'), 'Updated ', when(state.updated, now), ' (', ticking(state.updated, 'age', now), ')'));
     }
     var tt = PB.totalTokens(state);
-    if (tt.all > 0) {
-      var tk = add(el('span'), 'Tokens ', PB.formatTokens(tt.all).replace(' tok', ''));
-      tk.title = 'Main session ' + PB.formatTokens(tt.main) + ', agents ' + PB.formatTokens(tt.agents) +
-        '. Input, cache and output tokens, cache reads included.';
+    if (tt.main > 0 || tt.agents > 0) {
+      var tk = add(el('span'), 'Context ', PB.formatTokens(tt.main || tt.agents).replace(' tok', ''));
+      tk.title = 'Peak context: main session ' + (PB.formatTokens(tt.main) || 'unknown') + ', largest agent ' +
+        (PB.formatTokens(tt.agents) || 'unknown') + '. The size of one context, not tokens used over time.';
       add(meta, tk);
     }
     add(top, meta);

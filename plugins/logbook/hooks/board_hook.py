@@ -286,12 +286,13 @@ def tagged(found, **tags):
 
 
 def transcript_tokens(path):
-    """Every token a transcript's assistant messages used (input, cache writes, cache reads and output),
-    each message counted once, or None when the file cannot be read or holds no usage."""
+    """The largest context any one assistant message of a transcript was sent (input, cache writes and cache
+    reads), or None when the file cannot be read or holds no usage. This is the size the context budget marks
+    measure. Summing messages would count the same context again on every turn."""
     try:
         if not isinstance(path, str) or os.path.getsize(path) > TOKEN_READ_LIMIT:
             return None
-        seen, total = {}, 0
+        peak = None
         with open(path, encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 if '"usage"' not in line:
@@ -304,13 +305,12 @@ def transcript_tokens(path):
                 usage = message.get("usage") if isinstance(message, dict) else None
                 if not isinstance(usage, dict):
                     continue
-                used = sum(
-                    usage[key] for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
+                size = sum(
+                    usage[key] for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
                     if isinstance(usage.get(key), int) and not isinstance(usage.get(key), bool)
                 )
-                # A message written in several blocks repeats its usage on each: the last one is kept.
-                seen[message.get("id") or id(entry)] = used
-        return sum(seen.values()) if seen else None
+                peak = size if peak is None else max(peak, size)
+        return peak
     except OSError:
         return None
 
