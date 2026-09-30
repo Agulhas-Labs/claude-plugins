@@ -1,0 +1,21 @@
+{
+  "session_id": "11111111-2222-4333-8444-555555555555",
+  "transcript_path": "/home/user/.claude/projects/-home-user-project/11111111-2222-4333-8444-555555555555.jsonl",
+  "cwd": "/home/user/project",
+  "prompt_id": "59f16879-9d78-40de-82c6-85162b2f117c",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "TaskCreate",
+  "tool_input": {
+    "subject": "alpha",
+    "description": "Task alpha"
+  },
+  "tool_response": {
+    "task": {
+      "id": "1",
+      "subject": "alpha"
+    }
+  },
+  "tool_use_id": "toolu_01T7fGkinqqZHHa4V1rnnZug",
+  "duration_ms": 4
+}

@@ -1,0 +1,25 @@
+{
+  "name": "delegate",
+  "displayName": "Delegate: Agents Sized to the Job",
+  "version": "1.0.0",
+  "description": "Your Claude Code session leads a team of agents, each on the cheapest model that can do its job. Work isn't accepted until a command proves it, and a built-in report shows where your tokens went.",
+  "author": {
+    "name": "Agulhas Labs"
+  },
+  "homepage": "https://github.com/Agulhas-Labs/claude-plugins",
+  "repository": "https://github.com/Agulhas-Labs/claude-plugins",
+  "documentationUrl": "https://github.com/Agulhas-Labs/claude-plugins/blob/main/plugins/delegate/README.md",
+  "supportUrl": "https://github.com/Agulhas-Labs/claude-plugins/issues",
+  "privacyPolicyUrl": "https://github.com/Agulhas-Labs/claude-plugins/blob/main/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/Agulhas-Labs/claude-plugins/blob/main/TERMS.md",
+  "license": "Apache-2.0",
+  "keywords": [
+    "orchestration",
+    "subagents",
+    "delegation",
+    "token-cost",
+    "usage",
+    "prompt-cache",
+    "verification"
+  ]
+}

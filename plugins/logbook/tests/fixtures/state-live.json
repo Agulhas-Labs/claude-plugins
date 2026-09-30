@@ -1,0 +1,268 @@
+{
+  "schema": 1,
+  "session": "11111111-2222-4333-8444-555555555555",
+  "title": "CSV export for the reports page",
+  "titleSource": "model",
+  "started": "2026-01-05T09:00:00Z",
+  "updated": "2026-01-05T09:41:30Z",
+  "state": "live",
+  "settings": {
+    "theme": "system",
+    "accent": null,
+    "density": "comfortable",
+    "refreshSeconds": 10,
+    "stuckAfterSeconds": 600
+  },
+  "questions": [
+    {
+      "id": "Q1",
+      "text": "The export needs the reporting API key, and none is set in the environment.",
+      "default": null,
+      "affects": "The end-to-end test of the export cannot run.",
+      "reverse": null,
+      "hardStop": true,
+      "status": "open",
+      "answer": null,
+      "asked": "2026-01-05T09:30:10Z",
+      "answered": null
+    },
+    {
+      "id": "Q2",
+      "text": "Should the export include archived reports?",
+      "default": "No. Only active reports are exported.",
+      "affects": "The query in export.py and two tests.",
+      "reverse": "Remove the archived filter in export.py and update the two tests.",
+      "hardStop": false,
+      "status": "open",
+      "answer": null,
+      "asked": "2026-01-05T09:12:00Z",
+      "answered": null
+    },
+    {
+      "id": "Q3",
+      "text": "Comma or semicolon as the separator?",
+      "default": "Comma.",
+      "affects": "One constant.",
+      "reverse": "Change SEPARATOR in export.py.",
+      "hardStop": false,
+      "status": "answered",
+      "answer": "Comma is fine.",
+      "asked": "2026-01-05T09:14:00Z",
+      "answered": "2026-01-05T09:20:00Z"
+    }
+  ],
+  "steps": [
+    {
+      "id": "1",
+      "subject": "Read the reports module",
+      "status": "completed",
+      "updated": "2026-01-05T09:05:00Z"
+    },
+    {
+      "id": "2",
+      "subject": "Write the exporter",
+      "status": "completed",
+      "updated": "2026-01-05T09:22:00Z"
+    },
+    {
+      "id": "3",
+      "subject": "Add the download button",
+      "status": "in_progress",
+      "updated": "2026-01-05T09:41:30Z"
+    },
+    {
+      "id": "4",
+      "subject": "Test the export end to end",
+      "status": "pending",
+      "updated": "2026-01-05T09:02:00Z"
+    },
+    {
+      "id": "5",
+      "subject": "Update the README",
+      "status": "pending",
+      "updated": "2026-01-05T09:02:00Z"
+    }
+  ],
+  "commits": [
+    {
+      "hash": "a1b2c3d",
+      "subject": "Exporter: reports to CSV, active reports only",
+      "branch": "csv-export",
+      "time": "2026-01-05T09:21:40Z",
+      "step": "2"
+    },
+    {
+      "hash": "e4f5a6b",
+      "subject": "Exporter: quote fields that contain the separator",
+      "branch": "csv-export",
+      "time": "2026-01-05T09:35:02Z",
+      "step": null
+    }
+  ],
+  "deliverables": [
+    {
+      "label": "The exporter",
+      "path": "src/reports/export.py",
+      "url": null,
+      "step": "2",
+      "time": "2026-01-05T09:22:00Z"
+    }
+  ],
+  "checks": [
+    {
+      "id": "C1",
+      "proves": "The exporter writes one row per active report",
+      "command": "python -m unittest tests.test_export",
+      "result": "pass",
+      "time": "2026-01-05T09:21:00Z",
+      "source": "model",
+      "agent": null
+    },
+    {
+      "id": "C2",
+      "proves": "A field containing a comma survives a round trip",
+      "command": "python -m unittest tests.test_export.QuotingTests",
+      "result": "fail",
+      "time": "2026-01-05T09:28:00Z",
+      "source": "agent",
+      "agent": "ab12cd34ef56ab78c"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "D1",
+      "text": "Dates are written as ISO 8601, not in the viewer's locale.",
+      "why": "A CSV is read by programs more often than by people.",
+      "reverse": "Change format_date in export.py.",
+      "time": "2026-01-05T09:18:00Z"
+    }
+  ],
+  "agents": [
+    {
+      "id": "ab12cd34ef56ab78c",
+      "type": "general-purpose",
+      "model": "claude-haiku-4-5-20251001",
+      "description": "Write the quoting tests",
+      "started": "2026-01-05T09:24:00Z",
+      "ended": "2026-01-05T09:28:30Z",
+      "outcome": "failed",
+      "gates": [
+        {
+          "id": "G1",
+          "text": "quoting round trip",
+          "result": "fail"
+        }
+      ],
+      "tokens": 48200
+    },
+    {
+      "id": "cd34ef56ab78cab12",
+      "type": "general-purpose",
+      "model": null,
+      "description": null,
+      "started": "2026-01-05T09:40:00Z",
+      "ended": null,
+      "outcome": "running",
+      "gates": [],
+      "tokens": 912000
+    }
+  ],
+  "changes": [
+    {
+      "path": "src/reports/export.py",
+      "edits": 3,
+      "added": 58,
+      "removed": 0,
+      "created": true,
+      "first": "2026-01-05T09:12:04Z",
+      "last": "2026-01-05T09:30:41Z",
+      "agents": []
+    },
+    {
+      "path": "src/reports/views.py",
+      "edits": 1,
+      "added": 6,
+      "removed": 2,
+      "created": false,
+      "first": "2026-01-05T09:14:20Z",
+      "last": "2026-01-05T09:14:20Z",
+      "agents": []
+    },
+    {
+      "path": "tests/test_export.py",
+      "edits": 2,
+      "added": 41,
+      "removed": 3,
+      "created": true,
+      "first": "2026-01-05T09:22:10Z",
+      "last": "2026-01-05T09:35:02Z",
+      "agents": [
+        "a7f3c2e19b04d5a86"
+      ]
+    },
+    {
+      "path": "docs/reports.ipynb",
+      "edits": 1,
+      "added": null,
+      "removed": null,
+      "created": false,
+      "first": "2026-01-05T09:38:55Z",
+      "last": "2026-01-05T09:38:55Z",
+      "agents": []
+    }
+  ],
+  "commands": [
+    {
+      "command": "git status --short",
+      "description": "Show working tree status",
+      "result": "pass",
+      "exit": null,
+      "runs": 2,
+      "fails": 0,
+      "time": "2026-01-05T09:31:12Z",
+      "ms": 38,
+      "test": false,
+      "agents": []
+    },
+    {
+      "command": "python3 -m pytest tests/test_export.py",
+      "description": "Run the export tests",
+      "result": "pass",
+      "exit": null,
+      "runs": 3,
+      "fails": 1,
+      "time": "2026-01-05T09:36:30Z",
+      "ms": 4120,
+      "test": true,
+      "agents": [
+        "a7f3c2e19b04d5a86"
+      ]
+    },
+    {
+      "command": "ruff check src",
+      "description": "Lint the sources",
+      "result": "fail",
+      "exit": 1,
+      "runs": 1,
+      "fails": 1,
+      "time": "2026-01-05T09:40:02Z",
+      "ms": 610,
+      "test": false,
+      "agents": []
+    },
+    {
+      "command": "python3 -m http.server 8000",
+      "description": "Serve the reports page",
+      "result": "background",
+      "exit": null,
+      "runs": 1,
+      "fails": 0,
+      "time": "2026-01-05T09:41:30Z",
+      "ms": 12,
+      "test": false,
+      "agents": []
+    }
+  ],
+  "commandsTotal": 7,
+  "tokens": 1250000
+}

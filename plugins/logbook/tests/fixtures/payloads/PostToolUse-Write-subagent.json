@@ -1,0 +1,25 @@
+{
+  "session_id": "11111111-2222-4333-8444-555555555555",
+  "transcript_path": "/home/user/.claude/projects/-home-user-project/11111111-2222-4333-8444-555555555555.jsonl",
+  "cwd": "/home/user/project",
+  "prompt_id": "9b59174f-73b7-4495-8685-a14c8970fa6e",
+  "permission_mode": "default",
+  "agent_id": "aa8a3f0e94aaf9080",
+  "agent_type": "general-purpose",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/home/user/project/from-subagent.txt",
+    "content": "hello"
+  },
+  "tool_response": {
+    "type": "create",
+    "filePath": "/home/user/project/from-subagent.txt",
+    "content": "hello",
+    "structuredPatch": [],
+    "originalFile": null,
+    "userModified": false
+  },
+  "tool_use_id": "toolu_01FU5dbofyQCPytMwRGYddYZ",
+  "duration_ms": 2
+}

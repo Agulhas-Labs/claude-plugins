@@ -1,0 +1,23 @@
+{
+  "name": "logbook",
+  "displayName": "Logbook",
+  "version": "1.0.0",
+  "description": "Keeps a live local page for a long Claude Code task: what needs you, what was built, what was verified, and what was decided without you. Hooks record it without spending model tokens, the page follows light, dark or your system's setting, and when the task ends the same page is the report.",
+  "author": {
+    "name": "Agulhas Labs"
+  },
+  "homepage": "https://github.com/Agulhas-Labs/claude-plugins",
+  "repository": "https://github.com/Agulhas-Labs/claude-plugins",
+  "documentationUrl": "https://github.com/Agulhas-Labs/claude-plugins/blob/main/plugins/logbook/README.md",
+  "supportUrl": "https://github.com/Agulhas-Labs/claude-plugins/issues",
+  "privacyPolicyUrl": "https://github.com/Agulhas-Labs/claude-plugins/blob/main/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/Agulhas-Labs/claude-plugins/blob/main/TERMS.md",
+  "license": "Apache-2.0",
+  "keywords": [
+    "progress",
+    "report",
+    "hooks",
+    "subagents",
+    "token-cost"
+  ]
+}

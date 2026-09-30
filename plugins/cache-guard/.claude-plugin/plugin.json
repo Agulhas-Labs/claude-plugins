@@ -1,0 +1,21 @@
+{
+  "name": "cache-guard",
+  "displayName": "Cache Guard",
+  "version": "1.0.0",
+  "description": "Warns once before a message that will cost far more than usual: a large Claude Code context whose prompt cache has expired, or a model or effort change that resets it. Shows the estimated cost, and offers a handoff file written by a cheap model in the background so you can /clear instead.",
+  "author": {
+    "name": "Agulhas Labs"
+  },
+  "homepage": "https://github.com/Agulhas-Labs/claude-plugins",
+  "repository": "https://github.com/Agulhas-Labs/claude-plugins",
+  "documentationUrl": "https://github.com/Agulhas-Labs/claude-plugins/blob/main/plugins/cache-guard/README.md",
+  "supportUrl": "https://github.com/Agulhas-Labs/claude-plugins/issues",
+  "privacyPolicyUrl": "https://github.com/Agulhas-Labs/claude-plugins/blob/main/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/Agulhas-Labs/claude-plugins/blob/main/TERMS.md",
+  "license": "Apache-2.0",
+  "keywords": [
+    "prompt-cache",
+    "token-cost",
+    "hooks"
+  ]
+}

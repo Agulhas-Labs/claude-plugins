@@ -1,0 +1,1346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The page needs nothing from any network, so it is not allowed to reach one: this blocks requests,
+     images, fonts and frames even if a string in the state tried to smuggle one in. Scripts are left
+     alone so the live board can load state.js from beside itself. -->
+<meta http-equiv="Content-Security-Policy" content="connect-src 'none'; img-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">
+<title>Logbook</title>
+<style>
+/* Colour tokens. Light is the default; dark is defined twice, once for a viewer whose system is dark
+   and who has not asked for light, and once for a viewer who asked for dark. */
+:root {
+  color-scheme: light;
+  --bg: #f6f6f4;
+  --surface: #ffffff;
+  --fg: #1d1d1f;
+  --muted: #5d5d64;
+  --border: #dcdcd7;
+  --soft: #efefeb;
+  --ok: #1b6a33;
+  --bad: #ad2319;
+  --bad-bg: #fcecea;
+  --bad-line: #e2a29b;
+  --warn: #874d00;
+  --warn-bg: #fdf3e1;
+  --warn-line: #e5c48c;
+  --link: #1c52ad;
+  --accent: #2f64c8;
+  --accent-ink: #ffffff;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --fs: 15px;
+  --line: 1.5;
+  --gap: 12px;
+  --pad: 14px;
+}
+:root[data-density="compact"] {
+  --fs: 14px;
+  --line: 1.4;
+  --gap: 6px;
+  --pad: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #141416;
+    --surface: #1c1c1f;
+    --fg: #ececef;
+    --muted: #a4a4ad;
+    --border: #34343a;
+    --soft: #26262a;
+    --ok: #7fd494;
+    --bad: #ff9187;
+    --bad-bg: #3a1c19;
+    --bad-line: #7a3a33;
+    --warn: #f1b560;
+    --warn-bg: #33270f;
+    --warn-line: #6e5323;
+    --link: #8fb5ff;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #141416;
+  --surface: #1c1c1f;
+  --fg: #ececef;
+  --muted: #a4a4ad;
+  --border: #34343a;
+  --soft: #26262a;
+  --ok: #7fd494;
+  --bad: #ff9187;
+  --bad-bg: #3a1c19;
+  --bad-line: #7a3a33;
+  --warn: #f1b560;
+  --warn-bg: #33270f;
+  --warn-line: #6e5323;
+  --link: #8fb5ff;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: var(--fs);
+  line-height: var(--line);
+}
+.wrap { max-width: 56rem; margin: 0 auto; padding: 20px 16px 48px; }
+a { color: var(--link); }
+code, pre, .mono { font-family: var(--mono); font-size: 0.92em; }
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 10px;
+  min-height: 30px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
+/* Focus is drawn in the text colour, not the accent, so it stays visible whatever accent a board sets. */
+:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+button:focus:not(:focus-visible) { outline: none; }
+
+/* Header */
+.top { margin-bottom: 18px; }
+.top-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.eyebrow { margin: 0; color: var(--muted); font-size: 0.86em; letter-spacing: 0.02em; }
+.modes { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.modes button { border: 0; border-radius: 0; min-height: 28px; padding: 2px 10px; font-size: 0.86em; background: var(--surface); }
+.modes button + button { border-left: 1px solid var(--border); }
+.modes button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+h1 { font-size: 1.9em; letter-spacing: -0.01em; line-height: 1.25; margin: 8px 0 8px; overflow-wrap: anywhere; }
+h1.from-prompt {
+  font-size: 1.2em;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin: 0; color: var(--muted); font-size: 0.92em; }
+.meta time { color: var(--fg); }
+.badge { display: inline-block; border-radius: 999px; padding: 2px 12px; font-size: 0.92em; font-weight: 600; border: 1px solid var(--border); color: var(--fg); background: var(--soft); overflow-wrap: anywhere; }
+.badge.live { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.badge.finished { color: var(--ok); }
+.notice { margin: 12px 0 0; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--warn-line); background: var(--warn-bg); color: var(--fg); }
+.notice strong { color: var(--warn); }
+
+/* Summary tiles: one per tab, and the panel of the one chosen below them. */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 0 0 var(--gap); }
+.tile {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; min-height: 44px;
+}
+.tile[aria-selected="true"] { border: 2px solid var(--fg); padding: 13px 15px; }
+.tile-label { color: var(--muted); font-size: 0.9em; font-weight: 500; }
+.tile-big { font-size: 2.1em; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.tile-sub { color: var(--muted); font-size: 0.88em; }
+.tile.bad .tile-sub { color: var(--bad); font-weight: 600; }
+.pane { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 4px var(--pad) var(--pad); margin: 0 0 var(--gap); }
+.pane-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 12px 0 4px; }
+.pane-head h2 { margin: 0; font-size: 1.15em; }
+.commit-row { display: grid; grid-template-columns: 7ch minmax(0, 1fr) 12ch 9ch; gap: 4px 16px; align-items: baseline; }
+.commit-row .hash, .commit-row .branch { font-family: var(--mono); font-size: 0.88em; color: var(--muted); }
+.commit-row .when { text-align: right; color: var(--muted); font-size: 0.92em; }
+@media (max-width: 640px) {
+  .commit-row { grid-template-columns: 7ch minmax(0, 1fr); }
+  .commit-row .branch, .commit-row .when { grid-column: 2; text-align: left; }
+}
+
+/* Sections */
+.sec { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin: 0 0 var(--gap); }
+.sec h2 { margin: 0; font-size: 1em; }
+.toggle {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  border: 0; background: transparent; border-radius: 10px;
+  padding: calc(var(--pad) - 4px) var(--pad); text-align: left; font-weight: 650;
+}
+.chev { display: inline-block; width: 1em; color: var(--muted); transition: transform 0.15s ease; }
+.toggle[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+.count { margin-left: auto; font-weight: 400; color: var(--muted); font-size: 0.9em; }
+.body { padding: 0 var(--pad) var(--pad); }
+.sec-needs { border-color: var(--warn-line); }
+.sec-stuck { border-color: var(--bad-line); }
+.list { list-style: none; margin: 0; padding: 0; }
+.item { padding: var(--gap) 0; border-top: 1px solid var(--soft); overflow-wrap: anywhere; }
+.list > .item:first-child { border-top: 0; padding-top: 2px; }
+.item p { margin: 0; }
+.sub { color: var(--muted); font-size: 0.9em; }
+.tag { font-family: var(--mono); font-size: 0.85em; color: var(--muted); margin-right: 6px; }
+/* The margin keeps a word longer than the column, such as a command's result, off the text after it. */
+.status { display: inline-block; min-width: 7.5em; margin-right: 6px; font-size: 0.88em; font-weight: 600; white-space: nowrap; }
+.s-ok { color: var(--ok); }
+.s-bad { color: var(--bad); }
+.s-warn { color: var(--warn); }
+.s-active { color: var(--fg); }
+.s-muted { color: var(--muted); font-weight: 400; }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 6px 0 0; font-size: 0.93em; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; }
+@media (max-width: 480px) {
+  .facts { grid-template-columns: 1fr; }
+  .facts dd { margin-bottom: 4px; }
+  .status { min-width: 0; margin-right: 6px; white-space: normal; overflow-wrap: anywhere; }
+}
+.cmd {
+  margin: 6px 0 0; padding: 6px 8px; border-radius: 6px; background: var(--soft);
+  white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; overflow-x: auto;
+}
+
+/* Needs you: an open question, and a hard stop, which the task is actually blocked on. */
+.q .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 2px; }
+.qid { font-family: var(--mono); font-weight: 700; }
+.q-text { font-weight: 550; }
+.copyrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.copied { color: var(--muted); font-size: 0.9em; }
+.q.hard {
+  background: var(--bad-bg); border: 1px solid var(--bad-line); border-radius: 8px;
+  padding: var(--gap) 12px; margin-bottom: var(--gap);
+}
+.list > .q.hard:first-child { padding-top: var(--gap); }
+.q.hard + .q { border-top: 0; }
+.flag { color: var(--bad); font-weight: 700; font-size: 0.88em; letter-spacing: 0.02em; }
+
+.group-title { margin: 12px 0 2px; font-size: 0.9em; font-weight: 650; color: var(--muted); overflow-wrap: anywhere; }
+.group-title:first-child { margin-top: 0; }
+.subtoggle { margin-top: 10px; font-size: 0.9em; }
+.agent-meta { display: flex; flex-wrap: wrap; gap: 0 12px; font-variant-numeric: tabular-nums; }
+.agent-meta .dur { min-width: 7.5em; text-align: right; }
+.agent-meta .tok { min-width: 6em; text-align: right; }
+.agent-meta .ids { font-family: var(--mono); font-size: 0.95em; }
+.gates { list-style: none; margin: 4px 0 0; padding: 0; font-size: 0.9em; }
+.foot { margin-top: 24px; color: var(--muted); font-size: 0.86em; }
+.empty { color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+
+/* Print: the report on paper, light, with every section open and nothing to press. */
+@media print {
+  :root, :root[data-theme] {
+    color-scheme: light;
+    --bg: #ffffff !important; --surface: #ffffff !important; --fg: #000000 !important;
+    --muted: #444444 !important; --border: #bbbbbb !important; --soft: #e6e6e6 !important;
+    --ok: #000000 !important; --bad: #000000 !important; --bad-bg: #ffffff !important;
+    --bad-line: #000000 !important; --warn: #000000 !important; --warn-bg: #ffffff !important;
+    --warn-line: #888888 !important; --link: #000000 !important;
+    --accent: #ffffff !important; --accent-ink: #000000 !important;
+  }
+  body { font-size: 10.5pt; }
+  .wrap { max-width: none; padding: 0; }
+  .modes, .copyrow, .subtoggle, .chev { display: none !important; }
+  .body[hidden], .subbody[hidden], .pane[hidden] { display: block !important; }
+  .tiles { display: none !important; }
+  .pane { border: 0; border-top: 1px solid var(--border); border-radius: 0; padding-left: 0; padding-right: 0; }
+  .sec { border: 0; border-top: 1px solid var(--border); border-radius: 0; }
+  .toggle { padding-left: 0; padding-right: 0; }
+  .body { padding-left: 0; padding-right: 0; }
+  .item, .q.hard { break-inside: avoid; }
+  a[href]::after { content: " (" attr(href) ")"; }
+}
+</style>
+<!-- logbook:state -->
+<script>
+/* Everything that decides what the page says lives in PB as pure functions of (state, clock), with no
+   DOM, so the tests can run them under node. The drawing code below them is the only part that
+   touches the document, and it only ever writes state strings as text, never as markup. */
+var PB = (function () {
+  'use strict';
+
+  var MODES = ['light', 'dark', 'system'];
+
+  // Only entries that are objects: a null or a bare value in a list a recorder wrote badly is dropped
+  // rather than crashing the build partway through.
+  function list(state, key) {
+    var arr = state && Array.isArray(state[key]) ? state[key] : [];
+    return arr.filter(function (x) { return x !== null && typeof x === 'object' && !Array.isArray(x); });
+  }
+
+  function str(value) {
+    return value === null || value === undefined ? '' : String(value);
+  }
+
+  function parseTime(value) {
+    return typeof value === 'string' ? Date.parse(value) : NaN;
+  }
+
+  function positive(value, fallback) {
+    return typeof value === 'number' && isFinite(value) && value > 0 ? value : fallback;
+  }
+
+  // A coarse span for ages: seconds only while they matter, then minutes, hours, days.
+  function formatSpan(ms) {
+    if (!isFinite(ms)) return '';
+    var s = Math.max(0, Math.floor(ms / 1000));
+    if (s < 60) return s + ' s';
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + ' min';
+    var h = Math.floor(m / 60);
+    if (h < 24) return m % 60 ? h + ' h ' + (m % 60) + ' min' : h + ' h';
+    var d = Math.floor(h / 24);
+    return d === 1 ? '1 day' : d + ' days';
+  }
+
+  // A timestamp ahead of the browser's clock is clock skew, not the future, so it reads as just now.
+  function formatAge(ms) {
+    if (!isFinite(ms)) return '';
+    if (ms < 5000) return 'just now';
+    return formatSpan(ms) + ' ago';
+  }
+
+  // A duration keeps its seconds under an hour, where they are still worth reading.
+  function formatDuration(ms) {
+    if (!isFinite(ms)) return '';
+    var s = Math.max(0, Math.floor(ms / 1000));
+    if (s < 60) return s + ' s';
+    var m = Math.floor(s / 60);
+    if (m < 60) return s % 60 ? m + ' min ' + (s % 60) + ' s' : m + ' min';
+    return formatSpan(ms);
+  }
+
+  // A token count short enough to scan: 950, 12.3k, 4.2M. Nothing where the count was not recorded.
+  function formatTokens(n) {
+    if (typeof n !== 'number' || !isFinite(n) || n < 0) return '';
+    if (n < 1000) return n + ' tok';
+    if (n < 1e6) return (n / 1e3).toFixed(n < 1e5 ? 1 : 0).replace(/\.0$/, '') + 'k tok';
+    return (n / 1e6).toFixed(n < 1e7 ? 2 : 1).replace(/\.?0+$/, '') + 'M tok';
+  }
+
+  function totalTokens(state) {
+    var agents = list(state, 'agents').reduce(function (sum, a) { return sum + (typeof a.tokens === 'number' ? a.tokens : 0); }, 0);
+    var main = typeof state.tokens === 'number' ? state.tokens : 0;
+    return { main: main, agents: agents, all: main + agents };
+  }
+
+  var TAB_IDS = ['built', 'changed', 'verified', 'commands', 'agents'];
+
+  // The summary tiles, one per tab that has something in it: a big number and what it counts.
+  function tiles(state, now) {
+    var shown = sections(state, now);
+    var out = [];
+    TAB_IDS.forEach(function (id) {
+      if (shown.indexOf(id) < 0) return;
+      var t = { id: id, bad: false };
+      if (id === 'built') {
+        var nd = list(state, 'deliverables').length;
+        t.label = 'Built'; t.big = String(list(state, 'commits').length);
+        t.sub = 'commits · ' + nd + (nd === 1 ? ' deliverable' : ' deliverables');
+      } else if (id === 'changed') {
+        var nf = changedFiles(state).length;
+        t.label = 'Changed'; t.big = String(nf); t.sub = nf === 1 ? 'file' : 'files';
+      } else if (id === 'verified') {
+        var v = verifiedCount(state).match(/^(\d+) ?(.*)$/);
+        t.label = 'Verified'; t.big = v ? v[1] : '0'; t.sub = v ? v[2] : '';
+        t.bad = /fail/.test(t.sub);
+      } else if (id === 'commands') {
+        var rest = otherCommands(state);
+        var failed = rest.filter(function (c) { return c.result === 'fail'; }).length;
+        t.label = 'Commands'; t.big = String(rest.length);
+        t.sub = failed ? failed + ' failed' : (rest.length === 1 ? 'command' : 'commands');
+        t.bad = failed > 0;
+      } else {
+        var all = list(state, 'agents');
+        var running = all.filter(function (a) { return a.outcome === 'running'; }).length;
+        var tok = formatTokens(totalTokens(state).agents);
+        t.label = 'Agents'; t.big = String(all.length);
+        t.sub = (running ? running + ' running' : 'all finished') + (tok ? ' · ' + tok : '');
+      }
+      out.push(t);
+    });
+    return out;
+  }
+
+  function agentDuration(agent, now) {
+    var start = parseTime(agent && agent.started);
+    var end = agent && agent.ended ? parseTime(agent.ended) : now;
+    return isFinite(start) && isFinite(end) ? end - start : NaN;
+  }
+
+  function isOpen(question) {
+    return question && question.status !== 'answered';
+  }
+
+  // Hard stops first, because the task is blocked on them; otherwise the order they were asked.
+  function openQuestions(state) {
+    var open = list(state, 'questions').filter(isOpen);
+    return open.filter(function (q) { return q.hardStop === true; })
+      .concat(open.filter(function (q) { return q.hardStop !== true; }));
+  }
+
+  function answeredQuestions(state) {
+    return list(state, 'questions').filter(function (q) { return q && q.status === 'answered'; });
+  }
+
+  // Newest first by a time key. A row with no readable time goes last, and ties keep the recorded order.
+  function newestFirst(rows, key) {
+    return rows.map(function (row, i) { return { row: row, t: parseTime(row[key]), i: i }; })
+      .sort(function (a, b) {
+        var ak = isFinite(a.t), bk = isFinite(b.t);
+        if (ak !== bk) return ak ? -1 : 1;
+        if (ak && a.t !== b.t) return b.t - a.t;
+        return a.i - b.i;
+      })
+      .map(function (x) { return x.row; });
+  }
+
+  // The files the session changed, the most recently changed first.
+  function changedFiles(state) {
+    return newestFirst(list(state, 'changes'), 'last');
+  }
+
+  function isTest(command) {
+    return command.test === true;
+  }
+
+  // Test runs, newest first. They are evidence, so they sit in Verified after the checks.
+  function testCommands(state) {
+    return newestFirst(list(state, 'commands').filter(isTest), 'time');
+  }
+
+  // Every other command: those whose latest run failed first, then the rest, each newest first.
+  function otherCommands(state) {
+    var rest = newestFirst(list(state, 'commands').filter(function (c) { return !isTest(c); }), 'time');
+    return rest.filter(function (c) { return c.result === 'fail'; })
+      .concat(rest.filter(function (c) { return c.result !== 'fail'; }));
+  }
+
+  function verifiedRows(state) {
+    return list(state, 'checks').map(function (c) { return { kind: 'check', item: c }; })
+      .concat(testCommands(state).map(function (c) { return { kind: 'test', item: c }; }));
+  }
+
+  // A command's latest result, in words that claim only what is known: an exit code of 0 is not a
+  // proof of anything, and a command started in the background has no outcome the board saw.
+  function commandStatus(command) {
+    var result = command && command.result;
+    if (result === 'pass') return { glyph: '✓', word: 'exited 0', cls: 's-ok' };
+    if (result === 'fail') {
+      var code = command.exit;
+      return { glyph: '✗', word: typeof code === 'number' && isFinite(code) ? 'failed, exit ' + code : 'failed', cls: 's-bad' };
+    }
+    if (result === 'background') return { glyph: '◐', word: 'started in the background', cls: 's-muted' };
+    return statusOf('command', result);
+  }
+
+  // How often a command ran, said only when it ran more than once.
+  function runsText(command) {
+    var runs = typeof command.runs === 'number' && isFinite(command.runs) ? command.runs : 0;
+    if (runs <= 1) return '';
+    var fails = typeof command.fails === 'number' && command.fails > 0 ? command.fails : 0;
+    return 'ran ' + runs + ' times, ' + (fails ? fails + ' failed' : 'none failed');
+  }
+
+  // The board keeps a bounded number of distinct commands, so the runs its rows count can fall short
+  // of the runs it recorded. Only then is there anything to say.
+  function commandsNote(state) {
+    var total = state && state.commandsTotal;
+    if (typeof total !== 'number' || !isFinite(total)) return null;
+    var listed = list(state, 'commands').reduce(function (sum, c) {
+      return sum + (typeof c.runs === 'number' && c.runs > 0 ? c.runs : 1);
+    }, 0);
+    if (total <= listed) return null;
+    return 'Showing ' + listed + ' of ' + total + ' command runs, tests under Verified included. ' +
+      'The board keeps a limited number of distinct commands.';
+  }
+
+  // Line counts when the recorder knew them, and the number of edits when there was more than one.
+  function changeCounts(change) {
+    var out = [];
+    var lines = [];
+    if (typeof change.added === 'number') lines.push('+' + change.added);
+    if (typeof change.removed === 'number') lines.push('−' + change.removed);
+    if (lines.length) out.push(lines.join(' '));
+    if (typeof change.edits === 'number' && change.edits > 1) out.push(change.edits + ' edits');
+    return out;
+  }
+
+  // What has gone quiet or wrong, from the live clock. A step is stuck only on a live board whose last
+  // event is older than the threshold; an idle board is waiting for the viewer, and a finished one has
+  // nothing left to run, so there only failures remain, and they are called that.
+  function stuck(state, now) {
+    var items = [];
+    var settings = (state && state.settings) || {};
+    var threshold = positive(settings.stuckAfterSeconds, 600) * 1000;
+    var quiet = now - parseTime(state && state.updated);
+    if (state && state.state === 'live' && quiet > threshold) {
+      list(state, 'steps').forEach(function (step) {
+        if (step && step.status === 'in_progress') {
+          items.push({ kind: 'step', id: str(step.id), text: str(step.subject), since: state.updated });
+        }
+      });
+    }
+    list(state, 'checks').forEach(function (check) {
+      if (check && check.result === 'fail') {
+        items.push({ kind: 'check', id: str(check.id), text: str(check.proves), command: str(check.command) });
+      }
+    });
+    // A test whose latest run failed, unless a test run that passed came after it. Any other command
+    // that failed is only listed under Commands: a failing command is often a question, not a fault.
+    var tests = list(state, 'commands').filter(isTest);
+    tests.forEach(function (c) {
+      if (c.result !== 'fail') return;
+      var failed = parseTime(c.time);
+      var passedLater = tests.some(function (o) { return o.result === 'pass' && parseTime(o.time) > failed; });
+      if (!passedLater) {
+        items.push({ kind: 'test', id: str(c.command), text: str(c.description), command: str(c.command),
+          exit: typeof c.exit === 'number' ? c.exit : null });
+      }
+    });
+    list(state, 'agents').forEach(function (agent) {
+      if (agent && agent.outcome === 'failed') {
+        items.push({ kind: 'agent', id: str(agent.id), text: str(agent.description || agent.type) });
+      }
+    });
+    return { title: state && state.state === 'finished' ? 'Failures' : 'Stuck', items: items };
+  }
+
+  function refreshSeconds(settings) {
+    return Math.max(2, positive(settings && settings.refreshSeconds, 10));
+  }
+
+  // A live board whose last event is older than its own stuck threshold, the same one that marks a
+  // step stuck. A frozen report is a snapshot by design, so it never says so.
+  function isStale(state, now, frozen) {
+    if (frozen || !state || state.state !== 'live') return false;
+    var settings = (state && state.settings) || {};
+    var limit = positive(settings.stuckAfterSeconds, 600) * 1000;
+    return now - parseTime(state.updated) > limit;
+  }
+
+  // Commits and deliverables under the step they belong to, in step order; anything whose step is
+  // unknown or missing goes last, in a group of its own.
+  function builtGroups(state) {
+    var byId = {};
+    var groups = list(state, 'steps').map(function (step) {
+      var group = { step: step, commits: [], deliverables: [] };
+      byId[str(step && step.id)] = group;
+      return group;
+    });
+    var loose = { step: null, commits: [], deliverables: [] };
+    function home(item) {
+      var key = item && item.step !== null && item.step !== undefined ? str(item.step) : null;
+      return key !== null && Object.prototype.hasOwnProperty.call(byId, key) ? byId[key] : loose;
+    }
+    list(state, 'commits').forEach(function (c) { home(c).commits.push(c); });
+    list(state, 'deliverables').forEach(function (d) { home(d).deliverables.push(d); });
+    return groups.concat([loose]).filter(function (g) { return g.commits.length || g.deliverables.length; });
+  }
+
+  // Running agents first, then finished ones, each in the order they started.
+  function orderedAgents(state) {
+    var all = list(state, 'agents');
+    return all.filter(function (a) { return a && a.outcome === 'running'; })
+      .concat(all.filter(function (a) { return a && a.outcome !== 'running'; }));
+  }
+
+  // The sections with something in them, in the page's order. An empty section is not drawn.
+  function sections(state, now) {
+    var out = [];
+    if (openQuestions(state).length) out.push('needs');
+    if (stuck(state, now).items.length) out.push('stuck');
+    if (list(state, 'steps').length) out.push('steps');
+    if (list(state, 'commits').length || list(state, 'deliverables').length) out.push('built');
+    if (list(state, 'changes').length) out.push('changed');
+    if (verifiedRows(state).length) out.push('verified');
+    if (list(state, 'decisions').length || answeredQuestions(state).length) out.push('decisions');
+    if (otherCommands(state).length) out.push('commands');
+    if (list(state, 'agents').length) out.push('agents');
+    return out;
+  }
+
+  // Verified's count: checks that did not fail and tests that exited 0 pass; a test with no known
+  // outcome is counted apart, not as a pass.
+  function verifiedCount(state) {
+    var pass = 0, fail = 0, open = 0;
+    verifiedRows(state).forEach(function (row) {
+      var result = row.item.result;
+      if (result === 'fail') fail++;
+      else if (row.kind === 'check' || result === 'pass') pass++;
+      else open++;
+    });
+    return pass + ' pass' + (fail ? ', ' + fail + ' fail' : '') + (open ? ', ' + open + ' without a result' : '');
+  }
+
+  // The viewer's stored choice wins over the board's setting; anything unrecognised means system.
+  function resolveTheme(stored, setting, systemDark) {
+    var mode = MODES.indexOf(stored) >= 0 ? stored : MODES.indexOf(setting) >= 0 ? setting : 'system';
+    var applied = mode === 'system' ? (systemDark ? 'dark' : 'light') : mode;
+    return { mode: mode, applied: applied };
+  }
+
+  function densityOf(value) {
+    return value === 'compact' ? 'compact' : 'comfortable';
+  }
+
+  // Only a web link becomes a link. Anything else, javascript: included, is shown as text.
+  function safeUrl(url) {
+    return typeof url === 'string' && /^https?:\/\//i.test(url) ? url : null;
+  }
+
+  function safeAccent(value) {
+    return typeof value === 'string' && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(value) ? value.toLowerCase() : null;
+  }
+
+  function luminance(hex) {
+    var h = hex.slice(1);
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var c = [0, 2, 4].map(function (i) {
+      var v = parseInt(h.substr(i, 2), 16) / 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  }
+
+  // Text drawn on the accent: white or black, whichever contrasts more with it, so any accent a board
+  // sets stays readable in both themes.
+  function accentInk(value) {
+    var hex = safeAccent(value);
+    if (!hex) return null;
+    var l = luminance(hex);
+    return (1.05 / (l + 0.05)) >= ((l + 0.05) / 0.05) ? '#ffffff' : '#000000';
+  }
+
+  // The line the copy button puts on the clipboard: the viewer types the answer after it in the chat.
+  function copyText(question) {
+    return str(question && question.id) + ': ';
+  }
+
+  // Every status the page shows carries a glyph and a word, so none is told by colour alone.
+  var STATUS = {
+    board: {
+      live: ['●', 'live', 'live'],
+      idle: ['◐', 'idle, waiting for you', 'idle'],
+      finished: ['✓', 'finished', 'finished']
+    },
+    step: {
+      completed: ['✓', 'done', 's-ok'],
+      in_progress: ['▸', 'in progress', 's-active'],
+      pending: ['○', 'pending', 's-muted']
+    },
+    check: {
+      pass: ['✓', 'pass', 's-ok'],
+      fail: ['✗', 'fail', 's-bad']
+    },
+    agent: {
+      running: ['●', 'running', 's-active'],
+      finished: ['✓', 'finished', 's-ok'],
+      failed: ['✗', 'failed', 's-bad']
+    }
+  };
+
+  function statusOf(kind, value) {
+    var known = STATUS[kind] && Object.prototype.hasOwnProperty.call(STATUS[kind], value) ? STATUS[kind][value] : null;
+    if (known) return { glyph: known[0], word: known[1], cls: known[2] };
+    return { glyph: '•', word: str(value) || 'unknown', cls: 's-muted' };
+  }
+
+  function shortHash(hash) {
+    return str(hash).slice(0, 7);
+  }
+
+  // A stable key for a deliverable's link, from where it sits rather than its (untrusted) text, so
+  // keyboard focus on it survives a redraw.
+  function linkKey(step, index) {
+    return 'link-' + (step && step.id !== null && step.id !== undefined ? str(step.id) : 'none') + '-' + index;
+  }
+
+  // A board written to a schema this page does not know is still drawn, but flagged: anything other
+  // than 1, missing included, is a different version.
+  function schemaMismatch(state) {
+    return !!state && state.schema !== 1;
+  }
+
+  return {
+    list: list, str: str, parseTime: parseTime, formatSpan: formatSpan, formatAge: formatAge,
+    formatDuration: formatDuration, formatTokens: formatTokens, totalTokens: totalTokens, tiles: tiles, TAB_IDS: TAB_IDS, agentDuration: agentDuration, openQuestions: openQuestions,
+    answeredQuestions: answeredQuestions, stuck: stuck, refreshSeconds: refreshSeconds, isStale: isStale,
+    builtGroups: builtGroups, orderedAgents: orderedAgents, sections: sections, resolveTheme: resolveTheme,
+    densityOf: densityOf, safeUrl: safeUrl, safeAccent: safeAccent, accentInk: accentInk,
+    copyText: copyText, statusOf: statusOf, shortHash: shortHash, linkKey: linkKey,
+    schemaMismatch: schemaMismatch, changedFiles: changedFiles, testCommands: testCommands,
+    otherCommands: otherCommands, verifiedRows: verifiedRows, verifiedCount: verifiedCount,
+    commandStatus: commandStatus, runsText: runsText, commandsNote: commandsNote, changeCounts: changeCounts
+  };
+})();
+
+if (typeof window !== 'undefined' && typeof document !== 'undefined') (function () {
+  'use strict';
+
+  var root = document.documentElement;
+  var STORE = 'logbook-theme';
+  var frozen = window.BOARD_FROZEN === true;
+  // The answered questions start collapsed. A viewer who opens a section keeps it open across refreshes.
+  var ui = { last: null, json: null, shape: null, loadError: false, collapsed: { answered: true }, chosen: null, tab: null };
+
+  // A browser may refuse storage to a local file. Then the switch still works for as long as the page
+  // is open, from ui.chosen.
+  function readStored() {
+    try { return window.localStorage.getItem(STORE); } catch (e) { return null; }
+  }
+  function writeStored(mode) {
+    try { window.localStorage.setItem(STORE, mode); } catch (e) { /* kept in memory only */ }
+  }
+  function systemDark() {
+    try { return window.matchMedia('(prefers-color-scheme: dark)').matches; } catch (e) { return false; }
+  }
+
+  // The last good state. A state.js that fails, or assigns something that is not an object, leaves the
+  // page showing what it last had.
+  function board() {
+    var b = window.BOARD;
+    if (b && typeof b === 'object') ui.last = b;
+    return ui.last;
+  }
+
+  function applyTheme() {
+    var state = board();
+    var settings = (state && state.settings) || {};
+    var theme = PB.resolveTheme(ui.chosen || readStored(), settings.theme, systemDark());
+    root.setAttribute('data-theme', theme.mode);
+    root.setAttribute('data-density', PB.densityOf(settings.density));
+    var accent = PB.safeAccent(settings.accent);
+    if (accent) {
+      root.style.setProperty('--accent', accent);
+      root.style.setProperty('--accent-ink', PB.accentInk(accent));
+    } else {
+      root.style.removeProperty('--accent');
+      root.style.removeProperty('--accent-ink');
+    }
+    return theme;
+  }
+  PB.afterState = applyTheme;
+
+  // Before first paint: the stored mode now, and for a live board, state.js loaded in the parser so
+  // the board's own settings apply before the body is drawn. A page opened from a file cannot fetch
+  // its neighbour, but it can load it as a script.
+  applyTheme();
+  if (!frozen) {
+    document.write('<script id="pb-state" src="state.js?t=' + Date.now() + '"><\/script><script>PB.afterState();<\/script>');
+  }
+
+  /* Building blocks. Every string from the state goes in through text(), which sets textContent. */
+
+  function el(tag, cls, content) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (content !== undefined && content !== null) node.textContent = PB.str(content);
+    return node;
+  }
+  function add(parent) {
+    for (var i = 1; i < arguments.length; i++) {
+      var child = arguments[i];
+      if (child === null || child === undefined || child === false) continue;
+      parent.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
+    }
+    return parent;
+  }
+
+  function localTime(iso, now) {
+    var t = PB.parseTime(iso);
+    if (!isFinite(t)) return '';
+    var d = new Date(t);
+    var n = new Date(now);
+    var time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (d.toDateString() === n.toDateString()) return time;
+    var date = d.toLocaleDateString([], d.getFullYear() === n.getFullYear()
+      ? { month: 'short', day: 'numeric' } : { year: 'numeric', month: 'short', day: 'numeric' });
+    return date + ' ' + time;
+  }
+
+  function when(iso, now) {
+    var node = el('time', null, localTime(iso, now));
+    if (typeof iso === 'string') {
+      node.setAttribute('datetime', iso);
+      node.title = iso.replace('T', ' ').replace('Z', ' UTC');
+    }
+    return node;
+  }
+
+  // A span whose text the clock keeps current, even when the state has not changed.
+  function ticking(iso, fmt, now) {
+    var node = el('span', 'age');
+    node.setAttribute('data-since', PB.str(iso));
+    node.setAttribute('data-fmt', fmt);
+    node.textContent = format(fmt, now - PB.parseTime(iso));
+    return node;
+  }
+  function format(fmt, ms) {
+    return fmt === 'duration' ? PB.formatDuration(ms) : fmt === 'span' ? PB.formatSpan(ms) : PB.formatAge(ms);
+  }
+
+  function statusNode(s) {
+    var node = el('span', 'status ' + s.cls);
+    add(node, el('span', null, s.glyph), ' ' + s.word);
+    return node;
+  }
+  function status(kind, value) {
+    return statusNode(PB.statusOf(kind, value));
+  }
+
+  function facts(pairs) {
+    var dl = el('dl', 'facts');
+    var any = false;
+    pairs.forEach(function (pair) {
+      if (pair[1] === null || pair[1] === undefined || pair[1] === '') return;
+      add(dl, el('dt', null, pair[0]), el('dd', null, pair[1]));
+      any = true;
+    });
+    return any ? dl : null;
+  }
+
+  function link(url, label, key) {
+    var safe = PB.safeUrl(url);
+    if (!safe) return null;
+    var a = el('a', null, label || safe);
+    a.href = safe;
+    a.rel = 'noopener noreferrer';
+    a.setAttribute('data-key', key);
+    return a;
+  }
+
+  // A collapsible section: a real button in the heading, aria-expanded, and a body that stays
+  // collapsed across re-renders because the choice lives in ui.collapsed, not in the DOM.
+  function section(id, title, count, body) {
+    if (ui.pane) {
+      // In the tab strip's panel a section is its heading and body, with nothing to fold.
+      var pane = el('div', 'pane pane-' + id);
+      pane.id = 'b-' + id;
+      pane.setAttribute('role', 'tabpanel');
+      pane.setAttribute('aria-labelledby', 'tab-' + id);
+      pane.hidden = ui.tab !== id;
+      body.className = 'body';
+      return add(pane, add(el('div', 'pane-head'), el('h2', null, title), count ? el('span', 'count', count) : null), body);
+    }
+    var sec = el('section', 'sec sec-' + id);
+    sec.setAttribute('aria-labelledby', 'h-' + id);
+    var h2 = el('h2');
+    h2.id = 'h-' + id;
+    var open = !ui.collapsed[id];
+    var btn = el('button', 'toggle');
+    btn.type = 'button';
+    btn.setAttribute('data-key', 'toggle-' + id);
+    btn.setAttribute('aria-expanded', String(open));
+    btn.setAttribute('aria-controls', 'b-' + id);
+    var chev = el('span', 'chev', '▾');
+    chev.setAttribute('aria-hidden', 'true');
+    add(btn, chev, el('span', null, title), count ? el('span', 'count', count) : null);
+    body.id = 'b-' + id;
+    body.className = 'body';
+    body.hidden = !open;
+    btn.addEventListener('click', function () {
+      ui.collapsed[id] = !ui.collapsed[id];
+      btn.setAttribute('aria-expanded', String(!ui.collapsed[id]));
+      body.hidden = !!ui.collapsed[id];
+    });
+    return add(sec, add(h2, btn), body);
+  }
+
+  /* Clipboard. A file:// page is not always given the clipboard API, so a hidden textarea and
+     execCommand stand in for it. */
+
+  function copy(text, button, done) {
+    function fallback() {
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.setAttribute('aria-hidden', 'true');
+      area.style.position = 'fixed';
+      area.style.top = '-1000px';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(area);
+      button.focus();
+      done(ok);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, fallback);
+    } else {
+      fallback();
+    }
+  }
+
+  function question(q, now) {
+    var hard = q.hardStop === true;
+    var item = el('li', 'item q' + (hard ? ' hard' : ''));
+    var head = add(el('div', 'head'), el('span', 'qid', q.id));
+    if (hard) add(head, el('span', 'flag', '■ Blocked until you answer'));
+    if (q.asked) add(head, add(el('span', 'sub'), 'asked ', ticking(q.asked, 'age', now)));
+    add(item, head, el('p', 'q-text', q.text));
+    add(item, facts([
+      ['Running on', q['default']],
+      ['Affects', q.affects],
+      ['To reverse', q.reverse]
+    ]));
+    var line = PB.copyText(q);
+    var row = el('div', 'copyrow');
+    var btn = el('button', 'copy', 'Copy “' + line.trim() + '”');
+    btn.type = 'button';
+    btn.setAttribute('data-key', 'copy-' + PB.str(q.id));
+    btn.setAttribute('aria-label', 'Copy ' + line.trim() + ' to the clipboard, then type your answer after it in the chat');
+    var note = el('span', 'copied');
+    note.setAttribute('role', 'status');
+    btn.addEventListener('click', function () {
+      copy(line, btn, function (ok) {
+        note.textContent = ok ? 'Copied. Paste it into the chat and type your answer after it.'
+          : 'Could not copy. Type ' + line.trim() + ' in the chat, then your answer.';
+        window.setTimeout(function () { note.textContent = ''; }, 6000);
+      });
+    });
+    return add(item, add(row, btn, note));
+  }
+
+  function commitItem(c, now) {
+    var item = el('li', 'item commit-row');
+    return add(item, el('code', 'hash', PB.shortHash(c.hash)), el('span', 'msg', c.subject),
+      el('code', 'branch', c.branch || ''), c.time ? add(el('span', 'when'), when(c.time, now)) : el('span', 'when'));
+  }
+
+  function deliverableItem(d, now, key) {
+    // The label leads; a path, and a url, follow as text unless the heading already says it. A url
+    // that is not a web link is only ever that text.
+    var title = PB.str(d.label || d.path || d.url);
+    var item = el('li', 'item');
+    add(item, add(el('p'), link(d.url, title, key) || el('span', null, title)));
+    if (d.path && d.path !== title) add(item, el('p', 'sub mono', d.path));
+    if (d.url && d.url !== title) add(item, el('p', 'sub mono', d.url));
+    if (d.time) add(item, add(el('p', 'sub'), 'recorded ', when(d.time, now)));
+    return item;
+  }
+
+  function agentIds(parent, ids) {
+    ids.forEach(function (id, i) { add(parent, i ? ', ' : '', el('code', null, PB.str(id).slice(0, 8))); });
+    return parent;
+  }
+
+  function changeItem(f, now) {
+    var item = el('li', 'item');
+    add(item, add(el('p'), f.created === true ? el('span', 'tag', 'new') : null, el('span', 'mono', f.path)));
+    var sub = el('p', 'sub');
+    var counts = PB.changeCounts(f).join(' · ');
+    if (counts) add(sub, counts);
+    if (f.last) add(sub, (counts ? ' · ' : '') + 'changed ', when(f.last, now), ' (', ticking(f.last, 'age', now), ')');
+    var agents = Array.isArray(f.agents) ? f.agents.filter(function (a) { return a; }) : [];
+    if (agents.length) add(sub, (sub.childNodes.length ? ' · ' : '') + (agents.length === 1 ? 'by agent ' : 'by agents '));
+    agentIds(sub, agents);
+    return add(item, sub.childNodes.length ? sub : null);
+  }
+
+  // A command as a row: its result in words, what it was for, the command itself, and how often.
+  function commandItem(c, now, tag) {
+    var item = el('li', 'item');
+    add(item, add(el('p'), statusNode(PB.commandStatus(c)), tag ? el('span', 'tag', tag) : null,
+      c.description ? el('span', null, c.description) : null));
+    add(item, add(el('pre', 'cmd'), el('code', null, c.command)));
+    var sub = el('p', 'sub');
+    var runs = PB.runsText(c);
+    if (runs) add(sub, runs);
+    if (c.time) add(sub, (runs ? ' · last ran ' : 'ran '), when(c.time, now), ' (', ticking(c.time, 'age', now), ')');
+    return add(item, sub.childNodes.length ? sub : null);
+  }
+
+  /* The page, built fresh from the state into a detached node, then swapped in. If building throws,
+     the old page stays. */
+
+  function build(state, now) {
+    var wrap = el('div', 'wrap');
+    if (!state) {
+      add(wrap, add(el('header', 'top'), add(el('div', 'top-row'), el('p', 'eyebrow', 'Logbook'), modes())),
+        el('h1', null, 'Waiting for the board'),
+        el('p', 'empty', frozen ? 'This report carries no state.'
+          : 'state.js has not been read yet. The page tries again every few seconds.'));
+      return wrap;
+    }
+
+    document.title = (PB.str(state.title) || 'Logbook') + (frozen ? ' — report' : ' — logbook');
+    if (PB.schemaMismatch(state)) {
+      var mismatch = el('p', 'notice');
+      mismatch.setAttribute('role', 'status');
+      mismatch.textContent = 'This board was written by a different version of the plugin, and may not be shown correctly.';
+      add(wrap, mismatch);
+    }
+    add(wrap, header(state, now));
+
+    var shown = PB.sections(state, now);
+    var main = el('main');
+    var tabs = shown.filter(function (id) { return PB.TAB_IDS.indexOf(id) >= 0; });
+    if (tabs.indexOf(ui.tab) < 0) ui.tab = tabs[0] || null;
+    var placed = false;
+    function tabStrip() {
+      placed = true;
+      if (!tabs.length) return;
+      var strip = el('div', 'tiles');
+      strip.setAttribute('role', 'tablist');
+      strip.setAttribute('aria-label', 'Detail');
+      PB.tiles(state, now).forEach(function (t) {
+        var b = el('button', 'tile' + (t.bad ? ' bad' : ''));
+        b.type = 'button';
+        b.id = 'tab-' + t.id;
+        b.setAttribute('role', 'tab');
+        b.setAttribute('data-key', 'tab-' + t.id);
+        b.setAttribute('aria-selected', String(ui.tab === t.id));
+        b.setAttribute('aria-controls', 'b-' + t.id);
+        add(b, el('span', 'tile-label', t.label), el('span', 'tile-big', t.big), el('span', 'tile-sub', t.sub));
+        b.addEventListener('click', function () { ui.tab = t.id; render(); });
+        add(strip, b);
+      });
+      add(main, strip);
+      // Every panel is drawn and all but the chosen one hidden, so a printed report holds them all.
+      ui.pane = true;
+      try { tabs.forEach(function (id) { add(main, SECTIONS[id](state, now)); }); } finally { ui.pane = false; }
+    }
+    // Needs you, Stuck and Steps lead; then the tiles and the panel of the one chosen; then Decisions.
+    shown.forEach(function (id) {
+      if (PB.TAB_IDS.indexOf(id) >= 0) return;
+      if (id === 'decisions' && !placed) tabStrip();
+      add(main, SECTIONS[id](state, now));
+    });
+    if (!placed) tabStrip();
+    if (!shown.length) add(main, el('p', 'empty', 'Nothing recorded yet.'));
+    add(wrap, main);
+
+    var foot = el('p', 'foot', 'Times are shown in your local time; the board records them in UTC.' +
+      (frozen ? ' This report is a snapshot and does not refresh.' : ''));
+    if (ui.loadError && !frozen) add(foot, ' The last attempt to read state.js failed, so this is the last state it read.');
+    return add(wrap, foot);
+  }
+
+  function modes() {
+    var box = el('div', 'modes');
+    box.setAttribute('role', 'group');
+    box.setAttribute('aria-label', 'Colour mode');
+    var current = applyTheme().mode;
+    [['light', 'Light'], ['dark', 'Dark'], ['system', 'System']].forEach(function (m) {
+      var b = el('button', null, m[1]);
+      b.type = 'button';
+      b.setAttribute('data-key', 'mode-' + m[0]);
+      b.setAttribute('aria-pressed', String(current === m[0]));
+      b.addEventListener('click', function () {
+        ui.chosen = m[0];
+        writeStored(m[0]);
+        render();
+      });
+      box.appendChild(b);
+    });
+    return box;
+  }
+
+  function header(state, now) {
+    var top = el('header', 'top');
+    add(top, add(el('div', 'top-row'), el('p', 'eyebrow', frozen ? 'Progress report' : 'Logbook'), modes()));
+    var title = el('h1', state.titleSource === 'prompt' ? 'from-prompt' : null, PB.str(state.title) || 'Untitled task');
+    if (state.titleSource === 'prompt') title.title = PB.str(state.title);
+    add(top, title);
+    var s = PB.statusOf('board', state.state);
+    var meta = el('p', 'meta');
+    add(meta, add(el('span', 'badge ' + s.cls), s.glyph + ' ' + s.word));
+    if (state.started && state.state !== 'finished') add(meta, add(el('span'), 'Started ', when(state.started, now), ' (', ticking(state.started, 'age', now), ')'));
+    if (state.state === 'finished' && state.updated) {
+      var span = PB.parseTime(state.updated) - PB.parseTime(state.started);
+      add(meta, add(el('span'), 'Completed ', when(state.updated, now), isFinite(span) ? ' · ' + PB.formatDuration(span) : ''));
+    } else if (state.updated) {
+      add(meta, add(el('span'), 'Updated ', when(state.updated, now), ' (', ticking(state.updated, 'age', now), ')'));
+    }
+    var tt = PB.totalTokens(state);
+    if (tt.all > 0) {
+      var tk = add(el('span'), 'Tokens ', PB.formatTokens(tt.all).replace(' tok', ''));
+      tk.title = 'Main session ' + PB.formatTokens(tt.main) + ', agents ' + PB.formatTokens(tt.agents) +
+        '. Input, cache and output tokens, cache reads included.';
+      add(meta, tk);
+    }
+    add(top, meta);
+    if (PB.isStale(state, now, frozen)) {
+      var notice = el('p', 'notice');
+      notice.setAttribute('role', 'status');
+      add(notice, el('strong', null, '⚠︎ No event for '), ticking(state.updated, 'age', now),
+        '. The task may be busy, waiting on something, or over.');
+      add(top, notice);
+    }
+    return top;
+  }
+
+  var SECTIONS = {
+    needs: function (state, now) {
+      var open = PB.openQuestions(state);
+      var ul = el('ul', 'list');
+      open.forEach(function (q) { add(ul, question(q, now)); });
+      var hard = open.filter(function (q) { return q.hardStop === true; }).length;
+      return section('needs', 'Needs you', hard ? hard + ' blocking, ' + open.length + ' open' : open.length + ' open', add(el('div'), ul));
+    },
+
+    stuck: function (state, now) {
+      var result = PB.stuck(state, now);
+      var ul = el('ul', 'list');
+      result.items.forEach(function (it) {
+        var li = el('li', 'item');
+        if (it.kind === 'step') {
+          add(li, add(el('p'), add(el('span', 'status s-warn'), el('span', null, '⚠︎'), ' quiet'),
+            el('span', 'tag', 'Step ' + it.id), el('span', null, it.text)));
+          add(li, add(el('p', 'sub'), 'In progress with no event for ', ticking(it.since, 'span', now),
+            ' (the threshold is ' + PB.formatSpan(1000 * ((state.settings && state.settings.stuckAfterSeconds) || 600)) + ').'));
+        } else if (it.kind === 'check') {
+          add(li, add(el('p'), status('check', 'fail'), el('span', 'tag', 'Check ' + it.id), el('span', null, it.text)));
+          if (it.command) add(li, add(el('pre', 'cmd'), el('code', null, it.command)));
+        } else if (it.kind === 'test') {
+          add(li, add(el('p'), statusNode(PB.commandStatus({ result: 'fail', exit: it.exit })), el('span', 'tag', 'Test'),
+            it.text ? el('span', null, it.text) : null));
+          add(li, add(el('pre', 'cmd'), el('code', null, it.command)));
+        } else {
+          add(li, add(el('p'), status('agent', 'failed'), el('span', 'tag', 'Agent'), el('span', null, it.text || it.id)));
+        }
+        add(ul, li);
+      });
+      return section('stuck', result.title, String(result.items.length), add(el('div'), ul));
+    },
+
+    steps: function (state, now) {
+      var steps = PB.list(state, 'steps');
+      var ol = el('ol', 'list');
+      steps.forEach(function (step) {
+        var li = el('li', 'item');
+        add(li, add(el('p'), status('step', step.status), el('span', 'tag', step.id), el('span', null, step.subject)));
+        if (step.status === 'in_progress' && step.updated) {
+          add(li, add(el('p', 'sub'), 'last event ', ticking(step.updated, 'age', now)));
+        }
+        add(ol, li);
+      });
+      var done = steps.filter(function (s) { return s.status === 'completed'; }).length;
+      return section('steps', 'Steps', done + ' of ' + steps.length + ' done', add(el('div'), ol));
+    },
+
+    built: function (state, now) {
+      var body = el('div');
+      PB.builtGroups(state).forEach(function (g) {
+        add(body, el('h3', 'group-title', g.step ? 'Step ' + PB.str(g.step.id) + ' · ' + PB.str(g.step.subject) : 'Not tied to a step'));
+        var ul = el('ul', 'list');
+        g.commits.forEach(function (c) { add(ul, commitItem(c, now)); });
+        g.deliverables.forEach(function (d, i) { add(ul, deliverableItem(d, now, PB.linkKey(g.step, i))); });
+        add(body, ul);
+      });
+      var nc = PB.list(state, 'commits').length;
+      var nd = PB.list(state, 'deliverables').length;
+      return section('built', 'Built', nc + (nc === 1 ? ' commit, ' : ' commits, ') + nd + (nd === 1 ? ' deliverable' : ' deliverables'), body);
+    },
+
+    changed: function (state, now) {
+      var files = PB.changedFiles(state);
+      var ul = el('ul', 'list');
+      files.forEach(function (f) { add(ul, changeItem(f, now)); });
+      return section('changed', 'Changed', files.length + (files.length === 1 ? ' file' : ' files'), add(el('div'), ul));
+    },
+
+    verified: function (state, now) {
+      var ul = el('ul', 'list');
+      PB.verifiedRows(state).forEach(function (row) {
+        var c = row.item;
+        if (row.kind === 'test') {
+          add(ul, commandItem(c, now, 'Test'));
+          return;
+        }
+        var li = el('li', 'item');
+        add(li, add(el('p'), status('check', c.result), el('span', 'tag', c.id), el('span', null, c.proves)));
+        if (c.command) add(li, add(el('pre', 'cmd'), el('code', null, c.command)));
+        var sub = el('p', 'sub');
+        if (c.time) add(sub, 'ran ', when(c.time, now), ' (', ticking(c.time, 'age', now), ')');
+        if (c.agent) add(sub, (c.time ? ', ' : '') + 'by agent ', el('code', null, PB.str(c.agent).slice(0, 8)));
+        if (sub.childNodes.length) add(li, sub);
+        add(ul, li);
+      });
+      return section('verified', 'Verified', PB.verifiedCount(state), add(el('div'), ul));
+    },
+
+    decisions: function (state, now) {
+      var body = el('div');
+      var decisions = PB.list(state, 'decisions');
+      if (decisions.length) {
+        var ul = el('ul', 'list');
+        decisions.forEach(function (d) {
+          var li = el('li', 'item');
+          add(li, add(el('p'), el('span', 'tag', d.id), el('span', null, d.text)));
+          add(li, facts([['Why', d.why], ['To reverse', d.reverse]]));
+          add(ul, li);
+        });
+        add(body, ul);
+      }
+      // Answered questions leave Needs you: they are settled calls now, kept here for the record.
+      var answered = PB.answeredQuestions(state);
+      if (answered.length) {
+        var open = !ui.collapsed.answered;
+        var btn = el('button', 'subtoggle', (open ? 'Hide' : 'Show') + ' answered questions (' + answered.length + ')');
+        btn.type = 'button';
+        btn.setAttribute('data-key', 'toggle-answered');
+        btn.setAttribute('aria-expanded', String(open));
+        btn.setAttribute('aria-controls', 'b-answered');
+        var sub = el('ul', 'list subbody');
+        sub.id = 'b-answered';
+        sub.hidden = !open;
+        answered.forEach(function (q) {
+          var li = el('li', 'item');
+          add(li, add(el('p'), el('span', 'tag', q.id), el('span', null, q.text)));
+          add(li, facts([['Answer', q.answer], ['Was running on', q['default']], ['Answered', q.answered ? localTime(q.answered, now) : null]]));
+          add(sub, li);
+        });
+        btn.addEventListener('click', function () {
+          ui.collapsed.answered = !ui.collapsed.answered;
+          var nowOpen = !ui.collapsed.answered;
+          btn.setAttribute('aria-expanded', String(nowOpen));
+          btn.textContent = (nowOpen ? 'Hide' : 'Show') + ' answered questions (' + answered.length + ')';
+          sub.hidden = !nowOpen;
+        });
+        add(body, btn, sub);
+      }
+      return section('decisions', 'Decisions', decisions.length + (answered.length ? ' made, ' + answered.length + ' answered' : ''), body);
+    },
+
+    commands: function (state, now) {
+      var commands = PB.otherCommands(state);
+      var body = el('div');
+      var note = PB.commandsNote(state);
+      if (note) add(body, el('p', 'sub', note));
+      var ul = el('ul', 'list');
+      commands.forEach(function (c) { add(ul, commandItem(c, now, null)); });
+      var failed = commands.filter(function (c) { return c.result === 'fail'; }).length;
+      return section('commands', 'Commands', commands.length + (commands.length === 1 ? ' command' : ' commands') +
+        (failed ? ', ' + failed + ' failed' : ''), add(body, ul));
+    },
+
+    agents: function (state, now) {
+      var agents = PB.orderedAgents(state);
+      var ul = el('ul', 'list');
+      agents.forEach(function (a) {
+        var li = el('li', 'item');
+        add(li, add(el('p'), status('agent', a.outcome), el('span', null, a.description || a.type || 'Agent')));
+        var sub = el('p', 'sub agent-meta');
+        // The type is named here only when the heading is not already the type.
+        var bits = [a.description ? a.type : null, a.model, PB.str(a.id).slice(0, 8)].filter(function (x) { return x; }).join(' · ');
+        var dur = el('span', 'dur');
+        if (a.outcome === 'running' && !a.ended) {
+          add(dur, ticking(a.started, 'duration', now));
+        } else {
+          add(dur, PB.formatDuration(PB.agentDuration(a, now)));
+        }
+        var tok = el('span', 'tok', PB.formatTokens(a.tokens));
+        add(sub, dur, tok, bits ? el('span', 'ids', bits) : null);
+        add(li, sub);
+        var gates = PB.list(a, 'gates');
+        if (gates.length) {
+          var gl = el('ul', 'gates');
+          gates.forEach(function (g) {
+            add(gl, add(el('li'), status('check', g.result), el('span', 'tag', g.id), el('span', null, g.text)));
+          });
+          add(li, gl);
+        }
+        add(ul, li);
+      });
+      var running = agents.filter(function (a) { return a.outcome === 'running'; }).length;
+      return section('agents', 'Agents', running + ' running, ' + (agents.length - running) + ' finished', add(el('div'), ul));
+    }
+  };
+
+  /* Rendering in place. The whole page is rebuilt only when the state, or what the clock makes of it,
+     changes; otherwise only the ages move. The scroll position and the focused control survive. */
+
+  function shape(state, now) {
+    if (!state) return 'none';
+    return JSON.stringify([
+      PB.stuck(state, now).items.map(function (i) { return i.kind + ':' + i.id; }),
+      PB.isStale(state, now, frozen),
+      ui.loadError,
+      new Date(now).toDateString()
+    ]);
+  }
+
+  // A build that throws leaves the page showing something rather than nothing: the old page, with a
+  // notice, if there was one; a short message of its own, if this is the first draw.
+  function buildFailed(app) {
+    if (app.firstChild) {
+      if (!document.getElementById('pb-build-error')) {
+        var notice = el('p', 'notice');
+        notice.id = 'pb-build-error';
+        notice.setAttribute('role', 'status');
+        notice.textContent = 'The latest state could not be drawn. Showing what was last shown.';
+        app.insertBefore(notice, app.firstChild);
+      }
+    } else {
+      app.appendChild(el('p', 'empty', 'This board could not be drawn. The state file may be from a different version.'));
+    }
+  }
+
+  function render() {
+    var state = board();
+    var now = Date.now();
+    var app = document.getElementById('pb-app');
+    if (!app) return;
+    var fresh;
+    try { fresh = build(state, now); } catch (e) { buildFailed(app); return; }
+    var focused = document.activeElement && document.activeElement.getAttribute
+      ? document.activeElement.getAttribute('data-key') : null;
+    var x = window.scrollX, y = window.scrollY;
+    while (app.firstChild) app.removeChild(app.firstChild);
+    app.appendChild(fresh);
+    window.scrollTo(x, y);
+    if (focused) {
+      var keyed = app.querySelectorAll('[data-key]');
+      for (var i = 0; i < keyed.length; i++) {
+        if (keyed[i].getAttribute('data-key') === focused) { keyed[i].focus({ preventScroll: true }); break; }
+      }
+    }
+    ui.json = state ? JSON.stringify(state) : null;
+    ui.shape = shape(state, now);
+  }
+
+  function tick() {
+    var state = board();
+    var now = Date.now();
+    var json = state ? JSON.stringify(state) : null;
+    if (json !== ui.json || shape(state, now) !== ui.shape) {
+      applyTheme();
+      render();
+      return;
+    }
+    var nodes = document.querySelectorAll('[data-since]');
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      n.textContent = format(n.getAttribute('data-fmt'), now - PB.parseTime(n.getAttribute('data-since')));
+    }
+  }
+
+  // A fresh script tag every refreshSeconds, the previous one removed. A failed load keeps the last
+  // state on screen.
+  function refresh() {
+    var prev = document.getElementById('pb-state');
+    if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
+    var tag = document.createElement('script');
+    tag.id = 'pb-state';
+    tag.src = 'state.js?t=' + Date.now();
+    tag.onload = function () { ui.loadError = false; tick(); schedule(); };
+    tag.onerror = function () { ui.loadError = true; tick(); schedule(); };
+    document.head.appendChild(tag);
+  }
+  function schedule() {
+    var state = board();
+    window.setTimeout(refresh, 1000 * PB.refreshSeconds(state && state.settings));
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    applyTheme();
+    render();
+    window.setInterval(tick, 1000);
+    if (!frozen) schedule();
+  });
+})();
+</script>
+</head>
+<body>
+<div id="pb-app"></div>
+</body>
+</html>

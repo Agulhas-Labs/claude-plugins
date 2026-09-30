@@ -1,0 +1,39 @@
+{
+  "session_id": "11111111-2222-4333-8444-555555555555",
+  "transcript_path": "/home/user/.claude/projects/-home-user-project/11111111-2222-4333-8444-555555555555.jsonl",
+  "cwd": "/home/user/project",
+  "prompt_id": "39811ffc-72c1-40b8-a2c4-6db1b3bcba3f",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/home/user/project/notes.txt",
+    "old_string": "two",
+    "new_string": "deux",
+    "replace_all": false
+  },
+  "tool_response": {
+    "filePath": "/home/user/project/notes.txt",
+    "oldString": "two",
+    "newString": "deux",
+    "originalFile": "one\ntwo\nthree\n",
+    "structuredPatch": [
+      {
+        "oldStart": 1,
+        "oldLines": 3,
+        "newStart": 1,
+        "newLines": 3,
+        "lines": [
+          " one",
+          "-two",
+          "+deux",
+          " three"
+        ]
+      }
+    ],
+    "userModified": false,
+    "replaceAll": false
+  },
+  "tool_use_id": "toolu_01M5TTZmedaenzAzbjxXysAU",
+  "duration_ms": 1
+}

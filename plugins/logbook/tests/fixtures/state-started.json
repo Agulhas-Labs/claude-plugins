@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "session": "22222222-3333-4444-8555-666666666666",
+  "title": "Add a CSV export to the reports page, so people can download the table they are looking at",
+  "titleSource": "prompt",
+  "started": "2026-01-05T09:00:00Z",
+  "updated": "2026-01-05T09:00:06Z",
+  "state": "live",
+  "settings": {
+    "theme": "system",
+    "accent": null,
+    "density": "comfortable",
+    "refreshSeconds": 10,
+    "stuckAfterSeconds": 600
+  },
+  "questions": [],
+  "steps": [
+    {
+      "id": "1",
+      "subject": "Read the reports module",
+      "status": "pending",
+      "updated": "2026-01-05T09:00:06Z"
+    },
+    {
+      "id": "2",
+      "subject": "Write the exporter",
+      "status": "pending",
+      "updated": "2026-01-05T09:00:06Z"
+    },
+    {
+      "id": "3",
+      "subject": "Add the download button",
+      "status": "pending",
+      "updated": "2026-01-05T09:00:06Z"
+    },
+    {
+      "id": "4",
+      "subject": "Test the export end to end",
+      "status": "pending",
+      "updated": "2026-01-05T09:00:06Z"
+    },
+    {
+      "id": "5",
+      "subject": "Update the README",
+      "status": "pending",
+      "updated": "2026-01-05T09:00:06Z"
+    }
+  ],
+  "commits": [],
+  "deliverables": [],
+  "checks": [],
+  "decisions": [],
+  "agents": [],
+  "changes": [],
+  "commands": [],
+  "commandsTotal": 0,
+  "tokens": null
+}

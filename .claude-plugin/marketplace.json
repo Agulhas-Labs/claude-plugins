@@ -1,0 +1,72 @@
+{
+  "name": "agulhas-labs",
+  "owner": {
+    "name": "Agulhas Labs",
+    "url": "https://github.com/Agulhas-Labs/claude-plugins"
+  },
+  "metadata": {
+    "description": "Claude Code plugins from Agulhas Labs. Delegate: a team of agents sized to the job, and a report of where your tokens went. Cache Guard: a warning before the one message that costs twenty times the rest. Logbook: a live local page for a long task, and its report when the task ends."
+  },
+  "plugins": [
+    {
+      "name": "delegate",
+      "source": "./plugins/delegate",
+      "description": "Your Claude Code session leads a team of agents, each on the cheapest model that can do its job. Work isn't accepted until a command proves it, and a built-in report shows where your tokens went.",
+      "version": "1.0.0",
+      "displayName": "Delegate: Agents Sized to the Job",
+      "author": {
+        "name": "Agulhas Labs"
+      },
+      "homepage": "https://github.com/Agulhas-Labs/claude-plugins",
+      "repository": "https://github.com/Agulhas-Labs/claude-plugins",
+      "license": "Apache-2.0",
+      "keywords": [
+        "orchestration",
+        "subagents",
+        "delegation",
+        "token-cost",
+        "usage",
+        "prompt-cache",
+        "verification"
+      ]
+    },
+    {
+      "name": "cache-guard",
+      "displayName": "Cache Guard",
+      "source": "./plugins/cache-guard",
+      "description": "Warns once before a message that will cost far more than usual: a large Claude Code context whose prompt cache has expired, or a model or effort change that resets it. Shows the estimated cost, and offers a handoff file written by a cheap model in the background so you can /clear instead.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Agulhas Labs"
+      },
+      "homepage": "https://github.com/Agulhas-Labs/claude-plugins",
+      "repository": "https://github.com/Agulhas-Labs/claude-plugins",
+      "license": "Apache-2.0",
+      "keywords": [
+        "prompt-cache",
+        "token-cost",
+        "hooks"
+      ]
+    },
+    {
+      "name": "logbook",
+      "displayName": "Logbook",
+      "source": "./plugins/logbook",
+      "description": "Keeps a live local page for a long Claude Code task: what needs you, what was built, what was verified, and what was decided without you. Hooks record it without spending model tokens, the page follows light, dark or your system's setting, and when the task ends the same page is the report.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Agulhas Labs"
+      },
+      "homepage": "https://github.com/Agulhas-Labs/claude-plugins",
+      "repository": "https://github.com/Agulhas-Labs/claude-plugins",
+      "license": "Apache-2.0",
+      "keywords": [
+        "progress",
+        "report",
+        "hooks",
+        "subagents",
+        "token-cost"
+      ]
+    }
+  ]
+}

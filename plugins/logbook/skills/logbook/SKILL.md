@@ -1,0 +1,49 @@
+---
+name: logbook
+description: >-
+  Use when the user types /logbook, or asks for a logbook, a live status page, or to
+  retitle or close the one that is running.
+---
+
+# logbook
+
+## Start
+
+```text
+python3 "${CLAUDE_SKILL_DIR}/../../board/board.py" start "TITLE"
+```
+
+`TITLE` is a few words naming the task. It prints the path of `board.html`; give that path to the user.
+If a board is already running for this session it says so; give the user its path.
+
+## Retitle
+
+```text
+python3 "${CLAUDE_SKILL_DIR}/../../board/board.py" title "TEXT"
+```
+
+## Close
+
+```text
+python3 "${CLAUDE_SKILL_DIR}/../../board/board.py" close
+```
+
+Writes `report.html`; give the user its path. A closed board records nothing more.
+
+## While a board is running
+
+The hooks record the files you change and the commands you run, with how each command ended. Record a
+check only for what a command's exit status does not show.
+
+For a question whose answer changes the work, record it with your default and keep going on the
+default, unless it is a hard stop. Record decisions worth a look, checks and deliverables as you make
+them. A line from the user like `Q3: …` is an answer: apply it and record it with `answer Q3 "TEXT"`.
+
+## Commands
+
+- `question "TEXT" --default "D" --affects "A" --reverse "R"`
+- `stop "TEXT"`
+- `answer Q3 "TEXT"`
+- `decision "TEXT" --why "W" --reverse "R"`
+- `deliverable "LABEL" --path P`
+- `check "WHAT IT PROVED" --command "C" --result pass|fail`

@@ -1,0 +1,22 @@
+{
+  "session_id": "11111111-2222-4333-8444-555555555555",
+  "transcript_path": "/home/user/.claude/projects/-home-user-project/11111111-2222-4333-8444-555555555555.jsonl",
+  "cwd": "/home/user/project",
+  "prompt_id": "39811ffc-72c1-40b8-a2c4-6db1b3bcba3f",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo ok && true",
+    "description": "Run echo ok && true"
+  },
+  "tool_response": {
+    "stdout": "ok",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "toolu_01RkezLaDT3Ne8Ty9dLFzC7a",
+  "duration_ms": 42
+}

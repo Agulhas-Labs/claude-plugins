@@ -1,0 +1,26 @@
+{
+  "session_id": "11111111-2222-4333-8444-555555555555",
+  "transcript_path": "/home/user/.claude/projects/-home-user-project/11111111-2222-4333-8444-555555555555.jsonl",
+  "cwd": "/home/user/project",
+  "prompt_id": "59f16879-9d78-40de-82c6-85162b2f117c",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "TaskUpdate",
+  "tool_input": {
+    "taskId": "1",
+    "status": "completed"
+  },
+  "tool_response": {
+    "success": true,
+    "taskId": "1",
+    "updatedFields": [
+      "status"
+    ],
+    "statusChange": {
+      "from": "in_progress",
+      "to": "completed"
+    }
+  },
+  "tool_use_id": "toolu_01BtwpAVGsVYXyGaq2fzxW2V",
+  "duration_ms": 2
+}

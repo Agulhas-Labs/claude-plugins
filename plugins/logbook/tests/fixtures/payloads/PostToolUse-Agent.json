@@ -1,0 +1,27 @@
+{
+  "session_id": "11111111-2222-4333-8444-555555555555",
+  "transcript_path": "/home/user/.claude/projects/-home-user-project/11111111-2222-4333-8444-555555555555.jsonl",
+  "cwd": "/home/user/project",
+  "prompt_id": "59f16879-9d78-40de-82c6-85162b2f117c",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "Simple reply task",
+    "prompt": "Reply with the single word done.",
+    "subagent_type": "general-purpose",
+    "run_in_background": true
+  },
+  "tool_response": {
+    "isAsync": true,
+    "status": "async_launched",
+    "agentId": "ac91f2c94fb8193d6",
+    "description": "Simple reply task",
+    "resolvedModel": "claude-haiku-4-5-20251001",
+    "prompt": "Reply with the single word done.",
+    "outputFile": "/tmp/claude/11111111-2222-4333-8444-555555555555/tasks/ac91f2c94fb8193d6.output",
+    "canReadOutputFile": true
+  },
+  "tool_use_id": "toolu_01LSBd2Zot343tCJEgpVi48s",
+  "duration_ms": 3
+}

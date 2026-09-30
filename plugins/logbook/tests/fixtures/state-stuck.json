@@ -1,0 +1,108 @@
+{
+  "schema": 1,
+  "session": "33333333-4444-4555-8666-777777777777",
+  "title": "CSV export for the reports page",
+  "titleSource": "model",
+  "started": "2026-01-05T09:00:00Z",
+  "updated": "2026-01-05T09:50:00Z",
+  "state": "live",
+  "settings": {
+    "theme": "light",
+    "accent": null,
+    "density": "comfortable",
+    "refreshSeconds": 10,
+    "stuckAfterSeconds": 600
+  },
+  "questions": [],
+  "steps": [
+    {
+      "id": "1",
+      "subject": "Read the reports module",
+      "status": "completed",
+      "updated": "2026-01-05T09:05:00Z"
+    },
+    {
+      "id": "2",
+      "subject": "Write the exporter",
+      "status": "completed",
+      "updated": "2026-01-05T09:22:00Z"
+    },
+    {
+      "id": "3",
+      "subject": "Add the download button",
+      "status": "in_progress",
+      "updated": "2026-01-05T09:50:00Z"
+    },
+    {
+      "id": "4",
+      "subject": "Test the export end to end",
+      "status": "pending",
+      "updated": "2026-01-05T09:02:00Z"
+    },
+    {
+      "id": "5",
+      "subject": "Update the README",
+      "status": "pending",
+      "updated": "2026-01-05T09:02:00Z"
+    }
+  ],
+  "commits": [
+    {
+      "hash": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+      "subject": "Exporter: reports to CSV, active reports only",
+      "branch": "csv-export",
+      "time": "2026-01-05T09:21:40Z",
+      "step": "2"
+    }
+  ],
+  "deliverables": [],
+  "checks": [
+    {
+      "id": "C1",
+      "proves": "The exporter writes one row per active report",
+      "command": "python -m unittest tests.test_export",
+      "result": "pass",
+      "time": "2026-01-05T09:21:00Z",
+      "source": "model",
+      "agent": null
+    },
+    {
+      "id": "C2",
+      "proves": "The download button returns a file named after the report",
+      "command": "python -m unittest tests.test_views.DownloadTests.test_filename_follows_the_report_title",
+      "result": "fail",
+      "time": "2026-01-05T09:44:00Z",
+      "source": "agent",
+      "agent": "ef56ab78cab12cd34"
+    }
+  ],
+  "decisions": [],
+  "agents": [
+    {
+      "id": "ef56ab78cab12cd34",
+      "type": "general-purpose",
+      "model": "claude-haiku-4-5-20251001",
+      "description": "Write the download view tests",
+      "started": "2026-01-05T09:38:00Z",
+      "ended": "2026-01-05T09:44:30Z",
+      "outcome": "failed",
+      "gates": [
+        {
+          "id": "G1",
+          "text": "download filename",
+          "result": "fail"
+        },
+        {
+          "id": "G2",
+          "text": "content type is text/csv",
+          "result": "pass"
+        }
+      ],
+      "tokens": null
+    }
+  ],
+  "changes": [],
+  "commands": [],
+  "commandsTotal": 0,
+  "tokens": null
+}
