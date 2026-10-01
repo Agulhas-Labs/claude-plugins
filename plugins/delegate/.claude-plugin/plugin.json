@@ -1,7 +1,7 @@
 {
   "name": "delegate",
   "displayName": "Delegate: Agents Sized to the Job",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Your Claude Code session leads a team of agents, each on the cheapest model that can do its job. Work isn't accepted until a command proves it, and a built-in report shows where your tokens went.",
   "author": {
     "name": "Agulhas Labs"
