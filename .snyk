@@ -1,0 +1,9 @@
+# Snyk policy for this repository.
+version: v1.25.0
+exclude:
+  global:
+    # Local agent worktrees: stale copies of this repository, not shipped.
+    - .claude/worktrees/**
+    # Test harnesses are not installed with the plugins. The one finding in them is a
+    # DevTools WebSocket message handler in a browser-proof script, not window.postMessage.
+    - plugins/*/tests/**
