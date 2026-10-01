@@ -90,11 +90,11 @@ def detach_kwargs():
     return {"start_new_session": True}
 
 
-def launch_detached(argv, env):
+def launch_detached(argv, env, stdin):
     """Start the summariser and forget it: it outlives this hook, and owns its own output file."""
     subprocess.Popen(
         argv,
-        stdin=subprocess.DEVNULL,
+        stdin=stdin,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         env=env,
@@ -455,7 +455,12 @@ def summariser_argv(model):
 
 
 def start_summariser(condensed, out_path, model, env):
-    """Write the condensed transcript where the detached run can read it, and start it.
+    """Start the detached run, with the condensed transcript on its stdin.
+
+    The transcript goes through an anonymous temporary file, never a named one: nothing holding the
+    conversation is left behind when the child is killed, and the child is given no path to it. The
+    child's handle keeps the file alive after this one is closed, and it goes when the child does.
+    It is written as bytes, so no platform translates the newlines on the way.
 
     The child is this same file under `--summarise`, so the summariser ships with the hook and needs
     no interpreter of its own. CACHE_GUARD_DISABLE keeps the guard out of the child's own session.
@@ -463,21 +468,14 @@ def start_summariser(condensed, out_path, model, env):
     directory = cache_guard.usable_state_dir(state_dir(env))
     if directory is None:  # a symlink, or somebody else's: the conversation is not written there
         raise OSError("the state directory is not usable")
-    handle, condensed_path = tempfile.mkstemp(dir=directory, prefix="condensed-", suffix=".txt")
-    with os.fdopen(handle, "w", encoding="utf-8") as f:
-        f.write(condensed)
-    try:
+    with tempfile.TemporaryFile(dir=directory) as f:
+        f.write(condensed.encode("utf-8"))
+        f.seek(0)
         launch_detached(
-            [sys.executable, os.path.abspath(__file__), "--summarise", condensed_path, out_path, model],
+            [sys.executable, os.path.abspath(__file__), "--summarise", out_path, model],
             dict(env, CACHE_GUARD_DISABLE="1"),
+            f,
         )
-    except Exception:
-        try:
-            os.remove(condensed_path)
-        except OSError:
-            pass
-        raise
-    return condensed_path
 
 
 def record_pending(payload, out_path, env):
@@ -563,53 +561,46 @@ def is_a_handoff(summary):
     return len(found) >= SECTIONS_REQUIRED
 
 
-def summarise(condensed_path, out_path, model):
-    """Summarise the condensed transcript onto the handoff already written. Never leaves the temp file."""
+def summarise(out_path, model):
+    """Summarise the condensed transcript, read from stdin, onto the handoff already written."""
+    condensed = sys.stdin.buffer.read().decode("utf-8")  # bytes, so no locale or newline translation
+    with open(out_path, encoding="utf-8") as f:
+        document = f.read()
+    summary, failure = "", None
     try:
-        with open(condensed_path, encoding="utf-8") as f:
-            condensed = f.read()
-        with open(out_path, encoding="utf-8") as f:
-            document = f.read()
-        summary, failure = "", None
-        try:
-            returncode, stdout = run_claude(summariser_argv(model), framed(condensed), SUMMARY_TIMEOUT)
-            summary = (stdout or "").strip()
-            if returncode != 0:
-                failure = f"claude exited {returncode}"
-            elif not summary:
-                failure = "the summariser returned nothing"
-            elif not is_a_handoff(summary):
-                failure = "the model did not return a handoff"
-        except subprocess.TimeoutExpired:
-            failure = f"timed out after {SUMMARY_TIMEOUT} s"
-        except Exception as exc:
-            failure = short_reason(exc)
-        if failure:
-            write_atomically(
-                out_path,
-                replace_summary_line(
-                    document,
-                    f"Summary failed ({failure}); the extracted sections below are complete.",
-                ),
-            )
-        else:
-            title, body = split_document(document)
-            write_atomically(
-                out_path,
-                f"{title}\n\nSummary written by {model}.\n\n{summary}\n\n"
-                f"## Extracted from the transcript\n\n{body}\n",
-            )
-    finally:
-        try:
-            os.remove(condensed_path)
-        except OSError:
-            pass
+        returncode, stdout = run_claude(summariser_argv(model), framed(condensed), SUMMARY_TIMEOUT)
+        summary = (stdout or "").strip()
+        if returncode != 0:
+            failure = f"claude exited {returncode}"
+        elif not summary:
+            failure = "the summariser returned nothing"
+        elif not is_a_handoff(summary):
+            failure = "the model did not return a handoff"
+    except subprocess.TimeoutExpired:
+        failure = f"timed out after {SUMMARY_TIMEOUT} s"
+    except Exception as exc:
+        failure = short_reason(exc)
+    if failure:
+        write_atomically(
+            out_path,
+            replace_summary_line(
+                document,
+                f"Summary failed ({failure}); the extracted sections below are complete.",
+            ),
+        )
+    else:
+        title, body = split_document(document)
+        write_atomically(
+            out_path,
+            f"{title}\n\nSummary written by {model}.\n\n{summary}\n\n"
+            f"## Extracted from the transcript\n\n{body}\n",
+        )
 
 
 def main(argv):
-    if len(argv) == 5 and argv[1] == "--summarise":
+    if len(argv) == 4 and argv[1] == "--summarise":
         try:
-            summarise(argv[2], argv[3], argv[4])
+            summarise(argv[2], argv[3])
         except Exception:
             pass
 

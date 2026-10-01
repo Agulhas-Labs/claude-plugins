@@ -15,7 +15,9 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+import warnings
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
@@ -123,6 +125,7 @@ class HandoffTestCase(unittest.TestCase):
             "PATH": "/nowhere",
         }
         self.launched = []
+        self.handles = []
 
     def transcript(self, entries, name="transcript.jsonl"):
         path = os.path.join(self.tmp.name, name)
@@ -140,9 +143,21 @@ class HandoffTestCase(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def with_a_summariser(self):
-        """`claude` is on the PATH and the detached run is recorded rather than started."""
+        """`claude` is on the PATH and the detached run is recorded rather than started.
+
+        Each launch is recorded as (argv, env, the text on its stdin). The stdin is read at the moment
+        of the launch, because the parent closes its copy as soon as the child has one.
+        """
         self.patch("find_claude", lambda env: "/usr/bin/claude")
-        self.patch("launch_detached", lambda argv, env: self.launched.append((argv, env)))
+        self.patch("launch_detached", self.record_launch)
+
+    def record_launch(self, argv, env, stdin=None):
+        self.launched.append((argv, env, None if stdin is None else stdin.read().decode("utf-8")))
+        self.handles.append(stdin)
+
+    def summariser_stdin(self, text):
+        """What the detached half finds on its stdin: the condensed transcript, as UTF-8 bytes."""
+        return io.TextIOWrapper(io.BytesIO(text.encode("utf-8")), encoding="ascii")
 
     def written_handoffs(self):
         return sorted(name for name in os.listdir(self.handoffs) if name.endswith(".md"))
@@ -357,17 +372,35 @@ class WriteHandoffTests(HandoffTestCase):
         self.assertIn("## Files edited\n\n- /work/project/a.py", document)
 
         self.assertEqual(len(self.launched), 1)
-        argv, env = self.launched[0]
-        self.assertEqual(argv[0], sys.executable)
-        self.assertEqual(argv[1], os.path.abspath(handoff.__file__))
-        self.assertEqual(argv[2], "--summarise")
-        self.assertEqual(argv[4], result["path"])
-        self.assertEqual(argv[5], "haiku")
+        argv, env, condensed = self.launched[0]
+        self.assertEqual(argv, [sys.executable, os.path.abspath(handoff.__file__), "--summarise",
+                                result["path"], "haiku"])
         self.assertEqual(env["CACHE_GUARD_DISABLE"], "1")
-        condensed = self.read(argv[3])
-        self.assertEqual(os.path.dirname(argv[3]), self.state)
         self.assertIn("USER: fix the parser", condensed)
         self.assertIn("ASSISTANT: Fixed the parser.", condensed)
+
+    def test_the_condensed_transcript_reaches_the_child_on_stdin_intact(self):
+        """Every character, in UTF-8, from the start: the child is given no path to read it from."""
+        self.with_a_summariser()
+        text = "USER: café — 東京 \u2603\r\nline two\n" + "x" * 2000 + "\nTHE-END\n"
+        with self.fake_condense(text):
+            handoff.write_handoff(self.payload(), NOW, self.env)
+        argv, _, condensed = self.launched[0]
+        self.assertEqual(condensed, text)
+        self.assertFalse(any(os.path.exists(arg) and arg.startswith(self.state) for arg in argv))
+
+    def test_no_condensed_transcript_is_left_in_the_state_directory(self):
+        """A named file holding the conversation outlives a summariser that is killed before it ends."""
+        self.with_a_summariser()
+        handoff.write_handoff(self.payload(), NOW, self.env)
+        self.assertEqual(len(self.launched), 1)
+        self.assertEqual([name for name in os.listdir(self.state) if name.startswith("condensed-")], [])
+
+    def test_the_parents_copy_of_the_transcript_is_closed_once_the_child_has_one(self):
+        self.with_a_summariser()
+        handoff.write_handoff(self.payload(), NOW, self.env)
+        self.assertEqual(len(self.handles), 1)
+        self.assertTrue(self.handles[0].closed)
 
     def test_the_cheap_model_summarises_up_to_a_hundred_and_fifty_thousand_tokens(self):
         self.with_a_summariser()
@@ -391,7 +424,7 @@ class WriteHandoffTests(HandoffTestCase):
         result = handoff.write_handoff(self.payload(), NOW, env)
         self.assertEqual(result["summary_model"], "sonnet")
         self.assertIsNotNone(result["est_cost"])
-        self.assertEqual(self.launched[0][0][5], "sonnet")
+        self.assertEqual(self.launched[0][0][4], "sonnet")
 
         env = dict(self.env, CACHE_GUARD_HANDOFF_MODEL="skunkworks-preview")
         result = handoff.write_handoff(self.payload(), NOW + timedelta(seconds=1), env)
@@ -411,7 +444,7 @@ class WriteHandoffTests(HandoffTestCase):
 
     def test_without_claude_on_the_path_the_extracted_handoff_is_the_whole_of_it(self):
         self.patch("find_claude", lambda env: None)
-        self.patch("launch_detached", lambda argv, env: self.fail("started a process"))
+        self.patch("launch_detached", lambda argv, env, stdin=None: self.fail("started a process"))
         result = handoff.write_handoff(self.payload(), NOW, self.env)
         self.assertIsNone(result["summary_model"])
         self.assertEqual(result["no_summary_reason"], "claude not found on PATH")
@@ -447,10 +480,11 @@ class WriteHandoffTests(HandoffTestCase):
 
     def test_a_child_that_finishes_first_keeps_its_summary(self):
         """The pending line is on disk before the child starts, so the parent never writes over it."""
-        def launcher(argv, env):
+        def launcher(argv, env, stdin=None):
             self.launched.append((argv, env))
-            with mock.patch.object(handoff, "open_claude", lambda a: FakeClaude(stdout=HANDOFF_REPLY)):
-                handoff.summarise(argv[3], argv[4], argv[5])
+            with mock.patch.object(handoff, "open_claude", lambda a: FakeClaude(stdout=HANDOFF_REPLY)), \
+                    mock.patch.object(handoff.sys, "stdin", self.summariser_stdin(stdin.read().decode("utf-8"))):
+                handoff.summarise(argv[3], argv[4])
 
         self.patch("find_claude", lambda env: "/usr/bin/claude")
         self.patch("launch_detached", launcher)
@@ -461,7 +495,8 @@ class WriteHandoffTests(HandoffTestCase):
         self.assertIn("## Extracted from the transcript", document)
 
     def test_a_launch_that_fails_leaves_no_promise_of_a_summary(self):
-        def launcher(argv, env):
+        def launcher(argv, env, stdin=None):
+            self.handles.append(stdin)
             raise OSError("no fork for you")
 
         self.patch("find_claude", lambda env: "/usr/bin/claude")
@@ -470,6 +505,7 @@ class WriteHandoffTests(HandoffTestCase):
         self.assertEqual(result["no_summary_reason"], "the summariser could not be started")
         self.assertNotIn("Summary:", self.read(result["path"]))
         self.assertEqual(os.listdir(self.state), [])
+        self.assertTrue(self.handles[0].closed)
 
     def test_a_transcript_too_long_to_summarise_keeps_the_first_request_and_the_end(self):
         self.with_a_summariser()
@@ -478,7 +514,7 @@ class WriteHandoffTests(HandoffTestCase):
         with self.fake_condense(body, meta):
             result = handoff.write_handoff(self.payload(), NOW, self.env)
         self.assertLessEqual(result["est_tokens"], 800_000)
-        condensed = self.read(self.launched[0][0][3])
+        condensed = self.launched[0][2]
         self.assertTrue(condensed.startswith("USER: first request"))
         self.assertIn("earlier turns dropped", condensed)
         self.assertTrue(condensed.endswith("THE-VERY-END\n"))
@@ -543,8 +579,18 @@ class DetachTests(HandoffTestCase):
     def popen_kwargs(self, platform):
         self.patch("PLATFORM", platform)
         with mock.patch.object(handoff.subprocess, "Popen") as popen:
-            handoff.launch_detached(["claude"], {"PATH": "/nowhere"})
+            handoff.launch_detached(["claude"], {"PATH": "/nowhere"}, self.transcript_handle)
         return popen.call_args[1]
+
+    transcript_handle = object()
+
+    def test_the_child_reads_the_transcript_on_stdin_and_writes_to_nothing(self):
+        for platform in ("nt", "posix"):
+            with self.subTest(platform=platform):
+                kwargs = self.popen_kwargs(platform)
+                self.assertIs(kwargs["stdin"], self.transcript_handle)
+                self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
+                self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
 
     def test_on_windows_the_child_is_detached_by_creation_flags(self):
         kwargs = self.popen_kwargs("nt")
@@ -561,6 +607,32 @@ class DetachTests(HandoffTestCase):
         self.assertIs(kwargs["start_new_session"], True)
 
 
+class RealLaunchTests(HandoffTestCase):
+    """The parent half against a real child process: the transcript gets there, and nothing is left."""
+
+    def test_a_real_child_reads_the_whole_transcript_from_its_stdin(self):
+        received = os.path.join(self.tmp.name, "received.txt")
+        child = os.path.join(self.tmp.name, "child.py")
+        with open(child, "w", encoding="utf-8") as f:
+            f.write("import os, sys\n"
+                    "data = sys.stdin.buffer.read()\n"
+                    "with open(sys.argv[2] + '.part', 'wb') as out:\n"
+                    "    out.write(data)\n"
+                    "os.replace(sys.argv[2] + '.part', sys.argv[2])\n")
+        text = "USER: café — 東京\r\n" + "y" * 100_000 + "\nTHE-END\n"
+        # a detached child is never waited on, by design, so its Popen goes away with the child running
+        with mock.patch.object(handoff, "__file__", child), warnings.catch_warnings():
+            warnings.simplefilter("ignore", ResourceWarning)
+            handoff.start_summariser(text, received, "haiku", self.env)
+        for _ in range(200):  # the child is detached: nothing to wait on but its output
+            if os.path.exists(received):
+                break
+            time.sleep(0.05)
+        with open(received, "rb") as f:
+            self.assertEqual(f.read().decode("utf-8"), text)
+        self.assertEqual(os.listdir(self.state), [])
+
+
 class SummariseTests(HandoffTestCase):
     def setUp(self):
         super().setUp()
@@ -569,10 +641,8 @@ class SummariseTests(HandoffTestCase):
         self.prepare()
 
     def prepare(self):
-        """The two files the detached half starts from: the condensed transcript and the handoff."""
-        self.condensed_path = os.path.join(self.state, "condensed-abc.txt")
-        with open(self.condensed_path, "w", encoding="utf-8") as f:
-            f.write("USER: fix the parser\n\nASSISTANT: Fixed it.\n")
+        """What the detached half starts from: the condensed transcript on stdin, and the handoff."""
+        self.condensed = "USER: fix the parser\n\nASSISTANT: Fixed it.\n"
         self.out_path = os.path.join(self.handoffs, "20260102-120000.md")
         document = handoff.extracted_document(META, NOW)
         with open(self.out_path, "w", encoding="utf-8") as f:
@@ -586,8 +656,9 @@ class SummariseTests(HandoffTestCase):
             opened.append(argv)
             return process
 
-        with mock.patch.object(handoff, "open_claude", opener):
-            handoff.summarise(self.condensed_path, self.out_path, "haiku")
+        with mock.patch.object(handoff, "open_claude", opener), \
+                mock.patch.object(handoff.sys, "stdin", self.summariser_stdin(self.condensed)):
+            handoff.summarise(self.out_path, "haiku")
         return opened[0] if opened else None
 
     def test_a_summary_is_written_above_the_extracted_sections(self):
@@ -601,7 +672,6 @@ class SummariseTests(HandoffTestCase):
         self.assertLess(document.index("Fix the parser."), document.index("## Extracted from the transcript"))
         self.assertLess(document.index("## Extracted from the transcript"), document.index("## What was asked"))
         self.assertIn("## Files edited\n\n- /work/project/a.py", document)
-        self.assertFalse(os.path.exists(self.condensed_path))
 
         text, timeout = process.calls[0]
         self.assertEqual(argv[:4], ["claude", "-p", "--model", "haiku"])
@@ -641,7 +711,6 @@ class SummariseTests(HandoffTestCase):
                 self.assertNotIn("I don't see a condensed transcript", document)
                 self.assertIn("## What was asked\n\n1. make the thing", document)
                 self.assertIn("## Where it stopped", document)
-                self.assertFalse(os.path.exists(self.condensed_path))
 
     def test_three_of_the_seven_headings_are_enough_to_be_a_handoff(self):
         self.summarise_with(FakeClaude(stdout="## Goal\n\nx\n\n## NEXT STEP\n\ny\n\n# Current state\n\nz\n"))
@@ -653,7 +722,6 @@ class SummariseTests(HandoffTestCase):
         self.assertIn("Summary failed (claude exited 1); the extracted sections below are complete.", document)
         self.assertNotIn("Summary: being written", document)
         self.assertIn("## What was asked\n\n1. make the thing", document)
-        self.assertFalse(os.path.exists(self.condensed_path))
 
     def test_a_summariser_that_times_out_is_killed_with_everything_it_started(self):
         # the call that reaps the killed process fails in its turn, on a pipe a grandchild still holds
@@ -667,7 +735,6 @@ class SummariseTests(HandoffTestCase):
         document = self.read(self.out_path)
         self.assertIn("Summary failed (timed out after 300 s)", document)
         self.assertIn("## Where it stopped", document)
-        self.assertFalse(os.path.exists(self.condensed_path))
 
     def test_on_windows_a_timed_out_summariser_is_killed_directly(self):
         process = FakeClaude(timeouts=1, on_reap=ValueError("flush of closed file"))
@@ -676,10 +743,23 @@ class SummariseTests(HandoffTestCase):
         self.assertTrue(process.killed)
         self.assertIn("Summary failed (timed out after 300 s)", self.read(self.out_path))
 
+    def test_the_transcript_is_read_from_stdin_as_utf8_whatever_the_stdin_encoding(self):
+        """A Windows console or a C locale gives stdin another encoding; the hook always writes UTF-8."""
+        self.condensed = "USER: café — 東京\r\n\nASSISTANT: done ☃\n"
+        process = FakeClaude(stdout=HANDOFF_REPLY)
+        self.summarise_with(process)
+        self.assertIn(f"<transcript>\n{self.condensed}\n</transcript>", process.calls[0][0])
+
+    def test_the_detached_half_is_started_with_the_handoff_and_the_model_only(self):
+        with mock.patch.object(handoff, "summarise") as summarise:
+            handoff.main(["handoff.py", "--summarise", self.out_path, "haiku"])
+            summarise.assert_called_once_with(self.out_path, "haiku")
+            handoff.main(["handoff.py", "--summarise", "condensed.txt", self.out_path, "haiku"])
+            summarise.assert_called_once()
+
     def test_a_summariser_that_returns_nothing_is_a_failure_too(self):
         self.summarise_with(FakeClaude(stdout="   "))
         self.assertIn("Summary failed (the summariser returned nothing)", self.read(self.out_path))
-        self.assertFalse(os.path.exists(self.condensed_path))
 
 
 class HandoffWordTests(HandoffTestCase):

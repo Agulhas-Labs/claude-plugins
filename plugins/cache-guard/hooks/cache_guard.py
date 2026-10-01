@@ -50,7 +50,9 @@ UNDER_A_CENT = "under $0.01"
 MARKER_NAME = re.compile(r"[A-Za-z0-9_-]+\Z")  # a sanitised session id, and nothing else
 # The plugin's other files, which carry a suffix. `announced-` is no longer written — the session-start
 # announcement is made to every fresh session inside the freshness window — but it stays in the sweep so
-# that the ones an earlier version left behind are cleared out like everything else.
+# that the ones an earlier version left behind are cleared out like everything else. `condensed-` is the
+# same: the summariser now reads the transcript from an anonymous file on its stdin, but an earlier
+# version wrote it to a named one, and a summariser killed before it finished left that file here.
 SWEPT_PREFIXES = ("announced-", "condensed-", "pending-")
 HANDOFF_PENDING_PREFIX = "pending-"  # one per session that has a background summary still running
 # A record's second line, written when a session took the record over from the session that started the
