@@ -129,6 +129,7 @@ All optional. Set them under `env` in `~/.claude/settings.json` or a repository'
 | `LOGBOOK_DENSITY` | `comfortable` | Row spacing (`comfortable`, `compact`). |
 | `LOGBOOK_STUCK_MINUTES` | `10` | How long without an event before a step in progress is shown as stuck. |
 | `LOGBOOK_RETENTION_DAYS` | `14` | Boards older than this are removed when a session starts. |
+| `LOGBOOK_ALLOW_ANY_PATH` | none | Set to `1` to record in a project (or keep the plugin's data) outside your home folder and the temporary folder. Without it, such a project gets no board. |
 
 ## Cost
 

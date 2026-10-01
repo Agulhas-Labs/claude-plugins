@@ -109,6 +109,8 @@ COMMAND_RESULTS = ("pass", "fail", "background")
 COMMAND_ROWS = 200
 # The folder under `CLAUDE_PLUGIN_DATA` where the gate counts each session's work calls, one byte a call.
 CALLS_DIR = "calls"
+# Set to 1 to use a project or data folder outside the home and temporary folders (see `contained`).
+ALLOW_ANY_PATH = "LOGBOOK_ALLOW_ANY_PATH"
 # A command that runs a common test runner. `LOGBOOK_TESTS` adds more. The runner has to be
 # the command and not one of its arguments (`pip install pytest` installs, it does not test), so it
 # is looked for where a command can begin: at the start, or after `;`, `&`, `|`, `(` or a new line,
@@ -176,6 +178,25 @@ def board_dir(project, session):
     if not SESSION.fullmatch(session) or set(session) == {"."} or STARTING in session:
         raise ValueError(f"not a usable session id: {session!r}")
     return os.path.join(project, BOARDS_DIR, session)
+
+
+def contained(path, env):
+    """The real path of `path` when it lies inside the home folder or the temporary folder, else None.
+
+    `LOGBOOK_ALLOW_ANY_PATH=1` in `env` adds the root of the file system, so a folder anywhere is used.
+    """
+    roots = [os.path.expanduser("~"), tempfile.gettempdir()]
+    if env.get(ALLOW_ANY_PATH) == "1":
+        roots.append(os.path.abspath(os.sep))
+    resolved = os.path.realpath(path)
+    for root in roots:
+        root = os.path.realpath(root)
+        try:
+            if os.path.commonpath([resolved, root]) == root:
+                return resolved
+        except ValueError:
+            continue
+    return None
 
 
 def temp_mkstemp_kwargs(path):
@@ -312,9 +333,11 @@ def test_pattern(env=None):
     """
     env = os.environ if env is None else env
     value = env.get("LOGBOOK_TESTS")
-    items = [item.strip() for item in value.split(",")] if isinstance(value, str) else []
-    items = [item for item in items if item]
-    return re.compile("|".join(re.escape(item) for item in items)) if items else None
+    escaped = []
+    for item in value.split(",") if isinstance(value, str) else []:
+        if item.strip():
+            escaped.append(re.escape(item.strip()))
+    return re.compile("|".join(escaped)) if escaped else None
 
 
 def is_test(command, pattern=None):
@@ -1364,7 +1387,7 @@ def start(project, session, now, title, env=None, template=None, early=()):
         write_log(board, now, fields, early)
         render(board, now, env, template)
         return board
-    building = os.path.join(boards, f"{session}{STARTING}{os.getpid()}-{os.urandom(4).hex()}")
+    building = f"{board}{STARTING}{os.getpid()}-{os.urandom(4).hex()}"
     os.mkdir(building)
     try:
         with open(os.path.join(building, MARKER_FILE), "w", encoding="utf-8") as f:
@@ -1482,13 +1505,17 @@ def remove_board(folder):
 
 
 def calls_file(env, session):
-    """The file in which `gate.sh` counts a session's work calls, or None without `CLAUDE_PLUGIN_DATA`.
+    """The file in which `gate.sh` counts a session's work calls, or None without a usable `CLAUDE_PLUGIN_DATA`
+    (see `contained`).
 
     The session id becomes a path component of a file that is read and removed, so it is checked
     here as `board_dir` checks it, and a folder of counts that is a symbolic link is never used.
     """
     data = env.get("CLAUDE_PLUGIN_DATA")
     if not isinstance(data, str) or not data:
+        return None
+    data = contained(data, env)
+    if data is None:
         return None
     session = str(session)
     if not SESSION.fullmatch(session) or set(session) == {"."}:
@@ -1520,6 +1547,22 @@ def calls_changed(env, session):
         return False
 
 
+def forget_calls(env, session):
+    """Remove the gate's count of this session's work calls.
+
+    The gate starts the hook's handler on every work call while the count is at the threshold or over
+    it, so the count goes once a start has been tried, whether or not it worked. A board that cannot
+    be started (a project that cannot be written to, a boards folder that is refused) is then tried
+    again a threshold of calls later, not on every call.
+    """
+    path = calls_file(env, session)
+    if path:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def prune_calls(now, env):
     """Remove the gate's count files last written before the retention began. Never raises.
 
@@ -1529,6 +1572,9 @@ def prune_calls(now, env):
     try:
         data = env.get("CLAUDE_PLUGIN_DATA")
         if not isinstance(data, str) or not data:
+            return
+        data = contained(data, env)
+        if data is None:
             return
         folder = os.path.join(data, CALLS_DIR)
         if os.path.islink(folder) or not os.path.isdir(folder):
@@ -1650,7 +1696,10 @@ def entry_id(items, **wanted):
 
 
 def project_of(args):
-    return os.path.abspath(args.project or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
+    project = contained(os.path.abspath(args.project or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()), os.environ)
+    if project is None:
+        raise Refused(f"the project folder is outside the home and temporary folders; set {ALLOW_ANY_PATH}=1 to use it")
+    return project
 
 
 def command_start(args, board, now):
