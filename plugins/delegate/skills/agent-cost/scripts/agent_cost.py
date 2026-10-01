@@ -330,9 +330,18 @@ def iter_context_files(projects_dir):
 
 def contexts_for_transcript(path):
     """--transcript mode: a single named transcript. A main session file also pulls in its
-    subagents/. An agent-*.jsonl path is treated as a single subagent context."""
-    path = os.path.abspath(path)
+    subagents/. An agent-*.jsonl path is treated as a single subagent context. The file is found
+    the way --projects mode finds every transcript, by listing its folder for `*.jsonl` and taking
+    the one of that name, so the report opens only what a listing for its own patterns returned: a
+    name that is not a transcript's raises ValueError, and a missing transcript gives no contexts."""
+    folder = glob.escape(os.path.dirname(os.path.abspath(path)))
     base = os.path.basename(path)
+    if not base.endswith(".jsonl"):
+        raise ValueError(f"{path} is not a transcript: a transcript is a .jsonl file")
+    found = [t for t in glob.glob(os.path.join(folder, "*.jsonl")) if os.path.basename(t) == base]
+    if not found:
+        return []
+    path = found[0]
     if base.startswith("agent-"):
         # .../<project>/<session>/subagents/agent-X.jsonl
         session_dir = os.path.dirname(os.path.dirname(path))
@@ -1176,7 +1185,10 @@ def main(argv=None):
     since = parse_when(args.since, now)
     until = parse_when(args.until, now) if args.until else now
 
-    loaded = load_all(args.projects, args.transcript, since, until, project=args.project)
+    try:
+        loaded = load_all(args.projects, args.transcript, since, until, project=args.project)
+    except ValueError as e:
+        p.error(str(e))
     if not any(l.window_turns for l in loaded):
         where = args.transcript or args.projects
         if args.project and not args.transcript:

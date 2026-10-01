@@ -217,7 +217,8 @@ agent-cost [--since X] [--until X] [--projects DIR] [--transcript PATH] [--top N
 
 - `--since` and `--until` take `today`, `yesterday`, `<N>d`, a date or an ISO datetime. The default is
   the last 7 days.
-- `--transcript` reports on one session, with its subagents, or on one subagent file.
+- `--transcript` reports on one session, with its subagents, or on one subagent file. A transcript
+  is a `.jsonl` file; any other name is refused before it is read.
 - `--sections` prints only the sections you name, such as `--sections totals,main,cold`. Any prefix of a
   heading works.
 - `--tools` adds the Tools called section.

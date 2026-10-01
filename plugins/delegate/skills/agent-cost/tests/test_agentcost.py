@@ -858,6 +858,39 @@ class ProjectFilterTests(unittest.TestCase):
         self.assertNotIn("=== Totals ===", buf.getvalue())
 
 
+class TranscriptArgumentTests(unittest.TestCase):
+    """--transcript opens only a file that a listing of its folder for `*.jsonl` returned."""
+    def setUp(self):
+        self.fx = FixtureRoot(self)
+        self.session = self.fx.main_session(entries=[assistant("m1", ts_str(BASE), usage(cache_read=5000))])
+        self.fx.subagent(agent_type="builder", entries=[assistant("m1", ts_str(BASE), usage(cache_read=3000))])
+
+    def test_a_session_named_by_path_is_reported_with_its_subagents(self):
+        loaded = ac.load_all(None, self.session, BASE, BASE)
+        self.assertEqual(sorted((l.ctx.kind, l.ctx.agent_type) for l in loaded),
+                         [("main", "main"), ("subagent", "builder")])
+
+    def test_a_name_that_is_not_a_transcripts_is_refused_before_it_is_read(self):
+        # The same content under another name: a transcript is a .jsonl file, and the report never
+        # opens a file that a listing of its folder for that pattern did not return.
+        copy = self.session[:-len(".jsonl")] + ".txt"
+        shutil.copyfile(self.session, copy)
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err), self.assertRaises(SystemExit) as raised:
+            ac.main(["--transcript", copy, "--sections", "totals"])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("is not a transcript", err.getvalue())
+        self.assertNotIn("=== Totals ===", out.getvalue())
+
+    def test_a_transcript_that_does_not_exist_reports_nothing_rather_than_failing(self):
+        missing = os.path.join(os.path.dirname(self.session), "gone.jsonl")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            ac.main(["--transcript", missing, "--sections", "totals"])
+        self.assertIn("nothing to report", out.getvalue())
+        self.assertIn(missing, out.getvalue())
+
+
 class EndToEndTests(unittest.TestCase):
     def test_main_prints_every_section_header(self):
         fx = FixtureRoot(self)

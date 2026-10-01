@@ -33,7 +33,8 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/agent_cost.py" [--since X] [--until X] [--p
 - `--project NAME` reports on one project: its path, or the path's trailing part (`App`,
   `work/App`). `--projects` is not that filter: it is the folder that holds every project's transcripts.
 - `--transcript PATH` reports on one session (its `subagents/` come along) or one subagent file,
-  ignoring the window — use it to inspect a single agent's start or shape.
+  ignoring the window — use it to inspect a single agent's start or shape. A transcript is a
+  `.jsonl` file; any other name is refused before it is read.
 - `--sections NAMES` prints only those sections, comma-separated, each named by any prefix of it:
   `totals, per-day, main-sessions, concentration, turn-shape, cold-cache, what-fills-the-context,
   fixed-start, largest-contexts, tools-called`. An unknown name fails before any transcript is read
