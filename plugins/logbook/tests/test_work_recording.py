@@ -520,18 +520,26 @@ class Derived(unittest.TestCase):
         state = self.derive(*(self.command(1, text) for text in begun))
         self.assertEqual([row["command"] for row in state["commands"] if not row["test"]], [])
 
-    def test_the_tests_setting_adds_a_pattern(self):
-        pattern = board.test_pattern({"LOGBOOK_TESTS": r"^bats\b"})
-        state = self.derive(self.command(1, "bats spec"), self.command(2, "echo bats"), tests=pattern)
-        self.assertEqual([row["test"] for row in state["commands"]], [True, False])
+    def test_the_tests_setting_adds_literal_text_to_look_for(self):
+        pattern = board.test_pattern({"LOGBOOK_TESTS": " bats spec , ,./check.sh"})
+        commands = ("bats spec/a", "./check.sh --all", "echo bats", "BATS SPEC")
+        state = self.derive(*(self.command(n, text) for n, text in enumerate(commands, 1)), tests=pattern)
+        self.assertEqual([row["test"] for row in state["commands"]], [True, True, False, False])
         self.assertFalse(self.derive(self.command(1, "bats spec"))["commands"][0]["test"])
 
-    def test_an_invalid_tests_setting_means_none_and_raises_nothing(self):
-        for value in ("(", "[z-a]", "", "   "):
+    def test_an_empty_tests_setting_means_none(self):
+        for value in ("", "   ", ",", " , "):
             self.assertIsNone(board.test_pattern({"LOGBOOK_TESTS": value}))
-        env = {"LOGBOOK_TESTS": "("}
-        state = self.derive(self.command(1, "pytest"), self.command(2, "("), tests=board.test_pattern(env))
-        self.assertEqual([row["test"] for row in state["commands"]], [True, False])
+        self.assertIsNone(board.test_pattern({}))
+
+    def test_the_tests_setting_is_matched_as_written_never_as_a_regular_expression(self):
+        dotted = board.test_pattern({"LOGBOOK_TESTS": "py3.11"})
+        self.assertFalse(board.is_test("py3x11 run", dotted))
+        self.assertTrue(board.is_test("tox -e py3.11", dotted))
+        catastrophic = board.test_pattern({"LOGBOOK_TESTS": "(a+)+$, ("})
+        self.assertTrue(board.is_test("echo '(a+)+$'", catastrophic))
+        self.assertTrue(board.is_test("(", catastrophic))
+        self.assertFalse(board.is_test("a" * 40 + "!", catastrophic))
 
     def test_early_events_are_applied_first_in_log_order(self):
         state = self.derive(

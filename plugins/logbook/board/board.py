@@ -304,15 +304,17 @@ def settings(env=None):
 
 
 def test_pattern(env=None):
-    """`LOGBOOK_TESTS` compiled: more commands that are test runs. None when unset, empty or invalid."""
+    """`LOGBOOK_TESTS` compiled: more commands that are test runs, or None when it names nothing.
+
+    The setting is a comma-separated list of literal text, not a regular expression: a command is a
+    test run when it contains any item, case-sensitively. Space around an item is trimmed and an
+    empty item is dropped.
+    """
     env = os.environ if env is None else env
     value = env.get("LOGBOOK_TESTS")
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        return re.compile(value)
-    except (re.error, RecursionError, OverflowError):
-        return None
+    items = [item.strip() for item in value.split(",")] if isinstance(value, str) else []
+    items = [item for item in items if item]
+    return re.compile("|".join(re.escape(item) for item in items)) if items else None
 
 
 def is_test(command, pattern=None):
