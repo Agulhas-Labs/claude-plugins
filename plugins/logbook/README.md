@@ -111,7 +111,8 @@ A command counts as a test run when it runs a common test runner (`pytest`, `swi
 `go test`, `cargo test` and the like), including after `cd there &&`, behind `uv run`, or passed to a
 wrapper after `--`. Naming a runner as an argument doesn't count, so `pip install pytest` isn't a test
 run. The command is matched as text rather than parsed, so a runner inside a quoted string after a `;`
-or `|` counts too. Add your own runners with `LOGBOOK_TESTS`.
+or `|` counts too. Add your own runners with `LOGBOOK_TESTS`: a command containing any of its
+items is a test run.
 
 ## Settings
 
@@ -122,12 +123,13 @@ All optional. Set them under `env` in `~/.claude/settings.json` or a repository'
 | --- | --- | --- |
 | `LOGBOOK_CALLS` | `10` | File changes and shell commands after which a board starts mid-turn. |
 | `LOGBOOK_STEPS` | `5` | Task-list items that start a board. |
-| `LOGBOOK_TESTS` | none | A regular expression: a command it matches is a test run, beside the built-in runners. |
+| `LOGBOOK_TESTS` | none | Comma-separated text, matched literally and case-sensitively (not a regular expression): a command containing any item is a test run, beside the built-in runners. |
 | `LOGBOOK_THEME` | `system` | The mode a board opens in (`system`, `light`, `dark`). Your choice in the page overrides it. |
 | `LOGBOOK_ACCENT` | none | An accent colour, as `#rgb` or `#rrggbb`. |
 | `LOGBOOK_DENSITY` | `comfortable` | Row spacing (`comfortable`, `compact`). |
 | `LOGBOOK_STUCK_MINUTES` | `10` | How long without an event before a step in progress is shown as stuck. |
 | `LOGBOOK_RETENTION_DAYS` | `14` | Boards older than this are removed when a session starts. |
+| `LOGBOOK_ALLOW_ANY_PATH` | none | Set to `1` to record in a project (or keep the plugin's data) outside your home folder and the temporary folder. Without it, such a project gets no board. |
 
 ## Cost
 

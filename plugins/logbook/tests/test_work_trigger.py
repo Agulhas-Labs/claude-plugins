@@ -336,10 +336,11 @@ class ALinkedCountFolder(WorkCalls):
 class TheCountsName(unittest.TestCase):
 
     def test_a_session_id_that_is_not_one_names_no_count_file(self):
-        env = {"CLAUDE_PLUGIN_DATA": "/nowhere"}
+        nowhere = os.path.join(tempfile.gettempdir(), "nowhere")
+        env = {"CLAUDE_PLUGIN_DATA": nowhere}
         for session in ("../escape", "a/b", "..", ".", "", "a b", "x\n"):
             self.assertIsNone(board.calls_file(env, session), repr(session))
-        self.assertEqual(board.calls_file(env, SESSION), os.path.join("/nowhere", "calls", SESSION))
+        self.assertEqual(board.calls_file(env, SESSION), os.path.join(os.path.realpath(nowhere), "calls", SESSION))
 
 
 class CountsLeftBehind(WorkCalls):

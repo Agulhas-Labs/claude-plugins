@@ -520,22 +520,6 @@ def read_transcript(path, skip, stop=(), env=None):
     return prompt, found
 
 
-def forget_calls(env, session):
-    """Remove the gate's count of this session's work calls.
-
-    The gate starts this handler on every work call while the count is at the threshold or over it,
-    so the count goes once a start has been tried, whether or not it worked. A board that cannot be
-    started (a project that cannot be written to, a boards folder that is refused) is then tried
-    again a threshold of calls later, not on every call.
-    """
-    path = board.calls_file(env, session)
-    if path:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
-
-
 def unrecorded(log, found):
     """`found` without the changes and commands of a call `log` already holds, by its tool-use id.
 
@@ -563,7 +547,7 @@ def start(project, session, folder, payload, env, now):
     finally:
         # Whether or not the board started: a hook running beside this one still finds the count
         # while the board is being built, and one that comes after a failed start does not.
-        forget_calls(env, session)
+        board.forget_calls(env, session)
         board.prune_calls(now, env)
     if published is None:
         found = unrecorded(board.events(folder), found) if board.is_board(folder) else []
@@ -624,8 +608,7 @@ def context(folder, env):
 
 def catch_up_reads(folder):
     try:
-        with open(os.path.join(folder, CATCH_UP_FILE), encoding="utf-8") as f:
-            return int(f.read().strip())
+        return int(board.read_text(os.path.join(folder, CATCH_UP_FILE)).strip())
     except (OSError, ValueError):
         return 0
 
@@ -732,10 +715,13 @@ def handle(payload, env, now):
     inside = payload.get("hook_event_name") in TOOL_EVENTS and payload.get("agent_id")
     if inside and payload.get("tool_name") not in WORK_TOOLS:
         return None
-    project = os.path.abspath(project)
+    project = board.contained(os.path.abspath(project), env)
+    if project is None:
+        board.forget_calls(env, session)
+        return None
     folder = board.board_dir(project, session)
     if board.refused_boards(os.path.dirname(folder)):
-        forget_calls(env, session)
+        board.forget_calls(env, session)
         return None
     revive(folder, payload, env, now)
     if payload.get("hook_event_name") == "SessionStart":
@@ -744,7 +730,7 @@ def handle(payload, env, now):
         # A count file can outlive the board's start (`gate.sh` cannot decode a project path with a
         # backslash, so it counts before handing the payload over): once the board exists, nothing
         # should still be counting towards starting it.
-        forget_calls(env, session)
+        board.forget_calls(env, session)
         return carry_on(folder, payload, env, now)
     if starts(payload, env):
         return start(project, session, folder, payload, env, now)
