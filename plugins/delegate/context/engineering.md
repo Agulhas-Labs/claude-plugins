@@ -82,6 +82,9 @@ Other sessions and agents run beside you, and they follow the same naming habits
   patch file above.
 - Build scratch goes in a gitignored directory inside your worktree, where it is reused and dies with
   the worktree, never a fresh temp directory per run.
+- A test that runs git, or runs a program that runs git, removes every `GIT_*` variable from the environment
+  it passes, and checks that a repository it made is inside its own temporary directory before writing to
+  it. A suite run from a git hook otherwise writes into the repository being committed to (observed once).
 
 ## Reporting
 
