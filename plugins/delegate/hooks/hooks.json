@@ -1,6 +1,6 @@
 {
   "modules": [
-    "./finish-toast.tsx"
+    "./agent-band.tsx"
   ],
   "hooks": {
     "SessionStart": [
