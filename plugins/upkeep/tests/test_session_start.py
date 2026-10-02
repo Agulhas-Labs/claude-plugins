@@ -63,11 +63,13 @@ class SessionStartHook(unittest.TestCase):
         self.assertEqual(e.run().stdout, "")
 
     def test_missing_file_says_never(self):
-        self.assertEqual(Env(self).run().stdout, LINE.format("never"))
+        r = Env(self).run()
+        self.assertEqual((r.stdout, r.stderr), (LINE.format("never"), ""))
 
     def test_interval_zero_is_silent_even_with_no_stamp(self):
         self.assertEqual(Env(self).run(interval="0").stdout, "")
         self.assertEqual(Env(self).run(interval="000").stdout, "")
+        self.assertEqual(Env(self).run(interval="0000000").stdout, "")
 
     def test_interval_override(self):
         e = Env(self)

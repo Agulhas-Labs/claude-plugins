@@ -33,7 +33,12 @@ def read(path):
         return None
 
 
-def listing(directory, suffix):
+def listing(directory, suffix, recursive=False):
+    """Files in the directory ending in the suffix, sorted; rules are found in subdirectories too."""
+    if recursive:
+        return sorted(
+            os.path.join(top, n) for top, _, names in os.walk(directory) for n in names if n.endswith(suffix)
+        )
     try:
         return sorted(
             os.path.join(directory, n) for n in os.listdir(directory) if n.endswith(suffix)
@@ -46,14 +51,16 @@ def guides(cwd):
     """(path, kind) for every rule, CLAUDE.md and skill file in the user's and the project's config."""
     found = []
     for base in (config_dir(), os.path.join(cwd, ".claude")):
-        found += [(p, "rule") for p in listing(os.path.join(base, "rules"), ".md")]
+        found += [(p, "rule") for p in listing(os.path.join(base, "rules"), ".md", recursive=True)]
         skills = os.path.join(base, "skills")
         try:
             names = sorted(os.listdir(skills))
         except OSError:
             names = []
         found += [(os.path.join(skills, n, "SKILL.md"), "skill") for n in names]
-    found += [(os.path.join(config_dir(), "CLAUDE.md"), "claude-md"), (os.path.join(cwd, "CLAUDE.md"), "claude-md")]
+    for base in (config_dir(), cwd, os.path.join(cwd, ".claude")):
+        for name in ("CLAUDE.md", "CLAUDE.local.md"):
+            found.append((os.path.join(base, name), "claude-md"))
     return [(p, k) for p, k in found if os.path.isfile(p)]
 
 
@@ -127,6 +134,11 @@ def default_branch(root):
 
 
 def merged(root, branch, base):
+    """True when the branch is an ancestor of base and has commits of its own: a branch whose tip is
+    the base's tip is also an ancestor, and is usually someone's work that has not started yet."""
+    tips = [git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{r}" if r == branch else r) for r in (branch, base)]
+    if all(t and t.returncode == 0 for t in tips) and tips[0].stdout == tips[1].stdout:
+        return False
     done = git(root, "merge-base", "--is-ancestor", branch, base)
     return bool(done and done.returncode == 0)
 
@@ -153,7 +165,9 @@ CODE_EXT = (".swift", ".py", ".js", ".ts", ".md", ".json", ".sh", ".yml", ".yaml
 
 
 def stale_memory(root):
-    slug = re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(root))
+    common = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    main = os.path.dirname(common.stdout.strip()) if common and common.returncode == 0 and common.stdout.strip() else root
+    slug = re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(main))
     rows = []
     for path in listing(os.path.join(config_dir(), "projects", slug, "memory"), ".md"):
         text = read(path) or ""
@@ -192,6 +206,8 @@ def hygiene(cwd):
         where = entry.get("worktree", "")
         if os.path.realpath(where) == os.path.realpath(root) or not re.search(r"/(\.build|\.claude/worktrees)/", where + "/"):
             continue
+        if "locked" in entry:
+            continue
         if base and branch and merged(root, branch, base):
             rows.append(
                 f"worktree {where} (branch {branch}) is merged into {base}\n"
@@ -209,7 +225,7 @@ def hygiene(cwd):
                     f"    propose: git -C {shlex.quote(root)} branch -d {shlex.quote(branch)}"
                 )
     rows += stale_memory(root)
-    rows.append("(squash-merged branches are not detected: is-ancestor only sees real merges)")
+    rows.append("(not detected: squash-merged branches, and a branch whose tip is still the default branch's tip)")
     return rows
 
 

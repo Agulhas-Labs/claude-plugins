@@ -1,8 +1,8 @@
 #!/bin/sh
 # SessionStart: say once, in one line, that config upkeep is due. Silent otherwise.
 #
-# It reads one file, the stamp `/upkeep` writes (a single YYYY-MM-DD line), and runs one subprocess,
-# `date`. No settings, no transcripts, no network. A missing, malformed or CRLF-ended stamp counts as
+# It reads one file, the stamp `/upkeep` writes (a single YYYY-MM-DD line), and runs one external
+# program, `date` (its arithmetic helpers fork the shell, nothing else). No settings, no transcripts, no network. A missing, malformed or CRLF-ended stamp counts as
 # "never run"; a stamp dated in the future counts as not due. UPKEEP_INTERVAL_DAYS=0 silences it.
 # A subagent's payload carries agent_id: it is not announced to. A compaction does not announce again:
 # the line was already given at the session's start.
@@ -33,7 +33,8 @@ interval=14
 case ${UPKEEP_INTERVAL_DAYS:-} in
   '' | *[!0-9]*) ;;
   *)
-    [ "${#UPKEEP_INTERVAL_DAYS}" -le 6 ] && interval=$(unzero "$UPKEEP_INTERVAL_DAYS")
+    interval=$(unzero "$UPKEEP_INTERVAL_DAYS")
+    [ "${#interval}" -le 6 ] || interval=14
     ;;
 esac
 [ "$interval" -eq 0 ] && exit 0
@@ -42,7 +43,7 @@ today=$(date +%Y-%m-%d) || exit 0
 case $today in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) exit 0 ;; esac
 
 last=never
-IFS= read -r stamp <"$dir/last-upkeep" 2>/dev/null || true
+IFS= read -r stamp 2>/dev/null <"$dir/last-upkeep" || true
 case $stamp in
   [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])
     sy=${stamp%%-*} rest=${stamp#*-}

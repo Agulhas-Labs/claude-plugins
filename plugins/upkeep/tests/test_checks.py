@@ -61,6 +61,10 @@ class SizeBudget(Sandbox):
         self.assertIn("CLAUDE.md", out)
         self.assertNotIn("add `paths:`", out.split("CLAUDE.md")[1])
 
+    def test_rules_in_subdirectories_are_scanned(self):
+        self.write(os.path.join(self.config, "rules", "frontend", "deep.md"), "x" * 5000)
+        self.assertIn("deep.md", self.checks("size"))
+
     def test_threshold_is_an_option(self):
         self.write(os.path.join(self.config, "rules", "mid.md"), "x" * 2000)
         self.assertIn("nothing over", self.checks("size"))
@@ -93,7 +97,17 @@ class Hygiene(Sandbox):
     def test_merged_branch_and_worktree_are_proposed_unmerged_are_not(self):
         wt = os.path.join(self.project, ".build", "done")
         self.git("worktree", "add", "-q", "-b", "done", wt)
+        self.write(os.path.join(wt, "d.txt"), "d")
+        self.git("add", "d.txt", cwd=wt)
+        self.git("commit", "-q", "-m", "d", cwd=wt)
+        self.git("merge", "-q", "done")
+        self.write(os.path.join(self.project, "m.txt"), "m")  # main moves on, so done is behind it
+        self.git("add", "m.txt")
+        self.git("commit", "-q", "-m", "m")
         self.git("branch", "old-merged")
+        self.write(os.path.join(self.project, "n.txt"), "n")
+        self.git("add", "n.txt")
+        self.git("commit", "-q", "-m", "n")
         self.git("checkout", "-q", "-b", "wip")
         self.write(os.path.join(self.project, "b.txt"), "b")
         self.git("add", "b.txt")
@@ -107,8 +121,27 @@ class Hygiene(Sandbox):
         self.assertNotIn("local branch main", out)
         self.assertEqual(self.git("branch", "--list", "old-merged").strip(), "old-merged")  # reported, not deleted
 
+    def test_a_branch_with_no_commits_of_its_own_is_not_proposed(self):
+        wt = os.path.join(self.project, ".build", "fresh")
+        self.git("worktree", "add", "-q", "-b", "fresh", wt)
+        self.git("branch", "empty")
+        out = self.checks("hygiene")
+        self.assertNotIn("fresh", out)
+        self.assertNotIn("empty", out)
+
+    def test_memory_is_found_from_a_linked_worktree(self):
+        wt = os.path.join(self.project, ".build", "linked")
+        self.git("worktree", "add", "-q", "-b", "linked", wt)
+        slug = self.project.replace("/", "-").replace(".", "-").replace("_", "-")
+        self.write(os.path.join(self.config, "projects", slug, "memory", "m.md"), "see `gone/file.py`\n")
+        self.project = wt
+        self.assertIn("gone/file.py", self.checks("hygiene"))
+
     def test_branch_name_with_shell_metacharacters_is_quoted(self):
         self.git("branch", "x;$HOME`id`")
+        self.write(os.path.join(self.project, "q.txt"), "q")
+        self.git("add", "q.txt")
+        self.git("commit", "-q", "-m", "q")
         out = self.checks("hygiene")
         self.assertIn("'x;$HOME`id`'", out)
         self.assertFalse(os.path.exists(os.path.join(self.project, "id")))
