@@ -5,7 +5,7 @@
     "url": "https://github.com/Agulhas-Labs/claude-plugins"
   },
   "metadata": {
-    "description": "Claude Code plugins from Agulhas Labs. Delegate: a team of agents sized to the job, and a report of where your tokens went. Cache Guard: a warning before the one message that costs twenty times the rest. Logbook: a live local page for a long task, and its report when the task ends."
+    "description": "Claude Code plugins from Agulhas Labs. Delegate: a team of agents sized to the job, and a report of where your tokens went. Cache Guard: a warning before the one message that costs twenty times the rest. Logbook: a live local page for a long task, and its report when the task ends. Upkeep: a reminder every two weeks to look after your Claude Code setup, and the checks to do it."
   },
   "plugins": [
     {
@@ -66,6 +66,24 @@
         "hooks",
         "subagents",
         "token-cost"
+      ]
+    },
+    {
+      "name": "upkeep",
+      "displayName": "Upkeep",
+      "source": "./plugins/upkeep",
+      "description": "Reminds you every two weeks to look after your Claude Code setup, and /upkeep runs the checks: what /doctor reports, plus rules and skills that are too big, installed guides that have drifted from their source, and leftover worktrees, branches and stale memory. It proposes; nothing changes without your confirmation.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Agulhas Labs"
+      },
+      "homepage": "https://github.com/Agulhas-Labs/claude-plugins",
+      "repository": "https://github.com/Agulhas-Labs/claude-plugins",
+      "license": "Apache-2.0",
+      "keywords": [
+        "maintenance",
+        "config",
+        "hooks"
       ]
     }
   ]

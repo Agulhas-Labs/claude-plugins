@@ -1,0 +1,21 @@
+{
+  "name": "upkeep",
+  "displayName": "Upkeep",
+  "version": "1.0.0",
+  "description": "Reminds you every two weeks to look after your Claude Code setup, and /upkeep runs the checks: what /doctor reports, plus rules and skills that are too big, installed guides that have drifted from their source, and leftover worktrees, branches and stale memory. It proposes; nothing changes without your confirmation.",
+  "author": {
+    "name": "Agulhas Labs"
+  },
+  "homepage": "https://github.com/Agulhas-Labs/claude-plugins",
+  "repository": "https://github.com/Agulhas-Labs/claude-plugins",
+  "documentationUrl": "https://github.com/Agulhas-Labs/claude-plugins/blob/main/plugins/upkeep/README.md",
+  "supportUrl": "https://github.com/Agulhas-Labs/claude-plugins/issues",
+  "privacyPolicyUrl": "https://github.com/Agulhas-Labs/claude-plugins/blob/main/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/Agulhas-Labs/claude-plugins/blob/main/TERMS.md",
+  "license": "Apache-2.0",
+  "keywords": [
+    "maintenance",
+    "config",
+    "hooks"
+  ]
+}
