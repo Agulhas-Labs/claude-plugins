@@ -41,8 +41,8 @@ type State = {
   poll: { cancel: () => void } | null
 }
 
-export const TAG_WIDTH = 13 // the tag's column: 'Cache-Guard' and a two-cell gap
-const CELLS = 7
+export const TAG = 'Cache-Guard' // the band's one row starts with the tag, then the gap
+export const GAP = '  '
 const TICK_MS = 30_000
 const POLL_MS = 5_000
 const POLL_CAP_MS = 6 * 60_000 // the summariser is killed at five minutes; a minute's margin
@@ -111,42 +111,33 @@ export function limitHue(percent: number): Hue {
 // One reading of the band: a dim label around a (possibly coloured) value.
 export type Segment = { key: string; before?: string; value: string; after?: string; hue?: Hue }
 
-export function topSegments(s: State, usage: Usage5, now: number): Segment[] {
+export function bandSegments(s: State, usage: Usage5, now: number): Segment[] {
   const out: Segment[] = []
   const left = msLeft(s.status, now)
   if (left !== null && s.status?.lifetime_s) {
     const lifetimeMs = s.status.lifetime_s * 1000
     if (left > 0) {
-      const filled = Math.ceil((CELLS * left) / lifetimeMs)
-      out.push({
-        key: 'cache', before: 'cache ', value: `${Math.ceil(left / 60_000)} min left`,
-        after: ` ${'▪'.repeat(filled)}${'▫'.repeat(CELLS - filled)}`, hue: cacheHue(left, lifetimeMs),
-      })
+      out.push({ key: 'cache', before: 'cache ', value: `${Math.ceil(left / 60_000)} min`, hue: cacheHue(left, lifetimeMs) })
     } else {
       out.push({ key: 'cache', value: 'cache expired', hue: 'red' })
     }
   }
   if (s.lastHit !== null) {
-    out.push({ key: 'cached', before: 'last prompt ', value: `${s.lastHit}% cached`, hue: cachedHue(s.lastHit) })
+    out.push({ key: 'cached', value: `${s.lastHit}% cached`, hue: cachedHue(s.lastHit) })
   }
   if (usage.context?.percent !== undefined) {
-    out.push({ key: 'context', before: 'context ', value: `${usage.context.percent}% full`, hue: contextHue(usage.context.percent) })
+    out.push({ key: 'context', before: 'context ', value: `${usage.context.percent}%`, hue: contextHue(usage.context.percent) })
   }
   const fiveHour = usage.rateLimits.find(r => r.kind === 'five_hour')
   if (fiveHour) {
     const used = Math.round(fiveHour.percentUsed)
-    out.push({ key: 'limit', before: '5-hour limit ', value: `${used}% used`, hue: limitHue(used) })
+    out.push({ key: 'limit', before: '5h ', value: `${used}%`, hue: limitHue(used) })
   }
-  return out
-}
-
-export function costSegments(s: State, usage: Usage5): Segment[] {
-  const out: Segment[] = []
   if (usage.cost && s.status?.show_cost !== false) {
-    const agents = s.status?.agents_usd ? ` (agents ~${dollars(s.status.agents_usd)} est.)` : ''
-    out.push({ key: 'session', before: 'session ', value: `${dollars(usage.cost.usd)}${agents}` })
+    const agents = s.status?.agents_usd ? ` (agents ~${dollars(s.status.agents_usd)})` : ''
+    out.push({ key: 'session', value: `${dollars(usage.cost.usd)}${agents}` })
   }
-  if (s.newTokens > 0) out.push({ key: 'tokens', value: tokens(s.newTokens), after: ' new tokens' })
+  if (s.newTokens > 0) out.push({ key: 'tokens', value: tokens(s.newTokens), after: ' new' })
   return out
 }
 
@@ -154,12 +145,12 @@ export function costSegments(s: State, usage: Usage5): Segment[] {
 // band's own segment key (or button name), so a test can check none is missing; the README table repeats it.
 export const PANE = 'cache-guard-legend'
 export const LEGEND: { key: string; label: string; hue?: Hue | 'cyan'; text: string }[] = [
-  { key: 'cache', label: 'cache N min left', hue: 'green', text: 'Minutes before the prompt cache expires. After that the next message re-sends the whole context at full price. The colour turns yellow, then red, as it runs down.' },
-  { key: 'cached', label: 'last prompt N% cached', hue: 'green', text: 'The share of the last prompt read from cache. High is good, and cheap; low right after the cache expires is normal.' },
-  { key: 'context', label: 'context N% full', hue: 'green', text: 'The share of the model\'s window in use. Compaction gets more pressing as it climbs.' },
-  { key: 'limit', label: '5-hour limit N% used', hue: 'green', text: 'The share of the rolling usage limit used.' },
-  { key: 'session', label: 'session $', text: 'Cost so far, including subagents. The agents\' share is estimated at list prices.' },
-  { key: 'tokens', label: 'new tokens', text: 'Fresh input, output and cache writes. Cache reads are excluded.' },
+  { key: 'cache', label: 'cache N min', hue: 'green', text: 'Minutes left before the prompt cache expires. After that the next message re-sends the whole context at full price. The colour turns yellow, then red, as it runs down; once it has gone the band reads cache expired, in red.' },
+  { key: 'cached', label: 'N% cached', hue: 'green', text: 'The share of the last prompt read from cache. High is good, and cheap; low right after the cache expires is normal.' },
+  { key: 'context', label: 'context N%', hue: 'green', text: 'The share of the model\'s window in use. Compaction gets more pressing as it climbs.' },
+  { key: 'limit', label: '5h N%', hue: 'green', text: 'The share of the rolling 5-hour usage limit used.' },
+  { key: 'session', label: '$N (agents ~$M)', text: 'Session cost so far, including subagents. The part in brackets is the agents\' share, estimated at list prices.' },
+  { key: 'tokens', label: 'N new', text: 'New tokens: fresh input, output and cache writes, over the main session and every subagent. Cache reads are excluded.' },
   { key: 'compact', label: '[ Compact ]', hue: 'cyan', text: 'Summarises the conversation. When the cache is cold it first pays for the whole context, shown as its cold cost.' },
   { key: 'handoff', label: '[ Handoff ]', hue: 'cyan', text: 'Starts the cheap background summary so you can /clear. It is the emphasised choice when the cache is cold.' },
 ]
@@ -288,34 +279,24 @@ export async function drawBand($, e, next, s: State) {
     <Text key={`${seg.key}-value`} color={seg.hue}>{seg.value}</Text>,
     seg.after ? <Text key={`${seg.key}-after`} color={seg.hue} dimColor={seg.hue === undefined}>{seg.after}</Text> : null,
   ]
-  const joined = (segs: Segment[]) =>
-    segs.flatMap((seg, i) => [i > 0 ? <Text key={`${seg.key}-sep`} dimColor>{' · '}</Text> : null, ...part(seg)])
-  const top = topSegments(s, usage, now)
-  const bottom = costSegments(s, usage)
+  const segs = bandSegments(s, usage, now)
   const row = (
-    <Box key="cache-guard-band" flexDirection="column">
-      <Box>
-        <Box key="cache-guard-tag-column" width={TAG_WIDTH} flexShrink={0}>
-          <Text key="cache-guard-tag" bold color="white">Cache-Guard</Text>
-        </Box>
-        {joined(top)}
-      </Box>
-      <Box>
-        <Box key="cache-guard-row2-column" width={TAG_WIDTH} flexShrink={0} />
-        {joined(bottom)}
-        <Text>{bottom.length > 0 ? '   ' : ''}</Text>
-        {cold ? <Text key="cache-guard-cold" color="yellow" bold>{'! '}</Text> : null}
-        <Button key="cache-guard-compact" label={compactLabel(s.status, left)} onPress={() => compactNow($)} />
-        <Text> </Text>
-        <Button
-          key="cache-guard-handoff"
-          label={s.watch ? 'Handoff writing...' : 'Handoff'}
-          variant={cold ? 'primary' : undefined}
-          onPress={() => startHandoff($, s)}
-        />
-        <Text> </Text>
-        <Button key="cache-guard-legend" label="?" dimColor onPress={() => toggleLegend($)} />
-      </Box>
+    <Box key="cache-guard-band">
+      <Text key="cache-guard-tag" bold color="white">{TAG}</Text>
+      <Text>{GAP}</Text>
+      {segs.flatMap((seg, i) => [i > 0 ? <Text key={`${seg.key}-sep`} dimColor>{' · '}</Text> : null, ...part(seg)])}
+      <Text>{segs.length > 0 ? '   ' : ''}</Text>
+      {cold ? <Text key="cache-guard-cold" color="yellow" bold>{'! '}</Text> : null}
+      <Button key="cache-guard-compact" label={compactLabel(s.status, left)} onPress={() => compactNow($)} />
+      <Text> </Text>
+      <Button
+        key="cache-guard-handoff"
+        label={s.watch ? 'Handoff writing...' : 'Handoff'}
+        variant={cold ? 'primary' : undefined}
+        onPress={() => startHandoff($, s)}
+      />
+      <Text> </Text>
+      <Button key="cache-guard-legend" label="?" dimColor onPress={() => toggleLegend($)} />
     </Box>
   )
   return below ? (

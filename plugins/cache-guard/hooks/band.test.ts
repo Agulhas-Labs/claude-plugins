@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { LEGEND, TAG_WIDTH, PANE, cacheHue, cachedHue, contextHue, costSegments, limitHue, topSegments } from './band.tsx'
+import { LEGEND, PANE, bandSegments, cacheHue, cachedHue, contextHue, limitHue } from './band.tsx'
 
 const NOW = 1_800_000_000_000
 const usage = (input: number, read: number, write: number, output = 100, model = 'claude-opus-5') =>
@@ -61,10 +61,15 @@ const texts = (n: Node | string, out: { text: string; props: Record<string, unkn
   for (const c of n.children ?? []) texts(c, out)
   return out
 }
+// the row as the terminal shows it: every Text and Button label, in order
+const rowText = (n: Node | string): string =>
+  typeof n === 'string' ? n
+    : n.type === 'Button' ? String(n.props?.label ?? '')
+    : (n.children ?? []).map(rowText).join('')
 // the Text drawn for a reading: the one whose text is the value
 const textOf = async (band, text: string) => texts((await band.drawn()) as Node).find(t => t.text === text)
 
-test('the band reads in plain words under a Cache-Guard tag', async ($, on) => {
+test('the band is one row of terse labels under a Cache-Guard tag', async ($, on) => {
   mock.clock(on, { now: NOW })
   engine(on, { status: status({ agents_usd: 0.04 }) })
   await started($)
@@ -75,13 +80,15 @@ test('the band reads in plain words under a Cache-Guard tag', async ($, on) => {
   expect(drawn).toContain('Cache-Guard')
   expect((await textOf(band, 'Cache-Guard'))?.props.bold).toBe(true)
   expect((await textOf(band, 'Cache-Guard'))?.props.color).toBe('white')
-  expect((await textOf(band, '60 min left'))?.props.color).toBe('green')
+  expect((await textOf(band, '60 min'))?.props.color).toBe('green')
   expect((await textOf(band, '98% cached'))?.props.color).toBe('green')
-  expect((await textOf(band, '61% full'))?.props.color).toBe('yellow')
-  expect((await textOf(band, '34% used'))?.props.color).toBe('green')
-  expect((await textOf(band, '$2.51 (agents ~$0.04 est.)'))).toBeDefined()
-  expect(drawn).toContain('last prompt ')
-  expect(drawn).toContain('5-hour limit ')
+  expect((await textOf(band, '61%'))?.props.color).toBe('yellow')
+  expect((await textOf(band, '34%'))?.props.color).toBe('green')
+  expect((await textOf(band, '$2.51 (agents ~$0.04)'))).toBeDefined()
+  expect(rowText(await band.drawn())).toBe(
+    'Cache-Guard  cache 60 min · 98% cached · context 61% · 5h 34% · $2.51 (agents ~$0.04) · 1k new   Compact Handoff ?',
+  )
+  expect(drawn).not.toMatch(/[▪▫█░▓▒]/)
 })
 
 test('colours follow the thresholds, just below and at each boundary', () => {
@@ -156,7 +163,7 @@ test('every figure the band draws has a legend entry', () => {
     startedAt: null, watch: null, tick: null, poll: null,
   } as never
   const usage5 = { context: { percent: 50 }, rateLimits: [{ kind: 'five_hour', percentUsed: 10 }], cost: { usd: 1 } }
-  const keys = [...topSegments(s, usage5, NOW), ...costSegments(s, usage5)].map(seg => seg.key)
+  const keys = bandSegments(s, usage5, NOW).map(seg => seg.key)
   expect(keys.length).toBe(6)
   for (const key of [...keys, 'compact', 'handoff']) expect(LEGEND.map(l => l.key)).toContain(key)
 })
@@ -188,6 +195,9 @@ test('Compact compacts, and names the cold cost only when the cache is cold', as
   expect((await band.find({ key: 'cache-guard-compact' }))?.props.label).toBe('Compact (cold ~$2.00)')
   expect((await band.find({ key: 'cache-guard-handoff' }))?.props.variant).toBe('primary')
   expect((await textOf(band, '! '))?.props.color).toBe('yellow')
+  expect(rowText(await band.drawn())).toBe(
+    'Cache-Guard  cache expired · context 61% · 5h 34% · $2.51   ! Compact (cold ~$2.00) Handoff ?',
+  )
   await $.ui.press({ plugin: 'cache-guard', key: 'cache-guard-compact' })
   expect(seen.compacts).toBe(1)
 })
@@ -225,16 +235,4 @@ test('drawing runs no process', async ($, on) => {
   await mountBand($)
   await clock.advance(5 * 60_000) // ten ticks redraw the countdown
   expect(seen.runs.length).toBe(runs)
-})
-
-test('both rows start their content in a first column of the same width', async ($, on) => {
-  mock.clock(on, { now: NOW })
-  engine(on, { status: status() })
-  await started($)
-  await $.turn.complete(turn(usage(10, 980, 10)))
-  const band = await mountBand($)
-  const one = await band.find({ key: 'cache-guard-tag-column' })
-  const two = await band.find({ key: 'cache-guard-row2-column' })
-  expect(one?.props.width).toBe(TAG_WIDTH)
-  expect(two?.props.width).toBe(one?.props.width)
 })
