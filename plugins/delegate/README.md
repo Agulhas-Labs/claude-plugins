@@ -125,17 +125,20 @@ While a subagent runs, a band above the prompt shows a count and one row per age
 
 ```
 agents 2/6 running
-run the suite  delegate:runner (haiku-4-5, low) · Bash · 0:42 · 52.0k tok · ~$0.018 est.
+run the suite  delegate:runner (haiku-4-5, low) · Bash · 0:42 · 52.0k tokens · ~$0.018 est.
 ```
 
 The row is the agent's task description, then its type, model and effort, the tool it is in (its name
 only, never its arguments; `working` between tools), the time so far, its tokens (input, output, cache
 reads and cache writes together) and an estimated cost. A finished row stays about 20 seconds. When an
 agent ends, a toast says the same, with `finished` or `stopped`: `delegate:runner (haiku-4-5) finished
-in 14s · 52.0k tok · ~$0.018 est.: run the suite`.
+in 14s · 52.0k tokens · ~$0.018 est.: run the suite`.
 
+- **Colour:** a bold `Delegate` tag says where the band comes from. The running count is green at or
+  under the cap and red over it; a stopped agent reads red; an agent's time turns yellow after five
+  minutes (a display choice, not a measurement); a finished row is dim.
 - **Collapsed:** with more running or recent agents than `collapseAbove` (default 3; 0 always), the band
-  is one line, `agents 8/6 running · runner x5, builder x2, reviewer x1 · 112.0k tok · ~$0.31 est.
+  is one line, `agents 8/6 running · runner x5, builder x2, reviewer x1 · 112.0k tokens · ~$0.31 est.
   · 2 finished  [Expand]`: counts per agent type, and tokens and cost summed over every agent shown.
   `[Expand]` and `[Collapse]` switch it; your choice holds until no agent is left, then the count decides
   again. The choice is kept in memory only.

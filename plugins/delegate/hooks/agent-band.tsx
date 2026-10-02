@@ -31,6 +31,8 @@ const TICK_MS = 1000
 const LINGER_MS = 20000
 const DEFAULT_CAP = 6
 const DEFAULT_COLLAPSE_ABOVE = 3
+// A display choice, not a measurement: an agent running longer than this shows its time in yellow.
+const LONG_RUN_MS = 5 * 60 * 1000
 
 // Module state: a reload starts it over, and the engine drops the old module's timers.
 const agents = new Map<string, Agent>()
@@ -99,16 +101,29 @@ function addUsage(a: Agent, usage: TurnUsage) {
   a.cost = a.cost === null || rates === null ? null : a.cost + estimate(usage, rates)
 }
 
-export function rowText(a: Agent, now: number): string {
+/** `plain` draws at full strength; otherwise a span with no colour is dim. */
+export type Span = { text: string; color?: string; plain?: boolean }
+
+/** A row's pieces, so each can take its own colour; `rowText` is their text joined. */
+export function rowSpans(a: Agent, now: number): Span[] {
   const effort = a.effort ? `, ${a.effort}` : ''
   const doing = a.status === 'running' ? a.tool || 'working' : a.status
   const elapsed = a.status === 'running' ? now - a.startedAt : a.durationMs
-  return `${a.type} (${modelLabel(a.model)}${effort}) · ${doing} · ${formatClock(elapsed)} · ${formatTokens(tokens(a))} tok · ${formatCost(a.cost)}`
+  return [
+    { text: `${a.type} (${modelLabel(a.model)}${effort}) · ` },
+    { text: doing, color: a.status === 'stopped' ? 'red' : undefined },
+    { text: ' · ' },
+    { text: formatClock(elapsed), color: elapsed > LONG_RUN_MS ? 'yellow' : undefined },
+    { text: ` · ${formatTokens(tokens(a))} tokens · ` },
+    { text: formatCost(a.cost), plain: a.status === 'running' },
+  ]
 }
+
+export const rowText = (a: Agent, now: number) => rowSpans(a, now).map(x => x.text).join('')
 
 export function toastText(a: Agent): string {
   const what = a.description ? `: ${a.description}` : ''
-  return `${a.type} (${modelLabel(a.model)}) ${a.status} in ${formatDuration(a.durationMs)} · ${formatTokens(tokens(a))} tok · ${formatCost(a.cost)}${what}`
+  return `${a.type} (${modelLabel(a.model)}) ${a.status} in ${formatDuration(a.durationMs)} · ${formatTokens(tokens(a))} tokens · ${formatCost(a.cost)}${what}`
 }
 
 const runningCount = () => [...agents.values()].filter(a => a.status === 'running').length
@@ -132,7 +147,7 @@ export function summaryText(list: readonly Agent[], running: number, capacity: n
   const cost = list.reduce<number | null>((sum, a) => (sum === null || a.cost === null ? null : sum + a.cost), 0)
   const done = list.length - running
   const tail = done > 0 ? ` · ${done} finished` : ''
-  return `agents ${running}/${capacity} running · ${groups} · ${formatTokens(total)} tok · ${formatCost(cost)}${tail}`
+  return `agents ${running}/${capacity} running · ${groups} · ${formatTokens(total)} tokens · ${formatCost(cost)}${tail}`
 }
 
 async function loadPrices($: EngineInterface) {
@@ -300,6 +315,18 @@ export const register: Register = (on, options) => {
 
     const now = await $.clock.now()
     const { Box, Button, Text } = $.ui.resolve(e)
+    const running = runningCount()
+    const head = `agents ${running}/${cap} running`
+    const tag = (
+      <Text key="tag" bold color="cyan">
+        {'Delegate '}
+      </Text>
+    )
+    const count = (
+      <Text key="count" color={running > cap ? 'red' : 'green'}>
+        {head}
+      </Text>
+    )
     const toggle = (
       <Button
         key="toggle"
@@ -315,7 +342,9 @@ export const register: Register = (on, options) => {
       return (
         <Box flexDirection="column">
           <Box key="agents" flexDirection="row">
-            <Text dimColor>{`${summaryText([...agents.values()], runningCount(), cap)}  `}</Text>
+            {tag}
+            {count}
+            <Text dimColor>{`${summaryText([...agents.values()], running, cap).slice(head.length)}  `}</Text>
             {toggle}
           </Box>
           {beneath}
@@ -326,7 +355,11 @@ export const register: Register = (on, options) => {
     const rows = [...agents.entries()].map(([id, a]) => (
       <Box key={`agent-${id}`} flexDirection="row">
         {a.description ? <Text bold>{`${a.description}  `}</Text> : null}
-        <Text dimColor>{rowText(a, now)}</Text>
+        {rowSpans(a, now).map((x, i) => (
+          <Text key={`s${i}`} dimColor={x.color === undefined && !x.plain} color={x.color}>
+            {x.text}
+          </Text>
+        ))}
       </Box>
     ))
 
@@ -334,7 +367,9 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column">
         <Box key="agents" flexDirection="column">
           <Box flexDirection="row">
-            <Text dimColor>{`agents ${runningCount()}/${cap} running  `}</Text>
+            {tag}
+            {count}
+            <Text>{'  '}</Text>
             {toggle}
           </Box>
           {rows}

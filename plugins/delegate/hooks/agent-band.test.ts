@@ -158,8 +158,8 @@ test('usage accumulates over steps and prices the measured fixture at $0.018468'
   await $.turn.complete(finished('a1', 14000))
 
   // 26 + 449 + 41957 + 9601 = 52033 tokens a request.
-  expect(once).toContain('52.0k tok · ~$0.018 est.')
-  expect(toasts).toEqual(['delegate:runner (haiku-4-5) finished in 14s · 104.1k tok · ~$0.037 est.: run the suite'])
+  expect(once).toContain('52.0k tokens · ~$0.018 est.')
+  expect(toasts).toEqual(['delegate:runner (haiku-4-5) finished in 14s · 104.1k tokens · ~$0.037 est.: run the suite'])
 })
 
 test('the estimate is the list-rate sum, exactly', async () => {
@@ -176,7 +176,7 @@ test('an unknown model shows tokens and cost n/a', async ($, on) => {
   await step($, 'a1', 'low', 'some-other-model')
   await $.turn.complete(finished('a1', 14000))
 
-  expect(toasts).toEqual(['delegate:runner (some-other-model) finished in 14s · 52.0k tok · cost n/a'])
+  expect(toasts).toEqual(['delegate:runner (some-other-model) finished in 14s · 52.0k tokens · cost n/a'])
 })
 
 test('a run shorter than minSeconds toasts nothing', async ($, on) => {
@@ -309,7 +309,7 @@ test('four agents collapse to one line of type counts, summed tokens and cost, s
   const shown = text(tree)
 
   // 4 x 52033 = 208132 tokens; 4 x $0.018468 = $0.074.
-  expect(shown).toContain('agents 3/6 running · runner x2, builder x1, reviewer x1 · 208.1k tok · ~$0.074 est.')
+  expect(shown).toContain('agents 3/6 running · runner x2, builder x1, reviewer x1 · 208.1k tokens · ~$0.074 est.')
   expect(shown).toContain('· 1 finished')
   expect(labels(tree)).toEqual(['[Expand]'])
   expect(shown).toContain('another band')
@@ -359,4 +359,50 @@ test('collapseAbove 0 always collapses', { options: { collapseAbove: 0 } }, asyn
 
   expect(text(tree)).toContain('agents 1/6 running · runner x1')
   expect(keys(tree)).not.toContain('agent-a1')
+})
+
+// The props of every Text whose text is exactly `want`, found in a drawn tree.
+function textProps(node: unknown, want: string, found: Record<string, unknown>[] = []): Record<string, unknown>[] {
+  if (node === null || typeof node !== 'object') return found
+  const n = node as { type?: string; props?: Record<string, unknown>; children?: unknown[] }
+  if (n.type === 'Text' && text(n) === want) found.push(n.props ?? {})
+  for (const child of n.children ?? []) textProps(child, want, found)
+  return found
+}
+
+test('the band carries a bold Delegate tag in its own colour', async ($, on) => {
+  world(on)
+  spawns(on)
+  on('ui.render', () => beneath() as never)
+
+  await spawnMany($, ['delegate:runner'])
+  const [tag] = textProps(await $.ui.render(band()), 'Delegate ')
+
+  expect(tag).toMatchObject({ bold: true, color: 'cyan' })
+})
+
+test('the running count is green at or under the cap and red over it', { options: { cap: 2 } }, async ($, on) => {
+  world(on)
+  spawns(on)
+  on('ui.render', () => beneath() as never)
+
+  await spawnMany($, ['delegate:runner', 'delegate:runner'])
+  expect(textProps(await $.ui.render(band()), 'agents 2/2 running')[0]).toMatchObject({ color: 'green' })
+  await spawnMany($, ['delegate:runner'])
+  expect(textProps(await $.ui.render(band()), 'agents 3/2 running')[0]).toMatchObject({ color: 'red' })
+})
+
+test('elapsed time turns yellow after five minutes and a stopped agent reads red', async ($, on) => {
+  const { clock } = world(on)
+  spawns(on)
+  on('ui.render', () => beneath() as never)
+
+  await spawnMany($, ['delegate:runner', 'delegate:builder'])
+  await clock.advance(301_000)
+  await $.turn.complete(finished('a2', 301_000, true))
+  const tree = await $.ui.render(band())
+
+  expect(textProps(tree, '5:01')).toHaveLength(2)
+  expect(textProps(tree, '5:01')[0]).toMatchObject({ color: 'yellow' })
+  expect(textProps(tree, 'stopped')[0]).toMatchObject({ color: 'red' })
 })
