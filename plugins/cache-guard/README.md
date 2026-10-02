@@ -143,7 +143,7 @@ Cache-Guard  cache 43 min left ▪▪▪▪▪▫▫ · last prompt 98% cached �
 | `session $2.51` | The cost so far, subagents included, as `/cost` totals it. `agents ... est.` is the subagents' share, priced from their token counts at API list prices, so it is an estimate. | Plain. |
 | `1.2M new tokens` | Input, output and cache-write tokens summed over the main session and every subagent since the session began or was last cleared. Cache reads aren't counted. | Plain. |
 
-The colour cut-offs are display choices, not measured values. `[ ? ]` shows this legend as a few toasts.
+The colour cut-offs are display choices, not measured values. `[ ? ]` opens this legend in a pane titled "Cache-Guard: what the band shows" (a second press, or its Close button, closes it); the pane's text is one constant in `hooks/band.tsx`, and a test checks it covers every figure the band draws. `Compact` and `Handoff` are described in the pane too.
 
 `Compact` runs `/compact`. Once the cache is cold its label shows what that costs, for example
 `Compact (cold ~$2.00)`, with a yellow `!` before it, because compacting a cold context pays to send the whole context first.

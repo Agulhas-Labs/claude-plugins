@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { cacheHue, cachedHue, contextHue, limitHue } from './band.tsx'
+import { LEGEND, PANE, cacheHue, cachedHue, contextHue, costSegments, limitHue, topSegments } from './band.tsx'
 
 const NOW = 1_800_000_000_000
 const usage = (input: number, read: number, write: number, output = 100, model = 'claude-opus-5') =>
@@ -113,18 +113,51 @@ test('an expired cache reads cache expired in red', async ($, on) => {
   expect((await textOf(band, 'cache expired'))?.props.color).toBe('red')
 })
 
-test('[?] toasts the legend in at most three toasts of fifteen seconds', async ($, on) => {
+test('[?] opens the legend pane, a second press closes it, and no toast is raised', async ($, on) => {
   mock.clock(on, { now: NOW })
   const seen = engine(on, { status: status() })
+  const opened: unknown[] = []
+  const closed: unknown[] = []
+  let up = false
+  on('ui.open', (_$, e) => { opened.push(e); up = true; return { value: { isPlaced: true } } })
+  on('ui.close', (_$, e) => { closed.push(e); up = false; return { value: undefined } })
+  on('ui.panes', () => ({ value: up ? [{ id: PANE, title: 't', isShown: true, hasFocus: false, isPlaced: true }] : [] }))
   await started($)
   await $.turn.complete(turn(usage(10, 980, 10)))
   await mountBand($)
   await $.ui.press({ plugin: 'cache-guard', key: 'cache-guard-legend' })
-  expect(seen.toasts.length).toBeGreaterThan(0)
-  expect(seen.toasts.length).toBeLessThanOrEqual(3)
-  const all = seen.toasts.join(' ')
-  for (const word of ['cache:', 'cached:', 'context:', '5-hour limit:', 'session:', 'new tokens:']) expect(all).toContain(word)
-  expect(seen.timeouts.every(t => t === 15_000)).toBe(true)
+  expect(opened).toHaveLength(1)
+  expect((opened[0] as { id: string; title: string }).id).toBe('cache-guard-legend')
+  expect((opened[0] as { title: string }).title).toBe('Cache-Guard: what the band shows')
+  await $.ui.press({ plugin: 'cache-guard', key: 'cache-guard-legend' })
+  expect(closed).toHaveLength(1)
+  expect(seen.toasts).toEqual([])
+})
+
+test('the legend pane holds every legend entry, and the Close button closes it', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  engine(on, { status: status() })
+  const closed: unknown[] = []
+  on('ui.close', (_$, e) => { closed.push(e); return { value: undefined } })
+  const pane = await $.ui.mount({ plugin: 'cache-guard', surface: 'terminal', component: 'Pane', requestId: PANE, props: {} as never })
+  const drawn = JSON.stringify(await pane.drawn())
+  for (const entry of LEGEND) {
+    expect(drawn).toContain(entry.label)
+    expect(drawn).toContain(entry.text)
+  }
+  await $.ui.press({ plugin: 'cache-guard', key: 'cache-guard-legend-close' })
+  expect(closed).toHaveLength(1)
+})
+
+test('every figure the band draws has a legend entry', () => {
+  const s = {
+    status: { ...status(), agents_usd: 0.04 }, lastHit: 90, newTokens: 5, agents: [], transcriptPath: '', cwd: '', sessionId: '',
+    startedAt: null, watch: null, tick: null, poll: null,
+  } as never
+  const usage5 = { context: { percent: 50 }, rateLimits: [{ kind: 'five_hour', percentUsed: 10 }], cost: { usd: 1 } }
+  const keys = [...topSegments(s, usage5, NOW), ...costSegments(s, usage5)].map(seg => seg.key)
+  expect(keys.length).toBe(6)
+  for (const key of [...keys, 'compact', 'handoff']) expect(LEGEND.map(l => l.key)).toContain(key)
 })
 
 test('job totals count main and subagents and reset when startedAt changes', async ($, on) => {

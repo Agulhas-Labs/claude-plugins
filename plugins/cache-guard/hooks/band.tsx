@@ -149,15 +149,39 @@ export function costSegments(s: State, usage: Usage5): Segment[] {
   return out
 }
 
-// The legend the [?] button toasts, split so no toast runs long.
-export const LEGEND = [
-  'cache: minutes before the prompt cache expires; after that the next message re-sends the whole context at full price. cached: the share of the last prompt served from cache (high is good, and cheap).',
-  'context: the share of the model\'s window in use. 5-hour limit: the share of the rolling usage limit used.',
-  'session: cost so far including subagents, the agents\' share estimated at list prices. new tokens: fresh input, output and cache writes (cache reads excluded).',
+// The legend the [?] button shows in a pane, one entry per figure or button the band draws. `key` is the
+// band's own segment key (or button name), so a test can check none is missing; the README table repeats it.
+export const PANE = 'cache-guard-legend'
+export const LEGEND: { key: string; label: string; hue?: Hue | 'cyan'; text: string }[] = [
+  { key: 'cache', label: 'cache N min left', hue: 'green', text: 'Minutes before the prompt cache expires. After that the next message re-sends the whole context at full price. The colour turns yellow, then red, as it runs down.' },
+  { key: 'cached', label: 'last prompt N% cached', hue: 'green', text: 'The share of the last prompt read from cache. High is good, and cheap; low right after the cache expires is normal.' },
+  { key: 'context', label: 'context N% full', hue: 'green', text: 'The share of the model\'s window in use. Compaction gets more pressing as it climbs.' },
+  { key: 'limit', label: '5-hour limit N% used', hue: 'green', text: 'The share of the rolling usage limit used.' },
+  { key: 'session', label: 'session $', text: 'Cost so far, including subagents. The agents\' share is estimated at list prices.' },
+  { key: 'tokens', label: 'new tokens', text: 'Fresh input, output and cache writes. Cache reads are excluded.' },
+  { key: 'compact', label: '[ Compact ]', hue: 'cyan', text: 'Summarises the conversation. When the cache is cold it first pays for the whole context, shown as its cold cost.' },
+  { key: 'handoff', label: '[ Handoff ]', hue: 'cyan', text: 'Starts the cheap background summary so you can /clear. It is the emphasised choice when the cache is cold.' },
 ]
 
-export function showLegend($) {
-  for (const text of LEGEND) $.ui.toast(text, { timeoutMs: 15_000 })
+// [?] toggles the legend pane.
+export async function toggleLegend($) {
+  if ((await $.ui.panes()).some(pane => pane.id === PANE)) await $.ui.close({ id: PANE })
+  else await $.ui.open({ id: PANE, title: 'Cache-Guard: what the band shows' })
+}
+
+export function drawLegend($, e) {
+  const { Box, Button, Text } = $.ui.resolve(e)
+  return (
+    <Box flexDirection="column">
+      {LEGEND.map(entry => (
+        <Box key={entry.key} flexDirection="column" marginBottom={1}>
+          <Text bold color={entry.hue}>{entry.label}</Text>
+          <Text>{entry.text}</Text>
+        </Box>
+      ))}
+      <Button key="cache-guard-legend-close" role="dismiss" label="Close" onPress={() => $.ui.close({ id: PANE })} />
+    </Box>
+  )
 }
 
 export async function refresh($, s: State) {
@@ -288,7 +312,7 @@ export async function drawBand($, e, next, s: State) {
           onPress={() => startHandoff($, s)}
         />
         <Text> </Text>
-        <Button key="cache-guard-legend" label="?" dimColor onPress={() => showLegend($)} />
+        <Button key="cache-guard-legend" label="?" dimColor onPress={() => toggleLegend($)} />
       </Box>
     </Box>
   )
@@ -341,5 +365,6 @@ export const register: Register = on => {
     return result
   })
 
+  on('ui.render', { component: 'Pane', requestId: PANE }, ($, e) => drawLegend($, e))
   on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => drawBand($, e, next, s))
 }
