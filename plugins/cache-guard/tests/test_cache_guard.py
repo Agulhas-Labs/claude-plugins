@@ -634,6 +634,17 @@ class GenerationPriceTests(GuardTestCase):
         self.assertIn("$0.40", reason)
         self.assertIn("$0.02", reason)
 
+    def test_opus_five_five_is_priced_below_the_opus_before_it(self):
+        # Opus 5.5 lists at $4.00/MTok input with cache reads at $0.20 (a twentieth of input, not a tenth):
+        # 100,000 tokens cost $8.00/MTok to write a 1h cache and $0.20/MTok to read it.
+        reason = self.cold("claude-opus-5-5", size=100_000)
+        self.assertIn("$0.80", reason)
+        self.assertIn("$0.02", reason)
+        # Opus 5 and earlier stay at $5.00 input and a tenth to read: $10.00 cold, $0.50 warm per MTok.
+        older = self.cold("claude-opus-5", size=100_000, session="older-opus")
+        self.assertIn("$1.00", older)
+        self.assertIn("$0.05", older)
+
     def test_a_fable_before_five_one_reads_at_a_tenth_rather_than_a_fortieth(self):
         # 200,000 tokens at $10.00/MTok input: $20.00/MTok cold, $1.00/MTok warm.
         reason = self.cold("claude-fable-5", size=200_000)
