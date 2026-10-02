@@ -89,12 +89,13 @@ FAILURE_MAX_CHARS = 120  # a failed handoff is reported in one line, not with a 
 INPUT_PRICES = {
     "fable51": 10.00,
     "fable": 10.00,
+    "opus55": 4.00,
     "opus": 5.00,
     "sonnet5": 2.00,
     "sonnet4": 3.00,
     "haiku": 1.00,
 }
-CACHE_READ_PRICES = {"fable51": 0.25}
+CACHE_READ_PRICES = {"fable51": 0.25, "opus55": 0.20}
 # The CLI's bare aliases name a family, and the plugin picks one for its own background summariser. A
 # caller pricing a model it chose itself resolves the alias; a warning about a model read from a
 # transcript never does, since that name always carries its generation.
