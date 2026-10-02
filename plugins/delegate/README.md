@@ -76,6 +76,11 @@ Two more hooks watch subagents. One warns an agent as its context grows, in thre
 The other holds back, once, a subagent that tries to stop with a background run still going, and names
 the run so the agent can wait for its verdict or stop it.
 
+A small mod (Claude Code 2.1.287 or later) shows a toast in the terminal or Desktop app when a subagent
+finishes, naming its type, model and run time. It only watches: it reads no files and makes no network
+calls, but like any mod it runs inside Claude Code with your permissions. Elsewhere, such as the VS Code
+chat panel or `claude -p`, it runs and draws nothing.
+
 The rules come from running `agent-cost` over one heavy week of real agent work. An agent re-sends its
 whole context on every turn, so its cost grows with the square of its length. Measured that week:
 

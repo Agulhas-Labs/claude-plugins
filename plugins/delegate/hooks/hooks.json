@@ -1,4 +1,7 @@
 {
+  "modules": [
+    "./finish-toast.tsx"
+  ],
   "hooks": {
     "SessionStart": [
       {
