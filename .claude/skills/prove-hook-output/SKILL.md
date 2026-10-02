@@ -9,6 +9,8 @@ description: >-
 
 # prove-hook-output
 
+**Read this when** a hook's visible output is in question. Sections: the three levels of proof, an installed plugin shadows your working copy, the PTY proof, reading the log by hand, the hook contract in the binary, when it is proven.
+
 A hook firing is not a hook being seen. These go to different readers, and a change that looks right
 in the hook's own tests can still leave the person in front of the terminal staring at a blank prompt:
 
