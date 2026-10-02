@@ -3,6 +3,7 @@
   "families": {
     "fable51": { "input": 10.0, "output": 50.0, "cache_read": 0.25, "cache_write": 12.5 },
     "fable": { "input": 10.0, "output": 50.0, "cache_read": 1.0, "cache_write": 12.5 },
+    "opus55": { "input": 4.0, "output": 20.0, "cache_read": 0.2, "cache_write": 5.0 },
     "opus": { "input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write": 6.25 },
     "sonnet5": { "input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write": 2.5 },
     "sonnet4": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75 },
