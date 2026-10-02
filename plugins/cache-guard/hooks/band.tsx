@@ -41,6 +41,7 @@ type State = {
   poll: { cancel: () => void } | null
 }
 
+export const TAG_WIDTH = 13 // the tag's column: 'Cache-Guard' and a two-cell gap
 const CELLS = 7
 const TICK_MS = 30_000
 const POLL_MS = 5_000
@@ -294,12 +295,13 @@ export async function drawBand($, e, next, s: State) {
   const row = (
     <Box key="cache-guard-band" flexDirection="column">
       <Box>
-        <Text key="cache-guard-tag" bold color="cyan">Cache-Guard</Text>
-        <Text>{top.length > 0 ? '  ' : ''}</Text>
+        <Box key="cache-guard-tag-column" width={TAG_WIDTH} flexShrink={0}>
+          <Text key="cache-guard-tag" bold color="white">Cache-Guard</Text>
+        </Box>
         {joined(top)}
       </Box>
       <Box>
-        <Text>{'            '}</Text>
+        <Box key="cache-guard-row2-column" width={TAG_WIDTH} flexShrink={0} />
         {joined(bottom)}
         <Text>{bottom.length > 0 ? '   ' : ''}</Text>
         {cold ? <Text key="cache-guard-cold" color="yellow" bold>{'! '}</Text> : null}

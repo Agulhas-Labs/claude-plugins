@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { LEGEND, PANE, cacheHue, cachedHue, contextHue, costSegments, limitHue, topSegments } from './band.tsx'
+import { LEGEND, TAG_WIDTH, PANE, cacheHue, cachedHue, contextHue, costSegments, limitHue, topSegments } from './band.tsx'
 
 const NOW = 1_800_000_000_000
 const usage = (input: number, read: number, write: number, output = 100, model = 'claude-opus-5') =>
@@ -74,6 +74,7 @@ test('the band reads in plain words under a Cache-Guard tag', async ($, on) => {
   const drawn = JSON.stringify(await band.drawn())
   expect(drawn).toContain('Cache-Guard')
   expect((await textOf(band, 'Cache-Guard'))?.props.bold).toBe(true)
+  expect((await textOf(band, 'Cache-Guard'))?.props.color).toBe('white')
   expect((await textOf(band, '60 min left'))?.props.color).toBe('green')
   expect((await textOf(band, '98% cached'))?.props.color).toBe('green')
   expect((await textOf(band, '61% full'))?.props.color).toBe('yellow')
@@ -224,4 +225,16 @@ test('drawing runs no process', async ($, on) => {
   await mountBand($)
   await clock.advance(5 * 60_000) // ten ticks redraw the countdown
   expect(seen.runs.length).toBe(runs)
+})
+
+test('both rows start their content in a first column of the same width', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  engine(on, { status: status() })
+  await started($)
+  await $.turn.complete(turn(usage(10, 980, 10)))
+  const band = await mountBand($)
+  const one = await band.find({ key: 'cache-guard-tag-column' })
+  const two = await band.find({ key: 'cache-guard-row2-column' })
+  expect(one?.props.width).toBe(TAG_WIDTH)
+  expect(two?.props.width).toBe(one?.props.width)
 })
