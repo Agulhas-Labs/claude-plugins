@@ -1,6 +1,6 @@
 {
   "modules": [
-    "./band.tsx"
+    "./register.tsx"
   ],
   "hooks": {
     "UserPromptSubmit": [

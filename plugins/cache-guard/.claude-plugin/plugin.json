@@ -17,5 +17,13 @@
     "prompt-cache",
     "token-cost",
     "hooks"
-  ]
+  ],
+  "userConfig": {
+    "resumeMaxAgeDays": {
+      "type": "number",
+      "title": "Resume offer: newest handoff age (days)",
+      "description": "At session start, offer to resume the directory's newest handoff when it was written within this many days.",
+      "default": 7
+    }
+  }
 }

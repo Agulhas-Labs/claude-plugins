@@ -26,6 +26,9 @@ written for them.
   repositories configured, branched and committed to this repository instead of its own, and left it
   marked bare. Drop every `GIT_*` variable from the call, and assert that the new repository's git
   directory is inside the test's temporary directory before writing to it.
+- **A plugin names one hooks module.** `hooks.json` `modules` takes a single entry: `claude plugin validate`
+  refuses a second (observed on Claude Code 2.1.287). Several mods in one plugin register through one
+  entry file that calls each one's `register`.
 - **Commit on a branch; never merge to `main` unprompted.** Bump a plugin's `version` in both its
   `plugin.json` and the marketplace entry when its behaviour changes.
 
