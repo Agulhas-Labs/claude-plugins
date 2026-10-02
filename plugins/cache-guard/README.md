@@ -125,23 +125,28 @@ tokens come out of your usage limit.
 
 ## The band above the prompt
 
-In Claude Code 2.1.287 or later, in the terminal or the desktop app, a band above the prompt shows:
+In Claude Code 2.1.287 or later, in the terminal or the desktop app, a band above the prompt shows what is left of the prompt cache and what the job has used.
+
+An example (made-up figures), with each figure coloured by what it means:
 
 ```text
-cache 43m ▪▪▪▪▪▫▫ · last turn 98% hit · ctx 61% · 5h 34% · job $2.51 (agents ~$0.30 est.) · 1.2M new tok   [ Compact ] [ Handoff ]
+Cache-Guard  cache 43 min left ▪▪▪▪▪▫▫ · last prompt 98% cached · context 61% full · 5-hour limit 34% used
+             session $2.51 (agents ~$0.30 est.) · 1.2M new tokens   [ Compact ] [ Handoff ] [ ? ]
 ```
 
-- `cache 43m`: time left before the prompt cache expires, counted down from the last answer and the
-  lifetime the session is buying. `cache cold` once it has gone.
-- `last turn 98% hit`: the share of the last main turn's input that was read from cache.
-- `ctx` and `5h`: the context window's fill and the five-hour usage limit, when Claude Code has a reading.
-- `job`: what the session has cost, subagents included, as `/cost` totals it. `agents ... est.` is the
-  subagents' share, priced from their token counts at API list prices, so it's an estimate.
-- `new tok`: input, output and cache-write tokens summed over the main session and every subagent since
-  the session began or was last cleared. Cache reads aren't counted.
+| Figure | Means | Colour |
+| --- | --- | --- |
+| `cache 43 min left` | Minutes before the prompt cache expires, counted down from the last answer and the lifetime the session is buying. After that the next message re-sends the whole context at full price. `cache expired` once it has gone. | Green with half the lifetime or more left, yellow down to a tenth, red below that or expired. |
+| `last prompt 98% cached` | The share of the last main prompt served from cache. High is good, and cheap. | Green at 80% or more, yellow from 40%, red below. |
+| `context 61% full` | The share of the model's window in use, when Claude Code has a reading. | Green below 60%, yellow below 80%, red at 80% or more. |
+| `5-hour limit 34% used` | The share of the rolling five-hour usage limit used, when Claude Code has a reading. | Green below 60%, yellow up to 85%, red above. |
+| `session $2.51` | The cost so far, subagents included, as `/cost` totals it. `agents ... est.` is the subagents' share, priced from their token counts at API list prices, so it is an estimate. | Plain. |
+| `1.2M new tokens` | Input, output and cache-write tokens summed over the main session and every subagent since the session began or was last cleared. Cache reads aren't counted. | Plain. |
+
+The colour cut-offs are display choices, not measured values. `[ ? ]` shows this legend as a few toasts.
 
 `Compact` runs `/compact`. Once the cache is cold its label shows what that costs, for example
-`Compact (cold ~$2.00)`, because compacting a cold context pays to send the whole context first.
+`Compact (cold ~$2.00)`, with a yellow `!` before it, because compacting a cold context pays to send the whole context first.
 `Handoff` writes the same handoff as the word `handoff`, starts its background summary, and tells you
 when the summary is in and `/clear` is safe. Neither button sends anything to the session's model.
 

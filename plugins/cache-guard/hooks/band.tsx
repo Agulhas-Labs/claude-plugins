@@ -76,27 +76,88 @@ export function compactLabel(status: Status | null, left: number | null): string
   return `Compact (cold${cost})`
 }
 
-export function bandText(s: State, usage: { context?: { percent?: number }; rateLimits: { kind: string; percentUsed: number }[]; cost?: { usd: number } }, now: number): string {
-  const pieces: string[] = []
+export type Hue = 'green' | 'yellow' | 'red'
+export type Usage5 = { context?: { percent?: number }; rateLimits: { kind: string; percentUsed: number }[]; cost?: { usd: number } }
+
+// Colour by meaning. These cut-offs are display choices, not measured values.
+export const CACHE_GREEN_FROM = 0.5 // share of the cache lifetime still left
+export const CACHE_YELLOW_FROM = 0.1
+export const CACHED_GREEN_FROM = 80 // % of the last prompt served from cache
+export const CACHED_YELLOW_FROM = 40
+export const CONTEXT_GREEN_BELOW = 60 // % of the window in use
+export const CONTEXT_RED_FROM = 80
+export const LIMIT_GREEN_BELOW = 60 // % of the 5-hour limit used
+export const LIMIT_RED_ABOVE = 85
+
+export function cacheHue(left: number, lifetimeMs: number): Hue {
+  const share = left / lifetimeMs
+  if (left <= 0) return 'red'
+  return share >= CACHE_GREEN_FROM ? 'green' : share >= CACHE_YELLOW_FROM ? 'yellow' : 'red'
+}
+
+export function cachedHue(percent: number): Hue {
+  return percent >= CACHED_GREEN_FROM ? 'green' : percent >= CACHED_YELLOW_FROM ? 'yellow' : 'red'
+}
+
+export function contextHue(percent: number): Hue {
+  return percent < CONTEXT_GREEN_BELOW ? 'green' : percent < CONTEXT_RED_FROM ? 'yellow' : 'red'
+}
+
+export function limitHue(percent: number): Hue {
+  return percent < LIMIT_GREEN_BELOW ? 'green' : percent <= LIMIT_RED_ABOVE ? 'yellow' : 'red'
+}
+
+// One reading of the band: a dim label around a (possibly coloured) value.
+export type Segment = { key: string; before?: string; value: string; after?: string; hue?: Hue }
+
+export function topSegments(s: State, usage: Usage5, now: number): Segment[] {
+  const out: Segment[] = []
   const left = msLeft(s.status, now)
   if (left !== null && s.status?.lifetime_s) {
+    const lifetimeMs = s.status.lifetime_s * 1000
     if (left > 0) {
-      const filled = Math.ceil((CELLS * left) / (s.status.lifetime_s * 1000))
-      pieces.push(`cache ${Math.ceil(left / 60_000)}m ${'▪'.repeat(filled)}${'▫'.repeat(CELLS - filled)}`)
+      const filled = Math.ceil((CELLS * left) / lifetimeMs)
+      out.push({
+        key: 'cache', before: 'cache ', value: `${Math.ceil(left / 60_000)} min left`,
+        after: ` ${'▪'.repeat(filled)}${'▫'.repeat(CELLS - filled)}`, hue: cacheHue(left, lifetimeMs),
+      })
     } else {
-      pieces.push(`cache cold ${'▫'.repeat(CELLS)}`)
+      out.push({ key: 'cache', value: 'cache expired', hue: 'red' })
     }
   }
-  if (s.lastHit !== null) pieces.push(`last turn ${s.lastHit}% hit`)
-  if (usage.context?.percent !== undefined) pieces.push(`ctx ${usage.context.percent}%`)
+  if (s.lastHit !== null) {
+    out.push({ key: 'cached', before: 'last prompt ', value: `${s.lastHit}% cached`, hue: cachedHue(s.lastHit) })
+  }
+  if (usage.context?.percent !== undefined) {
+    out.push({ key: 'context', before: 'context ', value: `${usage.context.percent}% full`, hue: contextHue(usage.context.percent) })
+  }
   const fiveHour = usage.rateLimits.find(r => r.kind === 'five_hour')
-  if (fiveHour) pieces.push(`5h ${Math.round(fiveHour.percentUsed)}%`)
+  if (fiveHour) {
+    const used = Math.round(fiveHour.percentUsed)
+    out.push({ key: 'limit', before: '5-hour limit ', value: `${used}% used`, hue: limitHue(used) })
+  }
+  return out
+}
+
+export function costSegments(s: State, usage: Usage5): Segment[] {
+  const out: Segment[] = []
   if (usage.cost && s.status?.show_cost !== false) {
     const agents = s.status?.agents_usd ? ` (agents ~${dollars(s.status.agents_usd)} est.)` : ''
-    pieces.push(`job ${dollars(usage.cost.usd)}${agents}`)
+    out.push({ key: 'session', before: 'session ', value: `${dollars(usage.cost.usd)}${agents}` })
   }
-  if (s.newTokens > 0) pieces.push(`${tokens(s.newTokens)} new tok`)
-  return pieces.join(' · ')
+  if (s.newTokens > 0) out.push({ key: 'tokens', value: tokens(s.newTokens), after: ' new tokens' })
+  return out
+}
+
+// The legend the [?] button toasts, split so no toast runs long.
+export const LEGEND = [
+  'cache: minutes before the prompt cache expires; after that the next message re-sends the whole context at full price. cached: the share of the last prompt served from cache (high is good, and cheap).',
+  'context: the share of the model\'s window in use. 5-hour limit: the share of the rolling usage limit used.',
+  'session: cost so far including subagents, the agents\' share estimated at list prices. new tokens: fresh input, output and cache writes (cache reads excluded).',
+]
+
+export function showLegend($) {
+  for (const text of LEGEND) $.ui.toast(text, { timeoutMs: 15_000 })
 }
 
 export async function refresh($, s: State) {
@@ -196,17 +257,39 @@ export async function drawBand($, e, next, s: State) {
   const left = msLeft(s.status, now)
   const cold = left !== null && left <= 0
   const { Box, Button, Text } = $.ui.resolve(e)
+  const usage = await $.session.usage()
+  const part = (seg: Segment) => [
+    seg.before ? <Text key={`${seg.key}-label`} dimColor>{seg.before}</Text> : null,
+    <Text key={`${seg.key}-value`} color={seg.hue}>{seg.value}</Text>,
+    seg.after ? <Text key={`${seg.key}-after`} color={seg.hue} dimColor={seg.hue === undefined}>{seg.after}</Text> : null,
+  ]
+  const joined = (segs: Segment[]) =>
+    segs.flatMap((seg, i) => [i > 0 ? <Text key={`${seg.key}-sep`} dimColor>{' · '}</Text> : null, ...part(seg)])
+  const top = topSegments(s, usage, now)
+  const bottom = costSegments(s, usage)
   const row = (
-    <Box key="cache-guard-band">
-      <Text dimColor>{bandText(s, await $.session.usage(), now)} </Text>
-      <Button key="cache-guard-compact" label={compactLabel(s.status, left)} onPress={() => compactNow($)} />
-      <Text> </Text>
-      <Button
-        key="cache-guard-handoff"
-        label={s.watch ? 'Handoff writing...' : 'Handoff'}
-        variant={cold ? 'primary' : undefined}
-        onPress={() => startHandoff($, s)}
-      />
+    <Box key="cache-guard-band" flexDirection="column">
+      <Box>
+        <Text key="cache-guard-tag" bold color="cyan">Cache-Guard</Text>
+        <Text>{top.length > 0 ? '  ' : ''}</Text>
+        {joined(top)}
+      </Box>
+      <Box>
+        <Text>{'            '}</Text>
+        {joined(bottom)}
+        <Text>{bottom.length > 0 ? '   ' : ''}</Text>
+        {cold ? <Text key="cache-guard-cold" color="yellow" bold>{'! '}</Text> : null}
+        <Button key="cache-guard-compact" label={compactLabel(s.status, left)} onPress={() => compactNow($)} />
+        <Text> </Text>
+        <Button
+          key="cache-guard-handoff"
+          label={s.watch ? 'Handoff writing...' : 'Handoff'}
+          variant={cold ? 'primary' : undefined}
+          onPress={() => startHandoff($, s)}
+        />
+        <Text> </Text>
+        <Button key="cache-guard-legend" label="?" dimColor onPress={() => showLegend($)} />
+      </Box>
     </Box>
   )
   return below ? (

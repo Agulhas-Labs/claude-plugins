@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { cacheHue, cachedHue, contextHue, limitHue } from './band.tsx'
 
 const NOW = 1_800_000_000_000
 const usage = (input: number, read: number, write: number, output = 100, model = 'claude-opus-5') =>
@@ -11,7 +12,7 @@ const status = (over: Record<string, unknown> = {}) => ({
 
 // The engine beneath the plugin: a session whose usage, status script and handoff script the test sets.
 function engine(on, world: { status: Record<string, unknown>; startedAt?: number; handoff?: Record<string, unknown>; below?: boolean }) {
-  const seen = { runs: [] as string[][], stdin: [] as string[], toasts: [] as string[], compacts: 0, files: {} as Record<string, string> }
+  const seen = { runs: [] as string[][], stdin: [] as string[], toasts: [] as string[], timeouts: [] as unknown[], compacts: 0, files: {} as Record<string, string> }
   on('process.run', (_$, e) => {
     seen.runs.push([...e.argv])
     seen.stdin.push(e.init?.stdin ?? '')
@@ -19,7 +20,7 @@ function engine(on, world: { status: Record<string, unknown>; startedAt?: number
     return { value: { exitCode: 0, stdout: JSON.stringify(out), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.usage', () => ({ value: { startedAt: world.startedAt ?? 1, context: { window: 1, percent: 61 }, rateLimits: [{ kind: 'five_hour', percentUsed: 34 }], cost: { usd: 2.51 } } }))
-  on('ui.toast', (_$, e) => void seen.toasts.push(e.text))
+  on('ui.toast', (_$, e) => void (seen.toasts.push(e.text), seen.timeouts.push(e.timeoutMs)))
   on('session.compact', () => { seen.compacts += 1; return { messages: [] } })
   on('fs.read', (_$, e) => ({ value: seen.files[e.path] ?? '' }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
@@ -53,18 +54,77 @@ test('the band wraps the drawing beneath it', async ($, on) => {
   expect(await band.find({ key: 'cache-guard-compact' })).toBeDefined()
 })
 
-test('hit % is the last main turn cache reads over all its input', async ($, on) => {
+type Node = { type: string; props?: Record<string, unknown>; children?: (Node | string)[] }
+const texts = (n: Node | string, out: { text: string; props: Record<string, unknown> }[] = []) => {
+  if (typeof n === 'string') return out
+  if (n.type === 'Text') out.push({ text: (n.children ?? []).join(''), props: n.props ?? {} })
+  for (const c of n.children ?? []) texts(c, out)
+  return out
+}
+// the Text drawn for a reading: the one whose text is the value
+const textOf = async (band, text: string) => texts((await band.drawn()) as Node).find(t => t.text === text)
+
+test('the band reads in plain words under a Cache-Guard tag', async ($, on) => {
   mock.clock(on, { now: NOW })
-  engine(on, { status: status() })
+  engine(on, { status: status({ agents_usd: 0.04 }) })
   await started($)
   await $.turn.complete(turn(usage(10, 980, 10)))
   await $.turn.complete(turn(usage(500, 0, 500), 'a1')) // a subagent's turn is not the last main turn
   const band = await mountBand($)
-  const text = (await band.drawn()) && (await band.find({ text: /hit/ }))?.text
-  expect(text).toContain('last turn 98% hit')
-  expect(text).toContain('ctx 61%')
-  expect(text).toContain('5h 34%')
-  expect(text).toContain('job $2.51')
+  const drawn = JSON.stringify(await band.drawn())
+  expect(drawn).toContain('Cache-Guard')
+  expect((await textOf(band, 'Cache-Guard'))?.props.bold).toBe(true)
+  expect((await textOf(band, '60 min left'))?.props.color).toBe('green')
+  expect((await textOf(band, '98% cached'))?.props.color).toBe('green')
+  expect((await textOf(band, '61% full'))?.props.color).toBe('yellow')
+  expect((await textOf(band, '34% used'))?.props.color).toBe('green')
+  expect((await textOf(band, '$2.51 (agents ~$0.04 est.)'))).toBeDefined()
+  expect(drawn).toContain('last prompt ')
+  expect(drawn).toContain('5-hour limit ')
+})
+
+test('colours follow the thresholds, just below and at each boundary', () => {
+  const life = 3600_000
+  expect(cacheHue(0.5 * life, life)).toBe('green')
+  expect(cacheHue(0.5 * life - 1, life)).toBe('yellow')
+  expect(cacheHue(0.1 * life, life)).toBe('yellow')
+  expect(cacheHue(0.1 * life - 1, life)).toBe('red')
+  expect(cacheHue(0, life)).toBe('red')
+  expect(cachedHue(80)).toBe('green')
+  expect(cachedHue(79)).toBe('yellow')
+  expect(cachedHue(40)).toBe('yellow')
+  expect(cachedHue(39)).toBe('red')
+  expect(contextHue(59)).toBe('green')
+  expect(contextHue(60)).toBe('yellow')
+  expect(contextHue(79)).toBe('yellow')
+  expect(contextHue(80)).toBe('red')
+  expect(limitHue(59)).toBe('green')
+  expect(limitHue(60)).toBe('yellow')
+  expect(limitHue(85)).toBe('yellow')
+  expect(limitHue(86)).toBe('red')
+})
+
+test('an expired cache reads cache expired in red', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  engine(on, { status: status({ last_turn_at: NOW - 2 * 3600_000 }) })
+  await started($)
+  await $.classic.SessionStart({ source: 'resume', transcript_path: '/t/s.jsonl', cwd: '/w', session_id: 's' } as never)
+  const band = await mountBand($)
+  expect((await textOf(band, 'cache expired'))?.props.color).toBe('red')
+})
+
+test('[?] toasts the legend in at most three toasts of fifteen seconds', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const seen = engine(on, { status: status() })
+  await started($)
+  await $.turn.complete(turn(usage(10, 980, 10)))
+  await mountBand($)
+  await $.ui.press({ plugin: 'cache-guard', key: 'cache-guard-legend' })
+  expect(seen.toasts.length).toBeGreaterThan(0)
+  expect(seen.toasts.length).toBeLessThanOrEqual(3)
+  const all = seen.toasts.join(' ')
+  for (const word of ['cache:', 'cached:', 'context:', '5-hour limit:', 'session:', 'new tokens:']) expect(all).toContain(word)
+  expect(seen.timeouts.every(t => t === 15_000)).toBe(true)
 })
 
 test('job totals count main and subagents and reset when startedAt changes', async ($, on) => {
@@ -75,11 +135,11 @@ test('job totals count main and subagents and reset when startedAt changes', asy
   await $.turn.complete(turn(usage(1000, 5000, 2000, 1000)))
   await $.turn.complete(turn(usage(100_000, 0, 0, 0, 'claude-haiku-4-5'), 'a1'))
   const band = await mountBand($)
-  expect((await band.find({ text: /new tok/ }))?.text).toContain('104k new tok')
+  expect((await textOf(band, '104k'))).toBeDefined()
   expect(JSON.parse(seen.stdin.at(-1)!).agents).toHaveLength(1)
   world.startedAt = 2 // a /clear
   await $.turn.complete(turn(usage(1000, 0, 0, 0)))
-  expect((await band.find({ text: /new tok/ }))?.text).toContain('1k new tok')
+  expect((await textOf(band, '1k'))).toBeDefined()
   expect(JSON.parse(seen.stdin.at(-1)!).agents).toHaveLength(0)
 })
 
@@ -93,6 +153,7 @@ test('Compact compacts, and names the cold cost only when the cache is cold', as
   await clock.advance(31 * 60_000)
   expect((await band.find({ key: 'cache-guard-compact' }))?.props.label).toBe('Compact (cold ~$2.00)')
   expect((await band.find({ key: 'cache-guard-handoff' }))?.props.variant).toBe('primary')
+  expect((await textOf(band, '! '))?.props.color).toBe('yellow')
   await $.ui.press({ plugin: 'cache-guard', key: 'cache-guard-compact' })
   expect(seen.compacts).toBe(1)
 })
