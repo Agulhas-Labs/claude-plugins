@@ -86,6 +86,35 @@ no session outside it is. Handoff files hold your conversation, so they're reada
 first one puts a `.gitignore` in `.claude/handoffs/` that keeps them out of the repository. Delete it if
 you want to commit them.
 
+## The resume offer
+
+When a session starts in a directory whose newest handoff was written within the last 7 days, a two-line
+band above the prompt offers to pick the work up:
+
+```
+Previous session: <the handoff's summary line> (2 d ago) · branch feat/x · 2 ahead · 3 uncommitted
+[Resume] [Dismiss]
+```
+
+Every figure is computed when the session starts, not remembered: the age is from the handoff file's
+modification time, and the branch, the commits ahead of its upstream and the count of uncommitted files
+come from `git` in the session's working directory. A figure git can't give (no upstream, not a
+repository) is left out. The band says nothing about whether the work is finished or any test passed.
+
+**Resume** puts `Read <path> and continue from it.` in the prompt box as a draft. Nothing is sent and
+nothing is spent until you press Enter. **Dismiss** hides the band for the session, and so does sending
+any prompt. The band is not drawn when there is no handoff, when the newest is older than the limit, or
+while a survey is up.
+
+It is a mod, so it needs Claude Code 2.1.287 or later and draws in the terminal and the Desktop app only;
+elsewhere it does nothing, and the `SessionStart` hook's notice above is unchanged. The limit is the
+plugin option `resumeMaxAgeDays` (default `7`).
+
+What it reads and runs, since a mod is code with your full permissions: it reads the newest `.md` file in
+the handoffs directory (the one the handoff hook writes to) and the git status of the working directory;
+it runs `hooks/resume.py` once at session start, which runs `git rev-parse`, `git rev-list --count` and
+`git status --porcelain` locally with a three-second limit each and no network. It writes nothing.
+
 ## Is it worth it for you?
 
 On the machine this was built on, a week of the `agent-cost` report from the `delegate` plugin showed 6%
@@ -109,6 +138,7 @@ All optional, set under `env` in `~/.claude/settings.json` or a repository's `.c
 | `CACHE_GUARD_HANDOFF_MODEL` | `haiku`, or `sonnet` when long | The model that writes the summary. |
 | `CACHE_GUARD_HANDOFF_SUMMARY` | on | `0` writes the script-only handoff and starts nothing. |
 | `CACHE_GUARD_HANDOFF_FRESH_MINUTES` | `30` | How recent a handoff must be for a new session to be told about it. |
+| `resumeMaxAgeDays` (plugin option, not an environment variable) | `7` | How old the newest handoff may be for the resume band to be offered. |
 | `CACHE_GUARD_NOTIFY` | on | `0` sends no desktop notifications; the terminal messages are unchanged. |
 | `CACHE_GUARD_STATE_DIR` | `~/.claude/cache-guard` | Where the guard keeps its few small marker files. |
 | `CACHE_GUARD_DISABLE` | off | `1` switches the guard off. |

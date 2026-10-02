@@ -1,4 +1,7 @@
 {
+  "modules": [
+    "./resume.tsx"
+  ],
   "hooks": {
     "UserPromptSubmit": [
       {
