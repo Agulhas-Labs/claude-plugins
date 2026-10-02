@@ -1,7 +1,7 @@
 {
   "name": "delegate",
   "displayName": "Delegate: Agents Sized to the Job",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Your Claude Code session leads a team of agents, each on the cheapest model that can do its job. Work isn't accepted until a command proves it, and a built-in report shows where your tokens went.",
   "author": {
     "name": "Agulhas Labs"
@@ -36,6 +36,13 @@
       "description": "The cap in the band's 'n/cap running' count. DELEGATE_MAX_CONCURRENT_AGENTS, when set, takes its place.",
       "default": 6,
       "min": 1
+    },
+    "collapseAbove": {
+      "type": "number",
+      "title": "Collapse the band above (agents)",
+      "description": "With more running or recent agents than this, the band starts as one summary line; 0 always starts collapsed. A press of its button holds until no agent is left.",
+      "default": 3,
+      "min": 0
     }
   }
 }

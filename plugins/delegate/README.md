@@ -134,14 +134,19 @@ reads and cache writes together) and an estimated cost. A finished row stays abo
 agent ends, a toast says the same, with `finished` or `stopped`: `delegate:runner (haiku-4-5) finished
 in 14s · 52.0k tok · ~$0.018 est.: run the suite`.
 
+- **Collapsed:** with more running or recent agents than `collapseAbove` (default 3; 0 always), the band
+  is one line, `agents 8/6 running · runner x5, builder x2, reviewer x1 · 112.0k tok · ~$0.31 est.
+  · 2 finished  [Expand]`: counts per agent type, and tokens and cost summed over every agent shown.
+  `[Expand]` and `[Collapse]` switch it; your choice holds until no agent is left, then the count decides
+  again. The choice is kept in memory only.
 - **The cost is an estimate:** each request's tokens priced at the published list rate of the model
   that answered (`hooks/prices.json`), five-minute cache writes assumed. Effort shows as a label and is
   not a price factor: it changes how many tokens an agent uses, which the count already holds. There is
   no projected final cost. A model the table cannot place shows its tokens and `cost n/a`.
 - **The count's cap** is `DELEGATE_MAX_CONCURRENT_AGENTS` when it is set, otherwise the `cap` option
   (default 6). Agents waiting for a free slot are not shown: a mod cannot see them.
-- **Toasts** come only for runs of at least `minSeconds` (default 10; 0 for every run). `cap` and
-  `minSeconds` are the plugin's options.
+- **Toasts** come only for runs of at least `minSeconds` (default 10; 0 for every run). `cap`,
+  `minSeconds` and `collapseAbove` are the plugin's options.
 - **What it reads and runs:** the session's own events (agent starts, model requests, tool calls, turn
   ends), its own price table and that one environment variable. It writes no files, starts no
   processes and makes no network calls, but like any mod it runs inside Claude Code with your

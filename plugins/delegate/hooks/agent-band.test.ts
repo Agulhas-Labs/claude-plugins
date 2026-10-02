@@ -264,3 +264,99 @@ test('reads its price table from its own folder, once', async ($, on) => {
   expect(reads).toHaveLength(1)
   expect(reads[0]).toMatch(/\/hooks\/prices\.json$/)
 })
+
+// Collapsed mode. A Button's label is a prop, so labels are read beside the text.
+function labels(node: unknown, found: string[] = []): string[] {
+  if (node === null || typeof node !== 'object') return found
+  const label = (node as { props?: { label?: unknown } }).props?.label
+  if (typeof label === 'string') found.push(label)
+  for (const child of (node as { children?: unknown[] }).children ?? []) labels(child, found)
+  return found
+}
+const press = ($: Parameters<Parameters<typeof test>[1]>[0], key = 'toggle') =>
+  ($.ui as unknown as { press: (a: { plugin: string; key: string }) => Promise<unknown> }).press({ plugin: 'delegate', key })
+
+async function spawnMany(
+  $: Parameters<Parameters<typeof test>[1]>[0],
+  types: string[],
+) {
+  for (const subagentType of types) await $.agent.spawn({ prompt: 'x', subagentType, description: `job ${subagentType}` })
+}
+
+test('two agents and the default show the rows, with a Collapse button', async ($, on) => {
+  world(on)
+  spawns(on)
+  on('ui.render', () => beneath() as never)
+
+  await spawnMany($, ['delegate:runner', 'delegate:builder'])
+  const tree = await $.ui.render(band())
+
+  expect(text(tree)).toContain('job delegate:runner')
+  expect(labels(tree)).toEqual(['[Collapse]'])
+  expect(keys(tree)).toEqual(expect.arrayContaining(['agent-a1', 'agent-a2', 'toggle', 'beneath']))
+})
+
+test('four agents collapse to one line of type counts, summed tokens and cost, still wrapping beneath', async ($, on) => {
+  world(on)
+  spawns(on)
+  steps(on)
+  on('ui.render', () => beneath() as never)
+
+  await spawnMany($, ['delegate:runner', 'delegate:runner', 'delegate:builder', 'delegate:reviewer'])
+  for (const id of ['a1', 'a2', 'a3', 'a4']) await step($, id)
+  await $.turn.complete(finished('a4', 3000))
+  const tree = await $.ui.render(band())
+  const shown = text(tree)
+
+  // 4 x 52033 = 208132 tokens; 4 x $0.018468 = $0.074.
+  expect(shown).toContain('agents 3/6 running · runner x2, builder x1, reviewer x1 · 208.1k tok · ~$0.074 est.')
+  expect(shown).toContain('· 1 finished')
+  expect(labels(tree)).toEqual(['[Expand]'])
+  expect(shown).toContain('another band')
+  expect(keys(tree)).not.toContain('agent-a1')
+})
+
+test('the button toggles the mode', async ($, on) => {
+  world(on)
+  spawns(on)
+  on('ui.render', () => beneath() as never)
+
+  await spawnMany($, ['delegate:runner', 'delegate:runner', 'delegate:builder', 'delegate:reviewer'])
+  expect(keys(await $.ui.render(band()))).not.toContain('agent-a1')
+  await press($)
+  expect(keys(await $.ui.render(band()))).toContain('agent-a1')
+  await press($)
+  expect(keys(await $.ui.render(band()))).not.toContain('agent-a1')
+})
+
+test('an explicit choice survives 4 to 5 agents and resets after every agent ends', async ($, on) => {
+  const { clock } = world(on)
+  spawns(on)
+  on('ui.render', () => beneath() as never)
+
+  await spawnMany($, ['delegate:runner', 'delegate:runner', 'delegate:builder', 'delegate:reviewer'])
+  await $.ui.render(band())
+  await press($) // expand
+  await spawnMany($, ['delegate:runner'])
+  expect(keys(await $.ui.render(band()))).toContain('agent-a1')
+
+  for (const id of ['a1', 'a2', 'a3', 'a4', 'a5']) await $.turn.complete(finished(id, 1000))
+  await clock.advance(21000)
+  expect(keys(await $.ui.render(band()))).toEqual(['beneath'])
+
+  await spawnMany($, ['delegate:runner', 'delegate:runner', 'delegate:builder', 'delegate:reviewer'])
+  expect(keys(await $.ui.render(band()))).not.toContain('agent-a6')
+  expect(labels(await $.ui.render(band()))).toEqual(['[Expand]'])
+})
+
+test('collapseAbove 0 always collapses', { options: { collapseAbove: 0 } }, async ($, on) => {
+  world(on)
+  spawns(on)
+  on('ui.render', () => beneath() as never)
+
+  await spawnMany($, ['delegate:runner'])
+  const tree = await $.ui.render(band())
+
+  expect(text(tree)).toContain('agents 1/6 running · runner x1')
+  expect(keys(tree)).not.toContain('agent-a1')
+})

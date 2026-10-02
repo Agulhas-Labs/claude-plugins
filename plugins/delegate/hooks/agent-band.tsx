@@ -30,12 +30,16 @@ const TICK_MS = 1000
 // How long a finished agent's row stays, so the person sees how it ended.
 const LINGER_MS = 20000
 const DEFAULT_CAP = 6
+const DEFAULT_COLLAPSE_ABOVE = 3
 
 // Module state: a reload starts it over, and the engine drops the old module's timers.
 const agents = new Map<string, Agent>()
 let families: [string, Rates][] | null = null
 let cap = DEFAULT_CAP
 let minSeconds = 10
+let collapseAbove = DEFAULT_COLLAPSE_ABOVE
+// The person's own choice from the button; null leaves it to the agent count.
+let chosen: 'collapsed' | 'expanded' | null = null
 let tick: Timer | null = null
 let linger: Timer | null = null
 
@@ -109,6 +113,28 @@ export function toastText(a: Agent): string {
 
 const runningCount = () => [...agents.values()].filter(a => a.status === 'running').length
 
+const isCollapsed = () => (chosen ?? (agents.size > collapseAbove ? 'collapsed' : 'expanded')) === 'collapsed'
+
+/** `delegate:runner` reads as `runner`. */
+const shortType = (type: string) => type.slice(type.indexOf(':') + 1)
+
+/** The collapsed band's text, without its button: counts per type, summed tokens and cost. */
+export function summaryText(list: readonly Agent[], running: number, capacity: number): string {
+  const counts = new Map<string, number>()
+  for (const a of list) {
+    counts.set(shortType(a.type), (counts.get(shortType(a.type)) ?? 0) + 1)
+  }
+  const groups = [...counts.entries()]
+    .sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))
+    .map(([name, n]) => `${name} x${n}`)
+    .join(', ')
+  const total = list.reduce((sum, a) => sum + tokens(a), 0)
+  const cost = list.reduce<number | null>((sum, a) => (sum === null || a.cost === null ? null : sum + a.cost), 0)
+  const done = list.length - running
+  const tail = done > 0 ? ` · ${done} finished` : ''
+  return `agents ${running}/${capacity} running · ${groups} · ${formatTokens(total)} tok · ${formatCost(cost)}${tail}`
+}
+
 async function loadPrices($: EngineInterface) {
   if (families !== null) {
     return
@@ -152,6 +178,7 @@ function reset() {
   tick = null
   linger = null
   agents.clear()
+  chosen = null
 }
 
 function prune(now: number) {
@@ -166,6 +193,7 @@ export const register: Register = (on, options) => {
   const configuredCap = typeof options.cap === 'number' && options.cap > 0 ? options.cap : DEFAULT_CAP
   minSeconds = typeof options.minSeconds === 'number' && options.minSeconds >= 0 ? options.minSeconds : 10
   cap = configuredCap
+  collapseAbove = typeof options.collapseAbove === 'number' && options.collapseAbove >= 0 ? options.collapseAbove : DEFAULT_COLLAPSE_ABOVE
 
   on('agent.spawn', async ($, e, next) => {
     await loadPrices($)
@@ -257,17 +285,44 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const beneath = await next(e)
+    if (agents.size === 0) {
+      chosen = null // the choice holds only while there are agents
+    }
     if (e.props.hasSurvey || agents.size === 0) {
       return beneath
     }
 
     prune(await $.clock.now())
     if (agents.size === 0) {
+      chosen = null // the choice holds only while there are agents
       return beneath
     }
 
     const now = await $.clock.now()
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const toggle = (
+      <Button
+        key="toggle"
+        label={isCollapsed() ? '[Expand]' : '[Collapse]'}
+        onPress={() => {
+          chosen = isCollapsed() ? 'expanded' : 'collapsed'
+          $.ui.invalidate('ui.render')
+        }}
+      />
+    )
+
+    if (isCollapsed()) {
+      return (
+        <Box flexDirection="column">
+          <Box key="agents" flexDirection="row">
+            <Text dimColor>{`${summaryText([...agents.values()], runningCount(), cap)}  `}</Text>
+            {toggle}
+          </Box>
+          {beneath}
+        </Box>
+      )
+    }
+
     const rows = [...agents.entries()].map(([id, a]) => (
       <Box key={`agent-${id}`} flexDirection="row">
         {a.description ? <Text bold>{`${a.description}  `}</Text> : null}
@@ -278,7 +333,10 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         <Box key="agents" flexDirection="column">
-          <Text dimColor>{`agents ${runningCount()}/${cap} running`}</Text>
+          <Box flexDirection="row">
+            <Text dimColor>{`agents ${runningCount()}/${cap} running  `}</Text>
+            {toggle}
+          </Box>
           {rows}
         </Box>
         {beneath}

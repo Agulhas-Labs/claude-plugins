@@ -12,7 +12,7 @@
       "name": "delegate",
       "source": "./plugins/delegate",
       "description": "Your Claude Code session leads a team of agents, each on the cheapest model that can do its job. Work isn't accepted until a command proves it, and a built-in report shows where your tokens went.",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "displayName": "Delegate: Agents Sized to the Job",
       "author": {
         "name": "Agulhas Labs"
