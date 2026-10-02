@@ -1,7 +1,7 @@
 {
   "name": "upkeep",
   "displayName": "Upkeep",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Reminds you every two weeks to look after your Claude Code setup, and /upkeep runs the checks: what /doctor reports, plus rules and skills that are too big, installed guides that have drifted from their source, and leftover worktrees, branches and stale memory. It proposes; nothing changes without your confirmation.",
   "author": {
     "name": "Agulhas Labs"

@@ -25,7 +25,8 @@ Otherwise it adds nothing. It is not added to subagents or after a compaction.
 
 `/upkeep` then:
 
-1. Asks you to run `/doctor` (a skill can't invoke a built-in command) and builds on its report: install
+1. Asks you to run `/doctor` (a skill can't invoke a built-in command); when it finishes, `/upkeep` carries on
+   by itself and builds on its report: install
    health, unused skills, MCP servers and plugins, CLAUDE.md duplication, slow hooks, versions.
 2. Runs three read-only checks `/doctor` doesn't:
    - **Size budget:** every rule, CLAUDE.md and SKILL.md over 4 KB with no `paths:` frontmatter (rules

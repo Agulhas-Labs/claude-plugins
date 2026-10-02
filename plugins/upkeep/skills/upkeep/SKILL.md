@@ -20,8 +20,9 @@ changed, deleted or written without a confirmation, except the one stamp file in
 
 ## 1. /doctor
 
-Built-in commands cannot be invoked from a skill. Ask the user to run `/doctor` now, and wait for them
-to say it is done or paste its report. Build on that report (install health, unused skills, MCP servers
+Built-in commands cannot be invoked from a skill. Ask the user to run `/doctor` now, and say they
+need not report back: its report reaches you in the same session when it finishes, and you carry on from
+there. Only if nothing arrives, ask them to paste it. Build on that report (install health, unused skills, MCP servers
 and plugins, CLAUDE.md duplication and trim, slow hooks, version currency); do not re-run or reimplement
 any of it. If they decline, go on and say in the summary that the `/doctor` checks were not covered.
 
