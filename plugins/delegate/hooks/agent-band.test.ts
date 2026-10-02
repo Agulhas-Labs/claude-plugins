@@ -378,7 +378,7 @@ test('the band carries a bold Delegate tag in its own colour', async ($, on) => 
   await spawnMany($, ['delegate:runner'])
   const [tag] = textProps(await $.ui.render(band()), 'Delegate ')
 
-  expect(tag).toMatchObject({ bold: true, color: 'cyan' })
+  expect(tag).toMatchObject({ bold: true, color: 'white' })
 })
 
 test('the running count is green at or under the cap and red over it', { options: { cap: 2 } }, async ($, on) => {

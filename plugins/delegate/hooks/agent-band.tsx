@@ -318,7 +318,7 @@ export const register: Register = (on, options) => {
     const running = runningCount()
     const head = `agents ${running}/${cap} running`
     const tag = (
-      <Text key="tag" bold color="cyan">
+      <Text key="tag" bold color="white">
         {'Delegate '}
       </Text>
     )
