@@ -94,6 +94,32 @@ of main-session spend going on ten messages, each sent after more than an hour a
 five-minute or the one-hour cache. On a subscription the dollar figures aren't a bill, but the same
 tokens come out of your usage limit.
 
+## The band above the prompt
+
+In Claude Code 2.1.287 or later, in the terminal or the desktop app, a band above the prompt shows:
+
+```text
+cache 43m ▪▪▪▪▪▫▫ · last turn 98% hit · ctx 61% · 5h 34% · job $2.51 (agents ~$0.30 est.) · 1.2M new tok   [ Compact ] [ Handoff ]
+```
+
+- `cache 43m`: time left before the prompt cache expires, counted down from the last answer and the
+  lifetime the session is buying. `cache cold` once it has gone.
+- `last turn 98% hit`: the share of the last main turn's input that was read from cache.
+- `ctx` and `5h`: the context window's fill and the five-hour usage limit, when Claude Code has a reading.
+- `job`: what the session has cost, subagents included, as `/cost` totals it. `agents ... est.` is the
+  subagents' share, priced from their token counts at API list prices, so it's an estimate.
+- `new tok`: input, output and cache-write tokens summed over the main session and every subagent since
+  the session began or was last cleared. Cache reads aren't counted.
+
+`Compact` runs `/compact`. Once the cache is cold its label shows what that costs, for example
+`Compact (cold ~$2.00)`, because compacting a cold context pays to send the whole context first.
+`Handoff` writes the same handoff as the word `handoff`, starts its background summary, and tells you
+when the summary is in and `/clear` is safe. Neither button sends anything to the session's model.
+
+The band reads the transcript with the same script the guard uses (`hooks/status.py`), when a turn ends
+or a session starts, never while drawing. It runs `hooks/handoff.py` when you press `Handoff`, and reads
+the handoff file while it waits for the summary. Elsewhere nothing draws and the hooks above still work.
+
 ## Settings
 
 All optional, set under `env` in `~/.claude/settings.json` or a repository's `.claude/settings.json`.

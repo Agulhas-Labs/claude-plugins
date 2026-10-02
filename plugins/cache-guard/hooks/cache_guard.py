@@ -102,6 +102,7 @@ CLI_ALIASES = {"sonnet": "sonnet5"}
 CACHE_READ_FRACTION = 0.1
 WRITE_MULTIPLIER_1H = 2.0
 WRITE_MULTIPLIER_5M = 1.25
+OUTPUT_MULTIPLIER = 5.0  # published output price is five times input for every model in the table
 
 # `/model` and `/effort` each leave the command's own output in the transcript, as a user entry whose
 # message content is this plain string. A tool result that quotes the same text has list content.

@@ -597,8 +597,22 @@ def summarise(out_path, model):
         )
 
 
+def write_from_stdin(env):
+    """`--write`: the band's Handoff button. The hook's payload on stdin, write_handoff's result as JSON."""
+    from datetime import datetime
+
+    try:
+        result = write_handoff(json.load(sys.stdin), datetime.now(timezone.utc), env)
+        result["pending_text"] = PENDING_SUMMARY
+    except Exception as failure:
+        result = {"error": cache_guard.failed_handoff_reason(failure)}
+    print(json.dumps(result))
+
+
 def main(argv):
-    if len(argv) == 4 and argv[1] == "--summarise":
+    if len(argv) == 2 and argv[1] == "--write":
+        write_from_stdin(os.environ)
+    elif len(argv) == 4 and argv[1] == "--summarise":
         try:
             summarise(argv[2], argv[3])
         except Exception:
