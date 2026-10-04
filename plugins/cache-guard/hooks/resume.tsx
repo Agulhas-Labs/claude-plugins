@@ -11,6 +11,8 @@ type Facts = {
 }
 
 const DAY_MS = 86_400_000
+const DISMISSED_KEY = 'dismissed'
+const DISMISSED_KEPT = 50 // handoff paths remembered; older ones are long past the age limit anyway
 
 const age = (ms: number) => {
   const minutes = Math.floor(ms / 60_000)
@@ -22,6 +24,13 @@ const age = (ms: number) => {
   return `${Math.floor(minutes / 1440)} d`
 }
 
+// A handoff that was dismissed or resumed is not offered again in a later session.
+async function remember($, path: string) {
+  const dismissed = ((await $.store.get(DISMISSED_KEY).catch(() => undefined)) ?? []) as string[]
+
+  if (!dismissed.includes(path)) await $.store.set(DISMISSED_KEY, [...dismissed, path].slice(-DISMISSED_KEPT))
+}
+
 export const register: Register = (on, options) => {
   const maxAgeDays = typeof options.resumeMaxAgeDays === 'number' && options.resumeMaxAgeDays > 0 ? options.resumeMaxAgeDays : 7
   let found: Facts | null = null
@@ -29,6 +38,8 @@ export const register: Register = (on, options) => {
   let isHidden = false
 
   on('session.start', async ($, e, next) => {
+    found = null
+    isHidden = false
     const root = $.plugin.root
     const run = await $.process.run(['sh', `${root}/hooks/run-python.sh`, `${root}/hooks/resume.py`, e.cwd], { timeoutMs: 15000 })
     let facts: Facts = {}
@@ -42,7 +53,9 @@ export const register: Register = (on, options) => {
     const written = facts.writtenAt ? Date.parse(facts.writtenAt) : NaN
     const now = await $.clock.now()
 
-    if (run.exitCode === 0 && facts.path && !Number.isNaN(written) && now - written <= maxAgeDays * DAY_MS) {
+    const dismissed = ((await $.store.get(DISMISSED_KEY).catch(() => undefined)) ?? []) as string[]
+
+    if (run.exitCode === 0 && facts.path && !Number.isNaN(written) && now - written <= maxAgeDays * DAY_MS && !dismissed.includes(facts.path)) {
       found = facts
       writtenAtMs = written
       $.ui.invalidate('ui.render')
@@ -85,14 +98,16 @@ export const register: Register = (on, options) => {
             onPress={async () => {
               await $.prompt.fill({ text: `Read ${facts.path} and continue from it.`, mode: 'replace' })
               isHidden = true
+              await remember($, facts.path as string)
               $.ui.invalidate('ui.render')
             }}
           />
           <Button
             key="dismiss"
             label="Dismiss"
-            onPress={() => {
+            onPress={async () => {
               isHidden = true
+              await remember($, facts.path as string)
               $.ui.invalidate('ui.render')
             }}
           />

@@ -15,8 +15,17 @@ const handoffWritten = (daysAgo: number) => ({
 const props = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 80, scroll: {}, view: {} } as never
 const start = { cwd: '/work', surface: 'terminal', isInteractive: true } as never
 
+const world: { stdout?: string } = {}
+
 const setup = (on: any, facts: unknown, stdout = JSON.stringify(facts), withBase = true) => {
+  world.stdout = undefined
   mock.clock(on, { now: NOW })
+  const kept = new Map<string, unknown>() // the plugin's store, which outlives a session
+  on('store.get', (_$: unknown, e: { key: string }) => ({ value: kept.get(e.key) }))
+  on('store.set', (_$: unknown, e: { key: string; value: unknown }) => {
+    kept.set(e.key, e.value)
+    return { value: undefined }
+  })
   if (withBase) {
     on('ui.render', { component: 'AbovePrompt' }, ($b: any, e: any) => {
       const { Box } = $b.ui.resolve(e)
@@ -27,7 +36,7 @@ const setup = (on: any, facts: unknown, stdout = JSON.stringify(facts), withBase
   on('session.start', (_$: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('process.run', (_$: unknown, e: { argv: string[] }) => {
     calls.push([...e.argv])
-    return { value: { exitCode: 0, stdout, stderr: '' } }
+    return { value: { exitCode: 0, stdout: world.stdout ?? stdout, stderr: '' } }
   })
   const fills: { text: string; mode?: string }[] = []
   on('prompt.fill', (_$: unknown, e: { text: string; mode?: string }) => {
@@ -145,4 +154,28 @@ test('wraps next(e): another plugin band survives beneath it', async ($, on) => 
 
   expect(await ui.find({ type: 'Text', text: /Previous session/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /OTHER BAND/ })).toBeDefined()
+})
+
+test('Dismiss is remembered: a later session does not offer the same handoff again', async ($, on) => {
+  setup(on, handoffWritten(1))
+  await $.session.start(start)
+  const ui = await mountBand($, 'terminal')
+  await ui.press({ key: 'dismiss' })
+
+  await $.session.start(start) // the next session, same handoff on disk
+  expect(await ui.find({ type: 'Text', text: /Previous session/ })).toBeUndefined()
+})
+
+test('Resume is remembered too, and a newer handoff is still offered', async ($, on) => {
+  setup(on, handoffWritten(1))
+  await $.session.start(start)
+  const ui = await mountBand($, 'terminal')
+  await ui.press({ key: 'resume' })
+
+  await $.session.start(start)
+  expect(await ui.find({ type: 'Text', text: /Previous session/ })).toBeUndefined()
+
+  world.stdout = JSON.stringify({ ...handoffWritten(0.5), path: '/work/.claude/handoffs/2026-10-02.md' })
+  await $.session.start(start)
+  expect(await ui.find({ type: 'Text', text: /Previous session/ })).toBeDefined()
 })

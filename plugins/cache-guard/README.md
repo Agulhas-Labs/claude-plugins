@@ -102,8 +102,9 @@ come from `git` in the session's working directory. A figure git can't give (no 
 repository) is left out. The band says nothing about whether the work is finished or any test passed.
 
 **Resume** puts `Read <path> and continue from it.` in the prompt box as a draft. Nothing is sent and
-nothing is spent until you press Enter. **Dismiss** hides the band for the session, and so does sending
-any prompt. The band is not drawn when there is no handoff, when the newest is older than the limit, or
+nothing is spent until you press Enter. **Dismiss** and **Resume** hide the band and are remembered: that
+handoff is not offered again in a later session (a newer handoff still is). Sending any prompt hides it for
+the rest of the session. The band is not drawn when there is no handoff, when the newest is older than the limit, or
 while a survey is up.
 
 It is a mod, so it needs Claude Code 2.1.287 or later and draws in the terminal and the Desktop app only;
@@ -125,30 +126,28 @@ tokens come out of your usage limit.
 
 ## The band above the prompt
 
-In Claude Code 2.1.287 or later, in the terminal or the desktop app, a band above the prompt shows what is left of the prompt cache and what the job has used.
+In Claude Code 2.1.287 or later, in the terminal or the desktop app, one row above the prompt shows what is left of the prompt cache and what a miss would cost.
 
 An example (made-up figures), with each figure coloured by what it means:
 
 ```text
-Cache-Guard  cache 43 min left ▪▪▪▪▪▫▫ · last prompt 98% cached · context 61% full · 5-hour limit 34% used
-             session $2.51 (agents ~$0.30 est.) · 1.2M new tokens   [ Compact ] [ Handoff ] [ ? ]
+Cache-Guard  Cache 25 mins left · Tokens 109K (7%) · Miss cost $3.34 · 5h 1%   [ Handoff ]
 ```
 
 | Figure | Means | Colour |
 | --- | --- | --- |
-| `cache 43 min left` | Minutes before the prompt cache expires, counted down from the last answer and the lifetime the session is buying. After that the next message re-sends the whole context at full price. `cache expired` once it has gone. | Green with half the lifetime or more left, yellow down to a tenth, red below that or expired. |
-| `last prompt 98% cached` | The share of the last main prompt served from cache. High is good, and cheap. | Green at 80% or more, yellow from 40%, red below. |
-| `context 61% full` | The share of the model's window in use, when Claude Code has a reading. | Green below 60%, yellow below 80%, red at 80% or more. |
-| `5-hour limit 34% used` | The share of the rolling five-hour usage limit used, when Claude Code has a reading. | Green below 60%, yellow up to 85%, red above. |
-| `session $2.51` | The cost so far, subagents included, as `/cost` totals it. `agents ... est.` is the subagents' share, priced from their token counts at API list prices, so it is an estimate. | Plain. |
-| `1.2M new tokens` | Input, output and cache-write tokens summed over the main session and every subagent since the session began or was last cleared. Cache reads aren't counted. | Plain. |
+| `Cache 25 mins left` | Minutes before the prompt cache expires, counted down from the last answer and the lifetime the session is buying. `Cache expired` once it has gone. | Green with half the lifetime or more left, yellow down to a tenth, red below that or expired. |
+| `Tokens 109K (7%)` | The size of the context the next message re-sends, and the share of the model's window it fills when Claude Code has a reading. | The share is green below 60%, yellow below 80%, red at 80% or more. |
+| `Miss cost $3.34` | What the next message costs if the cache has expired: the whole context written back at list price. Left out when `CACHE_GUARD_SHOW_COST=0`. | Yellow once the cache has expired, plain before. |
+| `5h 1%` | The share of the rolling five-hour usage limit used, when Claude Code has a reading. | Green below 60%, yellow up to 85%, red above. |
 
-The colour cut-offs are display choices, not measured values. `[ ? ]` opens this legend in a pane titled "Cache-Guard: what the band shows" (a second press, or its Close button, closes it); the pane's text is one constant in `hooks/band.tsx`, and a test checks it covers every figure the band draws. `Compact` and `Handoff` are described in the pane too.
+The colour cut-offs are display choices, not measured values.
 
-`Compact` runs `/compact`. Once the cache is cold its label shows what that costs, for example
-`Compact (cold ~$2.00)`, with a yellow `!` before it, because compacting a cold context pays to send the whole context first.
-`Handoff` writes the same handoff as the word `handoff`, starts its background summary, and tells you
-when the summary is in and `/clear` is safe. Neither button sends anything to the session's model.
+`Handoff` (or `h` while the band has the focus) writes the same handoff as the word `handoff` and starts its
+background summary. The button reads `Writing handoff` with a turning spinner until the summary is in; then
+a box above the band says the handoff is ready and `/clear` is safe, gives the file's path, and says how to
+pick it up: `/clear`, then press Resume above the prompt, or send `Read <path> and continue from it.`
+Dismiss closes the box, and so does `/clear`. It sends nothing to the session's model.
 
 The band reads the transcript with the same script the guard uses (`hooks/status.py`), when a turn ends
 or a session starts, never while drawing. It runs `hooks/handoff.py` when you press `Handoff`, and reads
