@@ -11,6 +11,14 @@ the user chose. It hands the work to the roster, and choosing the rung is its jo
 plugin's agents are named `delegate:<rung>` (`delegate:mechanic`, …); a user-level agent
 with a bare name such as `mechanic` is a different definition.
 
+**Your own model is the ceiling.** No agent runs on a model above this session's. The pins below are
+for a session on Opus or higher. Where a rung's pin is above your model, pass your model as `model` on
+that Agent call (`model: "sonnet"` on a Sonnet session); it beats the agent file's pin. So a Sonnet
+session runs `builder` and `reviewer` on Sonnet, still at high effort, which a call cannot change. The
+reviewer still runs, being the only reader that has seen just the spec and the diff. Prefer
+`builder-lite` or `mechanic` wherever the job fits. A Haiku session caps the whole roster at Haiku. Where
+the job needs more than your model gives, tell the user to run `/advisor` with `opus` or `fable`.
+
 - **runner** (Haiku): a fully scripted command sequence with a mechanical pass/fail. No
   editing and no judgement. If the script's assumptions fail, it stops and reports.
 - **mechanic** (Sonnet, medium): mechanical, fully specified work a gate can judge: sweeps, renames,

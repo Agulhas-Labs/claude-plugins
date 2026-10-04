@@ -2,8 +2,9 @@
 
 Your Claude Code session leads a team of agents, each on the cheapest model that can do its job, and no
 work counts as done until a command proves it. Haiku runs commands, Sonnet makes changes that are already
-spelled out, and Opus writes the code that still needs decisions. A separate Opus reviewer sees only the
-spec and the diff. A built-in report shows where your tokens went.
+spelled out, and Opus writes the code that still needs decisions. A separate reviewer sees only the
+spec and the diff. No agent runs on a model above your session's, so a Sonnet session stays on Sonnet and
+below. A built-in report shows where your tokens went.
 
 A plugin for Claude Code, the terminal and IDE tool. It does not work in claude.ai chat or Cowork.
 
@@ -99,15 +100,30 @@ Your numbers will differ; `agent-cost` shows you yours.
 
 | Agent | Model | Its work |
 | --- | --- | --- |
-| your session | yours (Opus or Fable) | Plans, picks the agent for each job, writes the handoff, re-runs the gates. |
+| your session | yours (Sonnet, Opus or Fable) | Plans, picks the agent for each job, writes the handoff, re-runs the gates. |
 | `runner` | Haiku | A scripted list of commands whose output is the answer. It edits nothing. |
 | `mechanic` | Sonnet | Bulky, fully specified changes: sweeps, renames, fixtures, running suites. |
 | `builder-lite` | Sonnet | A small round of fixes a review has already spelled out. |
-| `builder` | Opus | Implementation inside an agreed plan, where decisions remain. |
-| `reviewer` | Opus | Sees the spec and the diff, never the reasoning that produced them. |
+| `builder` | Opus, or your session's model if lower | Implementation inside an agreed plan, where decisions remain. |
+| `reviewer` | Opus, or your session's model if lower | Sees the spec and the diff, never the reasoning that produced them. |
 
 The agents are namespaced (`delegate:runner` and so on). The plugin never changes your session's
-model, only what the subagents run on.
+model, only what the subagents run on, and it never runs one above your session's model. Your session
+passes its own model as a per-call override when a pin is higher, so on Sonnet the `builder` and
+`reviewer` are Sonnet agents (still at high effort, which a call cannot change) and `builder-lite` or
+`mechanic` take whatever fits them. Start on Opus for the full ladder.
+
+## The model you start on is the ceiling
+
+No agent runs on a model above your session's. Start on Opus and the whole ladder is available. Start
+on Sonnet and your session passes `model: "sonnet"` on any call whose agent is pinned higher, so
+`builder` and `reviewer` run on Sonnet (at their high effort, which a call cannot change) and
+`builder-lite` or `mechanic` take whatever fits them. Start on Haiku and everything runs on Haiku. The
+reviewer always runs: it is the only reader that sees just the spec and the diff.
+
+On Sonnet, when a job needs stronger judgement, run `/advisor` and choose `opus` or `fable`. Your session
+then asks that model for advice on its whole conversation, without spawning an agent. The advisor has
+seen the plan, so it does not replace the reviewer.
 
 ## Running more or fewer agents at once
 
