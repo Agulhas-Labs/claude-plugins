@@ -21,7 +21,6 @@ fi
 "$py" -m unittest discover -s plugins/delegate/skills/agent-cost/tests
 "$py" -m unittest discover -s plugins/cache-guard/tests
 "$py" -m unittest discover -s plugins/logbook/tests
-"$py" -m unittest discover -s plugins/upkeep/tests
 
 # A plugin's version is written twice, in its manifest and in the marketplace entry; they must agree.
 "$py" - <<'EOF'

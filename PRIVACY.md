@@ -29,14 +29,6 @@ for them and receives nothing from them: no analytics, no telemetry, no accounts
 - The page holds your prompts and commit subjects, stays on your machine, and loads nothing from the
   network.
 
-## upkeep
-
-- The session-start hook reads one file, `last-upkeep` in the plugin's data directory (or
-  `~/.claude/upkeep/`), and nothing else: no settings, no transcripts.
-- `/upkeep` reads your rules, CLAUDE.md and SKILL.md files, the project's git metadata and the project's
-  memory notes to report on them. It writes only that one file, unless you confirm a cleanup it proposes.
-- Makes no network requests and sends nothing.
-
 ## Questions
 
 Open an issue at https://github.com/Agulhas-Labs/claude-plugins/issues.

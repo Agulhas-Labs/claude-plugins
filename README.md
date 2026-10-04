@@ -19,7 +19,6 @@ Start a new session after installing. None of them needs configuring.
 | [`delegate`](plugins/delegate/README.md) | A few long-running subagents take most of your spend, and you can't see where your tokens go. | Your session leads a roster of subagents on models matched to the job, and re-runs the commands that prove each handoff before it believes the report. Its `agent-cost` report reads the transcripts already on your disk and shows the spend for your sessions and their subagents. |
 | [`cache-guard`](plugins/cache-guard/README.md) | A message sent into a big session after its prompt cache expired costs far more than it looks, and nothing tells you. | Holds that message back once and shows what it will cost. Send it again and it goes through. A band above the prompt shows the cache's minutes left, the context size and what a miss would cost, with a Handoff button, and offers to resume the previous session's handoff. |
 | [`logbook`](plugins/logbook/README.md) | A long task ends and you dig through the scroll to find out what happened. | Keeps a live local page of what was built, what was verified, what was decided without you and what's waiting on you. It becomes the report when the session ends. |
-| [`upkeep`](plugins/upkeep/README.md) | Config maintenance (oversized guides, leftover worktrees, stale memory) is easy to forget and nothing reminds you. | Says once, in one line, when a run is due (every 14 days by default). `/upkeep` builds on `/doctor`, adds three checks, and changes nothing without your confirmation. |
 
 ## delegate
 
@@ -69,16 +68,6 @@ one to keep or send.
 [logbook README](plugins/logbook/README.md): the page's sections, answering a question from the
 page, and the settings.
 
-## upkeep
-
-Claude Code config collects debris: rules that grew past what they're worth, guides that drifted from
-their source, merged worktrees and branches, memory notes naming files that are gone. Upkeep's
-session-start hook adds one line to a session when your last run is more than two weeks old, and
-silence otherwise. `/upkeep` then asks you to run `/doctor`, adds three read-only checks, and proposes
-fixes. It confirms before it changes anything.
-
-[upkeep README](plugins/upkeep/README.md): what it reads and writes, the interval, and how to silence it.
-
 ## Installing for a team
 
 The commands at the top install a plugin for you. To offer them to everyone working in a repository,
@@ -95,8 +84,7 @@ commit this to the repository's `.claude/settings.json`, keeping the plugins you
   "enabledPlugins": {
     "delegate@agulhas-labs": true,
     "cache-guard@agulhas-labs": true,
-    "logbook@agulhas-labs": true,
-    "upkeep@agulhas-labs": true
+    "logbook@agulhas-labs": true
   }
 }
 ```
