@@ -1,4 +1,7 @@
 {
+  "modules": [
+    "./agent-band.tsx"
+  ],
   "hooks": {
     "SessionStart": [
       {

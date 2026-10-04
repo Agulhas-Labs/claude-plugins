@@ -45,6 +45,10 @@ if command -v claude >/dev/null 2>&1; then
   claude plugin validate . --strict
   for plugin in plugins/*/; do
     claude plugin validate "${plugin%/}" --strict
+    # A mod's tests (*.test.ts) run on the engine itself; the unit-test runs above do not see them.
+    if [ -n "$(find "${plugin%/}" -name '*.test.ts' -print -quit)" ]; then
+      claude plugin test "${plugin%/}"
+    fi
   done
 else
   echo "manifest validation: claude CLI not found — skipped" >&2

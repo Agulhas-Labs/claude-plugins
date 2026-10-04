@@ -2,8 +2,9 @@
 
 Your Claude Code session leads a team of agents, each on the cheapest model that can do its job, and no
 work counts as done until a command proves it. Haiku runs commands, Sonnet makes changes that are already
-spelled out, and Opus writes the code that still needs decisions. A separate Opus reviewer sees only the
-spec and the diff. A built-in report shows where your tokens went.
+spelled out, and Opus writes the code that still needs decisions. A separate reviewer sees only the
+spec and the diff. No agent runs on a model above your session's, so a Sonnet session stays on Sonnet and
+below. A built-in report shows where your tokens went.
 
 A plugin for Claude Code, the terminal and IDE tool. It does not work in claude.ai chat or Cowork.
 
@@ -76,6 +77,9 @@ Two more hooks watch subagents. One warns an agent as its context grows, in thre
 The other holds back, once, a subagent that tries to stop with a background run still going, and names
 the run so the agent can wait for its verdict or stop it.
 
+A small mod shows each running subagent above the prompt, and a toast when one ends (see
+[Watching agents run](#watching-agents-run)).
+
 The rules come from running `agent-cost` over one heavy week of real agent work. An agent re-sends its
 whole context on every turn, so its cost grows with the square of its length. Measured that week:
 
@@ -94,15 +98,30 @@ Your numbers will differ; `agent-cost` shows you yours.
 
 | Agent | Model | Its work |
 | --- | --- | --- |
-| your session | yours (Opus or Fable) | Plans, picks the agent for each job, writes the handoff, re-runs the gates. |
+| your session | yours (Sonnet, Opus or Fable) | Plans, picks the agent for each job, writes the handoff, re-runs the gates. |
 | `runner` | Haiku | A scripted list of commands whose output is the answer. It edits nothing. |
 | `mechanic` | Sonnet | Bulky, fully specified changes: sweeps, renames, fixtures, running suites. |
 | `builder-lite` | Sonnet | A small round of fixes a review has already spelled out. |
-| `builder` | Opus | Implementation inside an agreed plan, where decisions remain. |
-| `reviewer` | Opus | Sees the spec and the diff, never the reasoning that produced them. |
+| `builder` | Opus, or your session's model if lower | Implementation inside an agreed plan, where decisions remain. |
+| `reviewer` | Opus, or your session's model if lower | Sees the spec and the diff, never the reasoning that produced them. |
 
 The agents are namespaced (`delegate:runner` and so on). The plugin never changes your session's
-model, only what the subagents run on.
+model, only what the subagents run on, and it never runs one above your session's model. Your session
+passes its own model as a per-call override when a pin is higher, so on Sonnet the `builder` and
+`reviewer` are Sonnet agents (still at high effort, which a call cannot change) and `builder-lite` or
+`mechanic` take whatever fits them. Start on Opus for the full ladder.
+
+## The model you start on is the ceiling
+
+No agent runs on a model above your session's. Start on Opus and the whole ladder is available. Start
+on Sonnet and your session passes `model: "sonnet"` on any call whose agent is pinned higher, so
+`builder` and `reviewer` run on Sonnet (at their high effort, which a call cannot change) and
+`builder-lite` or `mechanic` take whatever fits them. Start on Haiku and everything runs on Haiku. The
+reviewer always runs: it is the only reader that sees just the spec and the diff.
+
+On Sonnet, when a job needs stronger judgement, run `/advisor` and choose `opus` or `fable`. Your session
+then asks that model for advice on its whole conversation, without spawning an agent. The advisor has
+seen the plan, so it does not replace the reviewer.
 
 ## Running more or fewer agents at once
 
@@ -115,6 +134,44 @@ repository's `.claude/settings.json`:
 
 Someone on one project at a time may want 2, and someone juggling several may want 8. Anything that
 isn't a positive integer means the default.
+
+## Watching agents run
+
+While a subagent runs, a band above the prompt shows a count and one row per agent:
+
+```
+agents 2/6 running
+run the suite  delegate:runner (haiku-4-5, low) · Bash · 0:42 · 52.0k tokens · ~$0.018 est.
+```
+
+The row is the agent's task description, then its type, model and effort, the tool it is in (its name
+only, never its arguments; `working` between tools), the time so far, its tokens (input, output, cache
+reads and cache writes together) and an estimated cost. A finished row stays about 20 seconds. When an
+agent ends, a toast says the same, with `finished` or `stopped`: `delegate:runner (haiku-4-5) finished
+in 14s · 52.0k tokens · ~$0.018 est.: run the suite`.
+
+- **Colour:** a bold `Delegate` tag says where the band comes from. The running count is green at or
+  under the cap and red over it; a stopped agent reads red; an agent's time turns yellow after five
+  minutes (a display choice, not a measurement); a finished row is dim.
+- **Collapsed:** with more running or recent agents than `collapseAbove` (default 3; 0 always), the band
+  is one line, `agents 8/6 running · runner x5, builder x2, reviewer x1 · 112.0k tokens · ~$0.31 est.
+  · 2 finished  [Expand]`: counts per agent type, and tokens and cost summed over every agent shown.
+  `[Expand]` and `[Collapse]` switch it; your choice holds until no agent is left, then the count decides
+  again. The choice is kept in memory only.
+- **The cost is an estimate:** each request's tokens priced at the published list rate of the model
+  that answered (`hooks/prices.json`), five-minute cache writes assumed. Effort shows as a label and is
+  not a price factor: it changes how many tokens an agent uses, which the count already holds. There is
+  no projected final cost. A model the table cannot place shows its tokens and `cost n/a`.
+- **The count's cap** is `DELEGATE_MAX_CONCURRENT_AGENTS` when it is set, otherwise the `cap` option
+  (default 6). Agents waiting for a free slot are not shown: a mod cannot see them.
+- **Toasts** come only for runs of at least `minSeconds` (default 10; 0 for every run). `cap`,
+  `minSeconds` and `collapseAbove` are the plugin's options.
+- **What it reads and runs:** the session's own events (agent starts, model requests, tool calls, turn
+  ends), its own price table and that one environment variable. It writes no files, starts no
+  processes and makes no network calls, but like any mod it runs inside Claude Code with your
+  permissions.
+- **Where it shows:** Claude Code 2.1.287 or later, in the terminal and the Desktop app. Elsewhere, such
+  as the VS Code chat panel or `claude -p`, it runs and draws nothing.
 
 ## Tailoring
 
