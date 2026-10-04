@@ -1,0 +1,241 @@
+import { expect, mock, test } from 'claude-code/testing'
+import { parseState, stuckItems, verifiedCount } from './view.ts'
+
+const NOW = Date.parse('2026-01-05T09:50:00Z')
+const SESSION = 's1'
+const BOARD = '/w/.logbook/s1'
+
+const board = (over: Record<string, unknown> = {}) => ({
+  title: 'CSV export', state: 'live', updated: '2026-01-05T09:49:00Z', settings: { stuckAfterSeconds: 600 },
+  questions: [], steps: [], commits: [], deliverables: [], checks: [], decisions: [], agents: [], changes: [],
+  commands: [], commandsTotal: 0, ...over,
+})
+const question = (id: string, over: Record<string, unknown> = {}) => ({
+  id, text: `Should the export include archived reports ${id}?`, default: 'No', affects: 'the query', reverse: 'drop the filter',
+  hardStop: false, status: 'open', ...over,
+})
+const file = (state: unknown) => `window.BOARD = ${JSON.stringify(state)};\n`
+
+type Seen = { runs: string[][]; toasts: string[]; opens: unknown[]; closes: unknown[]; fills: unknown[]; files: Record<string, string> }
+
+// The engine beneath the plugin: a process that answers the helper, a file system, and a record of the UI calls.
+function engine(on, world: { found: Record<string, unknown>; panes?: { id: string }[]; below?: boolean; failEdit?: boolean }) {
+  const seen: Seen = { runs: [], toasts: [], opens: [], closes: [], fills: [], files: {} }
+  on('process.run', (_$, e) => {
+    seen.runs.push([...e.argv])
+    return { value: { exitCode: 0, stdout: JSON.stringify(world.found), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('fs.read', (_$, e) => ({ value: seen.files[e.path] ?? '' }))
+  on('ui.toast', (_$, e) => void seen.toasts.push(e.text))
+  on('ui.open', (_$, e) => (seen.opens.push(e), world.panes?.push({ id: e.id }), { value: { isPlaced: true } }))
+  on('ui.close', (_$, e) => (seen.closes.push(e), { value: {} }))
+  on('ui.panes', () => ({ value: world.panes ?? [] }))
+  on('prompt.fill', (_$, e) => (seen.fills.push(e), { isFilled: true }))
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('classic.SessionStart', () => ({}))
+  on('classic.UserPromptSubmit', () => ({}))
+  on('tool.call', (_$, e) => (world.failEdit && e.tool === 'Edit' ? { isError: true, result: 'no', text: 'no' } : { result: {}, text: '' }))
+  if (!world.below) on('ui.render', (_$, e) => h(_$.ui.resolve(e).Box, { key: 'engine' }))
+  return seen
+}
+
+const start = async $ =>
+  $.classic.SessionStart({ source: 'startup', transcript_path: '/t/s.jsonl', cwd: '/w', session_id: SESSION } as never)
+const prompt = async $ =>
+  $.classic.UserPromptSubmit({ prompt: 'hi', transcript_path: '/t/s.jsonl', cwd: '/w', session_id: SESSION } as never)
+const turn = ($, agentId?: string) =>
+  $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't', agentId, reason: 'answer', usage: undefined } as never)
+const tool = ($, input: Record<string, unknown>) => $.tool.call({ ...input } as never)
+const mountBand = $ =>
+  $.ui.mount({ plugin: 'logbook', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, bodyColumns: 120 } as never })
+const mountPane = $ =>
+  $.ui.mount({ plugin: 'logbook', surface: 'terminal', component: 'Pane', requestId: 'logbook', props: {} as never })
+
+type Node = { type: string; props?: Record<string, unknown>; children?: (Node | string)[] }
+const rowText = (n: Node | string): string =>
+  typeof n === 'string' ? n : n.type === 'Button' ? String(n.props?.label ?? '') : (n.children ?? []).map(rowText).join('')
+const textOf = async (view, text: string) => {
+  const find = (n: Node | string): Node | undefined =>
+    typeof n === 'string' ? undefined : n.type === 'Text' && rowText(n) === text ? n : (n.children ?? []).map(find).find(Boolean)
+  return find((await view.drawn()) as Node)
+}
+
+const live = (state: unknown) => ({ board: BOARD, state })
+
+test('the band wraps a band beneath it', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  engine(on, { found: live(board()), below: true })
+  on('ui.render', (_$, e) => h(_$.ui.resolve(e).Text, { key: 'other-band' }, 'another plugin'))
+  await start($)
+  const band = await mountBand($)
+  expect(JSON.stringify(await band.drawn())).toContain('another plugin')
+  expect(await band.find({ key: 'logbook-open' })).toBeDefined()
+})
+
+test('the band is one terse row: Stopped, questions, stuck, steps, checks, then the button', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const state = board({
+    questions: [question('Q1', { hardStop: true, default: null }), question('Q2'), question('Q3', { status: 'answered' })],
+    steps: [1, 2, 3, 4, 5].map(n => ({ id: String(n), subject: `s${n}`, status: n <= 3 ? 'completed' : 'pending' })),
+    checks: [...Array(6)].map((_, i) => ({ id: `C${i}`, proves: 'x', command: 'c', result: i < 5 ? 'pass' : 'fail' })),
+    commands: [{ command: 'make test', result: 'pass', time: '2026-01-05T09:40:00Z', test: true, fails: 0 }],
+    changes: [{ path: 'a' }], commandsTotal: 9, agents: [{ id: 'a', outcome: 'failed', description: 'x', type: null }],
+  })
+  engine(on, { found: live(state) })
+  await start($)
+  const band = await mountBand($)
+  expect(rowText(await band.drawn())).toBe('Logbook  Stopped · 1 question · 2 stuck · 3/5 · 6 pass · 1 fail   Logbook')
+  expect((await textOf(band, 'Logbook'))?.props.color).toBe('white')
+  expect((await textOf(band, 'Stopped'))?.props.color).toBe('red')
+  expect((await textOf(band, '1 question'))?.props.color).toBe('yellow')
+  expect((await textOf(band, '6 pass'))?.props.color).toBe('green')
+  expect(rowText(await band.drawn())).not.toMatch(/file|command|agent/i)
+})
+
+test('parts with nothing to say are left out, and a finished board draws nothing', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const world = { found: live(board()) as Record<string, unknown> }
+  engine(on, world)
+  await start($)
+  expect(rowText(await (await mountBand($)).drawn())).toBe('Logbook  Logbook')
+  world.found = live(board({ state: 'finished' }))
+  await turn($)
+  expect(JSON.stringify(await (await mountBand($)).drawn())).not.toContain('Logbook')
+})
+
+test('drawing runs no process', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const seen = engine(on, { found: live(board({ questions: [question('Q1')] })) })
+  seen.files[`${BOARD}/state.js`] = file(board())
+  await start($)
+  await prompt($)
+  const runs = seen.runs.length
+  await mountBand($)
+  await mountPane($)
+  await clock.advance(5 * 60_000) // ten ticks redraw
+  expect(seen.runs.length).toBe(runs)
+})
+
+test('the pane is opened only by the button press, and the button toggles it closed', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const seen = engine(on, { found: live(board()), panes: [] })
+  await start($)
+  await prompt($)
+  await turn($)
+  expect(seen.opens).toEqual([])
+  const band = await mountBand($)
+  await $.ui.press({ plugin: 'logbook', key: 'logbook-open' })
+  expect(seen.opens).toEqual([{ id: 'logbook', title: 'Logbook' }])
+  await $.ui.press({ plugin: 'logbook', key: 'logbook-open' })
+  expect(seen.closes).toMatchObject([{ id: 'logbook' }])
+  expect(band).toBeDefined()
+})
+
+test('the pane lists what needs you first, with an Answer that fills the prompt', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const seen = engine(on, {
+    found: live(board({
+      questions: [question('Q1')],
+      steps: [{ id: '1', subject: 'Write it', status: 'in_progress' }],
+      commits: [{ hash: 'abc1234', subject: 'Add export', step: null }],
+      checks: [{ id: 'C1', proves: 'round trip', command: 'c', result: 'pass' }],
+      decisions: [{ id: 'D1', text: 'ISO dates', why: 'programs read CSV', reverse: null }],
+      changes: [{ path: 'a' }, { path: 'b' }], commandsTotal: 4,
+      commands: [{ command: 'npm run lint', result: 'fail', time: '2026-01-05T09:40:00Z', test: false, fails: 1 }],
+    })),
+  })
+  await start($)
+  const pane = await mountPane($)
+  const text = rowText(await pane.drawn())
+  const order = ['Needs you', 'Steps', 'Built', 'Verified', 'Decisions', 'Also recorded'].map(t => text.indexOf(t))
+  expect(order.every(i => i >= 0)).toBe(true)
+  expect([...order].sort((a, b) => a - b)).toEqual(order)
+  expect(text).toContain('Default: No')
+  expect(text).toContain('To reverse: drop the filter')
+  expect(text).toContain('Changed: 2 files')
+  expect(text).toContain('failed: npm run lint')
+  expect(text).not.toContain('Stuck')
+  await $.ui.press({ plugin: 'logbook', key: 'logbook-answer-Q1' })
+  expect(seen.fills).toMatchObject([{ text: 'Q1: ', mode: 'replace' }])
+})
+
+test('a new open question toasts once; the first read only sets the baseline', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const seen = engine(on, { found: live(board({ questions: [question('Q1')] })) })
+  await start($)
+  expect(seen.toasts).toEqual([])
+  await prompt($)
+  seen.files[`${BOARD}/state.js`] = file(board({ questions: [question('Q1'), question('Q2', { hardStop: true, text: 'x'.repeat(200) })] }))
+  await tool($, { tool: 'Bash', command: 'python3 board.py stop "x"' })
+  expect(seen.toasts.length).toBe(1)
+  expect(seen.toasts[0]).toStartWith('Logbook: Stopped, Q2 xxx')
+  expect(seen.toasts[0].length).toBeLessThan(100)
+  await tool($, { tool: 'Bash', command: 'ls' })
+  await turn($)
+  expect(seen.toasts.length).toBe(1)
+})
+
+test('state is re-read from state.js after a tool call, and on the 30 s tick while a turn runs', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const seen = engine(on, { found: live(board()) })
+  await start($)
+  await prompt($)
+  const band = await mountBand($)
+  seen.files[`${BOARD}/state.js`] = file(board({ steps: [{ id: '1', subject: 'a', status: 'completed' }] }))
+  await tool($, { tool: 'Bash', command: 'ls' })
+  expect(rowText(await band.drawn())).toContain('1/1')
+  seen.files[`${BOARD}/state.js`] = file(board({ steps: [{ id: '1', subject: 'a', status: 'completed' }, { id: '2', subject: 'b', status: 'pending' }] }))
+  await clock.advance(30_000)
+  await clock.advance(1)
+  expect(rowText(await band.drawn())).toContain('1/2')
+  await turn($)
+  seen.files[`${BOARD}/state.js`] = file(board({ steps: [{ id: '1', subject: 'a', status: 'completed' }, { id: '2', subject: 'b', status: 'completed' }, { id: '3', subject: 'c', status: 'pending' }] }))
+  await clock.advance(60_000)
+  expect(rowText(await band.drawn())).not.toContain('/3') // the tick stopped with the turn
+})
+
+test('the first changed file of a session with no board starts one, once, from the transcript', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const world = { found: {} as Record<string, unknown> }
+  const seen = engine(on, world)
+  await start($)
+  await prompt($)
+  await tool($, { tool: 'Read', file_path: '/w/a' })
+  await tool($, { tool: 'Bash', command: 'ls' })
+  expect(seen.runs.filter(r => r.includes('--start'))).toEqual([])
+  world.found = live(board())
+  await tool($, { tool: 'Edit', file_path: '/w/a', old_string: 'a', new_string: 'b' })
+  const started = seen.runs.filter(r => r.includes('--start'))
+  expect(started.length).toBe(1)
+  expect(started[0].slice(-7)).toEqual(['--project', '/w', '--session', SESSION, '--start', '--transcript', '/t/s.jsonl'].slice(-7))
+  expect(rowText(await (await mountBand($)).drawn())).toBe('Logbook  Logbook')
+  await tool($, { tool: 'Write', file_path: '/w/b', content: '' })
+  expect(seen.runs.filter(r => r.includes('--start')).length).toBe(1)
+})
+
+test('a git commit also starts the board, and a failed edit does not', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const world = { found: {} as Record<string, unknown>, failEdit: true }
+  const seen = engine(on, world)
+  await start($)
+  await prompt($)
+  world.found = live(board())
+  await tool($, { tool: 'Edit', file_path: '/w/a', old_string: 'a', new_string: 'b' })
+  expect(seen.runs.filter(r => r.includes('--start')).length).toBe(0)
+  await tool($, { tool: 'Bash', command: 'git commit -m x' })
+  expect(seen.runs.filter(r => r.includes('--start')).length).toBe(1)
+})
+
+test('the view rules: stuck, verified and the state file', () => {
+  expect(parseState('window.BOARD = {"state":"live"};\n')?.state).toBe('live')
+  expect(parseState('nonsense')).toBeNull()
+  expect(parseState('window.BOARD = {oops;')).toBeNull()
+  const quiet = board({ steps: [{ id: '1', subject: 'a', status: 'in_progress' }], updated: '2026-01-05T09:30:00Z' }) as never
+  expect(stuckItems(quiet, NOW).length).toBe(1)
+  expect(stuckItems(board({ ...(quiet as object), state: 'idle' }) as never, NOW).length).toBe(0)
+  const fail = { command: 't', result: 'fail', time: '2026-01-05T09:00:00Z', test: true, fails: 1 }
+  const pass = { ...fail, result: 'pass', time: '2026-01-05T09:10:00Z' }
+  expect(stuckItems(board({ commands: [fail] }) as never, NOW).length).toBe(1)
+  expect(stuckItems(board({ commands: [fail, { ...pass, command: 't2' }] }) as never, NOW).length).toBe(0)
+  expect(verifiedCount(board({ commands: [pass, { ...fail, command: 'u' }], checks: [{ id: 'C1', proves: 'p', command: 'c', result: 'pass' }] }) as never)).toEqual({ pass: 2, fail: 1 })
+})
