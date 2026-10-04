@@ -37,8 +37,7 @@ written for them.
 - `plugins/delegate/` — the orchestration plugin: the roster (`agents/`), the conventions it injects
   (`context/`), its hooks (`hooks/`), the `agent-cost` skill (`skills/agent-cost/`, with the report's
   tests), the report itself (`skills/agent-cost/scripts/agent_cost.py`, a Python script that reads local
-  transcripts and reports where tokens went), the agent band and finish toast (`hooks/agent-band.tsx`, a
-  mod, with its price table `hooks/prices.json` and tests `hooks/agent-band.test.ts`), and tests (`tests/`). It has no `bin/` directory and no
+  transcripts and reports where tokens went), and tests (`tests/`). It has no `bin/` directory and no
   file with an executable bit: every script is run as `sh <path>` or `python3 <path>`, and a test pins it.
 - `plugins/cache-guard/` — a `UserPromptSubmit` hook (`hooks/`) that holds a message back when the
   context's prompt cache has expired, the handoff it offers instead (written by script, summarised by a

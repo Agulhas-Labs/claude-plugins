@@ -26,8 +26,7 @@ Your session plans and judges on the model you chose. Haiku runs commands, Sonne
 already spelled out, and Opus writes the code that still has decisions in it, then reviews the result
 without having seen how it was made. A hook warns an agent as its context grows: freeze scope at 120k,
 hand back at 150k, stop at 200k. At most 4 agents run at once, and you can change that. No agent runs on a
-model above your session's. A band above the prompt lists the running agents with their tokens and an
-estimated cost, and a toast says when one finishes.
+model above your session's.
 
 Ask "where did my tokens go this week?" and its `agent-cost` report answers from your local transcripts,
 down to which projects, sessions and subagents cost the most. Each section says what to do about what it
