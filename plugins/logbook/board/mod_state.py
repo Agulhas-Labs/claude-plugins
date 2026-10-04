@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""What the band and pane read: this session's board folder and its state, as one line of JSON.
+"""What the band reads: this session's board folder and its state, as one line of JSON.
 
     mod_state.py --project DIR --session ID                       the board and its state, or {}
     mod_state.py --project DIR --session ID --start --transcript P   start the board first, if there is none
+    mod_state.py --project DIR --session ID --open                   also open the board's page in the browser
 
 The board is found as every command finds it (`board.find_board`: the session's folder under the project or
 the nearest folder above it, a linked boards folder refused), in the project the hooks would use
@@ -19,7 +20,9 @@ prints `{}`. This never changes what the hooks do; it only reads, or starts a bo
 import argparse
 import json
 import os
+import pathlib
 import sys
+import webbrowser
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -51,17 +54,26 @@ def start_board(project, session, transcript, env):
     return board.start(project, session, board.clock(), board_hook.title_from(prompt), env, early=earlier) is not None
 
 
+def open_board(folder):
+    """Open the board's page in the default browser. Returns whether the browser took it."""
+    page = os.path.join(folder, board.BOARD_FILE)
+    return os.path.isfile(page) and webbrowser.open(pathlib.Path(page).as_uri())
+
+
 def main(argv=None):
     args = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     args.add_argument("--project", required=True)
     args.add_argument("--session", required=True)
     args.add_argument("--start", action="store_true")
     args.add_argument("--transcript")
+    args.add_argument("--open", action="store_true", help="open the board's page in the browser")
     args = args.parse_args(argv)
     try:
         if args.start:
             start_board(args.project, args.session, args.transcript, os.environ)
         found = board_and_state(args.project, args.session, os.environ)
+        if args.open:
+            found = dict(found, opened=bool(found) and open_board(found["board"]))
     except Exception:
         found = {}
     print(json.dumps(found, separators=(",", ":")))

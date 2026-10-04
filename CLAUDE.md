@@ -48,7 +48,7 @@ written for them.
   (`hooks/*.test.ts*`) — and tests (`tests/`).
 - `plugins/logbook/` — the recorder (`board/board.py`), its hooks (`hooks/`) that record files changed,
   commands run, the task list, subagents and turn/session boundaries without spending model tokens, the
-  `/logbook` skill (`skills/logbook/`), the band above the prompt, the pane and the new-question toast (`hooks/band.tsx`,
-  `hooks/pane.tsx`, `hooks/view.ts`, a mod registered through `hooks/register.tsx`, reading `board/mod_state.py`, with its
+  `/logbook` skill (`skills/logbook/`), the band above the prompt, its button that opens the page, and the new-question toast (`hooks/band.tsx`,
+  `hooks/view.ts`, a mod registered through `hooks/register.tsx`, reading `board/mod_state.py`, with its
   tests `hooks/band.test.ts`), and tests (`tests/`).
 - `scripts/check.sh` — the repository gate. `githooks/` — the pre-commit hook that runs it.

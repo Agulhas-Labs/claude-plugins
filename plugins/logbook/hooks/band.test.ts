@@ -19,11 +19,11 @@ const file = (state: unknown) => `window.BOARD = ${JSON.stringify(state)};\n`
 type Seen = { runs: string[][]; toasts: string[]; opens: unknown[]; closes: unknown[]; fills: unknown[]; files: Record<string, string> }
 
 // The engine beneath the plugin: a process that answers the helper, a file system, and a record of the UI calls.
-function engine(on, world: { found: Record<string, unknown>; panes?: { id: string }[]; below?: boolean; failEdit?: boolean }) {
+function engine(on, world: { found: Record<string, unknown>; opened?: boolean; panes?: { id: string }[]; below?: boolean; failEdit?: boolean }) {
   const seen: Seen = { runs: [], toasts: [], opens: [], closes: [], fills: [], files: {} }
   on('process.run', (_$, e) => {
     seen.runs.push([...e.argv])
-    return { value: { exitCode: 0, stdout: JSON.stringify(world.found), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    return { value: { exitCode: 0, stdout: JSON.stringify(e.argv.includes('--open') ? { ...world.found, opened: world.opened ?? true } : world.found), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('fs.read', (_$, e) => ({ value: seen.files[e.path] ?? '' }))
   on('ui.toast', (_$, e) => void seen.toasts.push(e.text))
@@ -48,8 +48,6 @@ const turn = ($, agentId?: string) =>
 const tool = ($, input: Record<string, unknown>) => $.tool.call({ ...input } as never)
 const mountBand = $ =>
   $.ui.mount({ plugin: 'logbook', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, bodyColumns: 120 } as never })
-const mountPane = $ =>
-  $.ui.mount({ plugin: 'logbook', surface: 'terminal', component: 'Pane', requestId: 'logbook', props: {} as never })
 
 type Node = { type: string; props?: Record<string, unknown>; children?: (Node | string)[] }
 const rowText = (n: Node | string): string =>
@@ -111,52 +109,36 @@ test('drawing runs no process', async ($, on) => {
   await prompt($)
   const runs = seen.runs.length
   await mountBand($)
-  await mountPane($)
   await clock.advance(5 * 60_000) // ten ticks redraw
   expect(seen.runs.length).toBe(runs)
 })
 
-test('the pane is opened only by the button press, and the button toggles it closed', async ($, on) => {
+test('the button opens the board in the browser, and opens no pane', async ($, on) => {
   mock.clock(on, { now: NOW })
-  const seen = engine(on, { found: live(board()), panes: [] })
+  const seen = engine(on, { found: live(board()) })
   await start($)
   await prompt($)
   await turn($)
+  await mountBand($)
+  const before = seen.runs.length
+  await $.ui.press({ plugin: 'logbook', key: 'logbook-open' })
+  const run = seen.runs.at(-1)!
+  expect(seen.runs.length).toBe(before + 1)
+  expect(run.at(-1)).toBe('--open')
+  expect(run.at(-6)).toEndWith('/board/mod_state.py')
+  expect(run.slice(-5, -1)).toEqual(['--project', '/w', '--session', SESSION])
   expect(seen.opens).toEqual([])
-  const band = await mountBand($)
-  await $.ui.press({ plugin: 'logbook', key: 'logbook-open' })
-  expect(seen.opens).toEqual([{ id: 'logbook', title: 'Logbook' }])
-  await $.ui.press({ plugin: 'logbook', key: 'logbook-open' })
-  expect(seen.closes).toMatchObject([{ id: 'logbook' }])
-  expect(band).toBeDefined()
+  expect(seen.toasts).toEqual([])
 })
 
-test('the pane lists what needs you first, with an Answer that fills the prompt', async ($, on) => {
+test('a browser that will not open says where the page is', async ($, on) => {
   mock.clock(on, { now: NOW })
-  const seen = engine(on, {
-    found: live(board({
-      questions: [question('Q1')],
-      steps: [{ id: '1', subject: 'Write it', status: 'in_progress' }],
-      commits: [{ hash: 'abc1234', subject: 'Add export', step: null }],
-      checks: [{ id: 'C1', proves: 'round trip', command: 'c', result: 'pass' }],
-      decisions: [{ id: 'D1', text: 'ISO dates', why: 'programs read CSV', reverse: null }],
-      changes: [{ path: 'a' }, { path: 'b' }], commandsTotal: 4,
-      commands: [{ command: 'npm run lint', result: 'fail', time: '2026-01-05T09:40:00Z', test: false, fails: 1 }],
-    })),
-  })
+  const seen = engine(on, { found: live(board()), opened: false })
   await start($)
-  const pane = await mountPane($)
-  const text = rowText(await pane.drawn())
-  const order = ['Needs you', 'Steps', 'Built', 'Verified', 'Decisions', 'Also recorded'].map(t => text.indexOf(t))
-  expect(order.every(i => i >= 0)).toBe(true)
-  expect([...order].sort((a, b) => a - b)).toEqual(order)
-  expect(text).toContain('Default: No')
-  expect(text).toContain('To reverse: drop the filter')
-  expect(text).toContain('Changed: 2 files')
-  expect(text).toContain('failed: npm run lint')
-  expect(text).not.toContain('Stuck')
-  await $.ui.press({ plugin: 'logbook', key: 'logbook-answer-Q1' })
-  expect(seen.fills).toMatchObject([{ text: 'Q1: ', mode: 'replace' }])
+  await prompt($)
+  await mountBand($)
+  await $.ui.press({ plugin: 'logbook', key: 'logbook-open' })
+  expect(seen.toasts).toEqual([`Could not open a browser: ${BOARD}/board.html`])
 })
 
 test('a new open question toasts once; the first read only sets the baseline', async ($, on) => {

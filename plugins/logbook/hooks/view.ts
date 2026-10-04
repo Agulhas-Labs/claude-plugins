@@ -1,4 +1,4 @@
-// What the band and the pane say about a board's state: plain functions of the state `state.js` holds, with no
+// What the band says about a board's state: plain functions of the state `state.js` holds, with no
 // drawing and no process. The rules for what counts as stuck and as verified are the page's own (template.html:
 // `stuck()`, `verifiedRows()`), written once more here because the page's script cannot be loaded into a mod.
 

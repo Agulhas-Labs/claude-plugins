@@ -1,16 +1,14 @@
 import type { Register } from 'claude-code'
 
-import { drawPane } from './pane'
 import { clip, openQuestions, parseState, stepCount, stuckItems, verifiedCount } from './view'
 import type { BoardState } from './view'
 
-// The band above the prompt, the pane behind its button, and the toast for a new question.
+// The band above the prompt, its button that opens the board's page in the browser, and the toast for a new question.
 // Everything shown comes from the board's `state.js`, which the Python hooks keep. mod_state.py finds the board
 // and its state (and starts the board early); it runs at session start, when a turn completes, and at the first
 // changed file or commit of a session with no board. Every other update re-reads `state.js` with $.fs.read, after
 // a tool call that can have changed it and on a 30-second tick while a turn runs. Drawing runs no process.
 
-export const PANE = 'logbook'
 export const TAG = 'Logbook'
 export const GAP = '  '
 export const TICK_MS = 30_000
@@ -33,7 +31,7 @@ type State = {
 
 export type Part = { key: string; text: string; color?: string; bold?: boolean }
 
-// What needs eyes, and only that: parts with nothing to say are left out. Files, commands and agents are the pane's.
+// What needs eyes, and only that: parts with nothing to say are left out. Files, commands and agents are on the page.
 export function parts(state: BoardState, now: number): Part[] {
   const out: Part[] = []
   const open = openQuestions(state)
@@ -107,10 +105,16 @@ export async function reread($, s: State) {
   if (state) take($, s, state, false)
 }
 
-async function togglePane($) {
-  const isOpen = (await $.ui.panes()).some(pane => pane.id === PANE)
-  if (isOpen) await $.ui.close({ id: PANE })
-  else await $.ui.open({ id: PANE, title: 'Logbook' })
+// The board's page is the full view: the button hands it to the browser. mod_state.py does the opening, so the
+// platform's own opener is not guessed at here.
+export async function openBoard($, s: State) {
+  if (!s.sessionId || !s.cwd) return
+  const { stdout } = await $.process.run(
+    ['sh', `${$.plugin.root}/hooks/run-python.sh`, `${$.plugin.root}/${HELPER}`, '--project', s.cwd, '--session', s.sessionId, '--open'],
+    { timeoutMs: 20_000 },
+  )
+  const found = stdout.trim() ? JSON.parse(stdout) : {}
+  if (found.opened !== true) $.ui.toast(s.board ? `Could not open a browser: ${s.board}/board.html` : 'No logbook for this session yet')
 }
 
 export async function drawBand($, e, next, s: State) {
@@ -127,7 +131,7 @@ export async function drawBand($, e, next, s: State) {
         <Text key={`${part.key}-value`} color={part.color} bold={part.bold}>{part.text}</Text>,
       ])}
       <Text>{shown.length > 0 ? '   ' : ''}</Text>
-      <Button key="logbook-open" label="Logbook" onPress={() => togglePane($)} />
+      <Button key="logbook-open" label="Logbook" onPress={() => run(() => openBoard($, s))} />
     </Box>
   )
   return below ? (
@@ -136,16 +140,6 @@ export async function drawBand($, e, next, s: State) {
       {below}
     </Box>
   ) : row
-}
-
-export async function drawPaneFor($, e, s: State) {
-  const { Box, Text } = $.ui.resolve(e)
-  if (!s.state) return <Box><Text dimColor>No logbook for this session yet.</Text></Box>
-  return drawPane(
-    $.ui.resolve(e), s.state, await $.clock.now(),
-    id => $.prompt.fill({ text: `${id}: `, mode: 'replace' }),
-    () => $.ui.close({ id: PANE }),
-  )
 }
 
 function startTick($, s: State) {
@@ -217,5 +211,4 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => drawBand($, e, next, s))
-  on('ui.render', { component: 'Pane', requestId: PANE }, ($, e) => drawPaneFor($, e, s))
 }

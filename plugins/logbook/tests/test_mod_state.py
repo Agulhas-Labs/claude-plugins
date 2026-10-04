@@ -7,8 +7,11 @@ The helper runs as the mod runs it, as a child process in the hooks' environment
 captured work transcript and the real `gate.sh`: the board it starts must read the earlier calls back as the
 hooks' own start does, and must leave the model's context to the next hook.
 """
+import contextlib
+import io
 import json
 import os
+import pathlib
 import shutil
 import subprocess
 import sys
@@ -182,6 +185,41 @@ class EarlyStart(ModState):
         os.symlink(elsewhere, os.path.join(self.project, board.BOARDS_DIR))
         self.assertEqual(self.run_helper("--start", "--transcript", self.transcript), {})
         self.assertEqual(os.listdir(elsewhere), [])
+
+
+class Opening(ModState):
+
+    def run_in_process(self, *extra):
+        argv = ["--project", self.project, "--session", SESSION, *extra]
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, self.env, clear=True), contextlib.redirect_stdout(out):
+            mod_state.main(argv)
+        return json.loads(out.getvalue())
+
+    def test_open_hands_the_boards_page_to_the_browser(self):
+        self.start_by_hand()
+        with mock.patch.object(mod_state.webbrowser, "open", return_value=True) as browser:
+            found = self.run_in_process("--open")
+        browser.assert_called_once_with(pathlib.Path(self.folder, board.BOARD_FILE).as_uri())
+        self.assertTrue(found["opened"])
+        self.assertEqual(found["board"], self.folder)
+
+    def test_open_says_so_when_the_browser_would_not(self):
+        self.start_by_hand()
+        with mock.patch.object(mod_state.webbrowser, "open", return_value=False):
+            self.assertFalse(self.run_in_process("--open")["opened"])
+
+    def test_open_with_no_board_opens_nothing(self):
+        with mock.patch.object(mod_state.webbrowser, "open") as browser:
+            found = self.run_in_process("--open")
+        browser.assert_not_called()
+        self.assertFalse(found["opened"])
+
+    def test_reading_without_open_never_touches_the_browser(self):
+        self.start_by_hand()
+        with mock.patch.object(mod_state.webbrowser, "open") as browser:
+            self.run_in_process()
+        browser.assert_not_called()
 
 
 if __name__ == "__main__":
