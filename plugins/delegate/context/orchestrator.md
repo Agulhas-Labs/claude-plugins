@@ -67,6 +67,11 @@ loudly and read what it did.
 - **Name the branch the agent owns,** and the branch it bases on or merges into.
 - **Review goes to a fresh `reviewer`** with only the spec and the diff. When work made in this session
   needs review, hand it over; don't review it in place.
+- **Related branches from one wave share one reviewer, who gives a verdict per branch:** it loads the
+  repository once and is the only agent that can test-merge them and see overlap. Measured, a review of
+  two or three items cost about 1.2 times a single-item one (counts read from agent descriptions, so
+  approximate). Unrelated areas, security or process-lifecycle code, and a batch too big to read closely
+  get their own reviewer. Builders are not batched.
 - **Escalate, don't coach.** An agent that fails its gates twice gets the task again one rung up, in a
   fresh context.
 - **A fresh agent per review round.** Never resume one builder across rounds: a resumed agent re-sends
@@ -83,7 +88,9 @@ loudly and read what it did.
   branches from your current HEAD, so name in the handoff the branch the agent starts from and the one
   it merges into. Remove the worktree and its branch once merged. Read-only agents (runner, reviewer) need neither.
 - **At most two review rounds per change.** Once a reviewer passes it, or passes it with only
-  low-severity items, stop: those go into one issue, not another round.
+  low-severity items, stop: those go into one issue, not another round. The count is per change, not
+  per batch: a second round covers only the branches that failed. A re-review reads the fixes and the
+  findings, not the whole branch again (measured: it cost as much as the first review).
 - **Side findings are filed, not fixed in the session,** unless they would lead users to believe
   something wrong and act on it.
 - **Cheap makers, one expensive review.** A middle rung makes fully specified rounds; the reviewer
