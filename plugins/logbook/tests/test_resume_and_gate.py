@@ -34,8 +34,8 @@ class Reopening(Hooks):
     def test_a_resume_reopens_a_closed_board_and_recording_works_again(self):
         self.close_the_board()
         output = self.session_start("resume")
-        self.assertEqual(output["systemMessage"], "Logbook: " + os.path.join(self.folder, "board.html"))
-        self.assertIn("hookSpecificOutput", output)
+        self.assertNotIn("systemMessage", output)
+        self.assertEqual(list(output), ["hookSpecificOutput"])
         self.assertEqual(self.state()["state"], "live")
 
         update = fixture("PostToolUse-TaskUpdate")
@@ -93,7 +93,8 @@ class GateHead(Hooks):
         out, took = self.timed(compact(payload).encode("utf-8"))
         self.assertLess(took, 2.0)
         output = json.loads(out.decode("utf-8"))
-        self.assertIn("systemMessage", output)
+        self.assertNotIn("systemMessage", output)
+        self.assertIn("hookSpecificOutput", output)
         self.assertTrue(os.path.isfile(os.path.join(self.folder, "board.html")))
 
     def test_a_session_id_past_the_head_exits_silently_and_fast(self):

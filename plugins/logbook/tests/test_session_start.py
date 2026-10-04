@@ -93,7 +93,7 @@ class SessionStartHook(Hooks):
         for source in ("compact", "resume", "compact"):
             with self.subTest(source=source):
                 output = self.session_start(source)
-                self.assertEqual(output["systemMessage"], "Logbook: " + os.path.join(self.folder, "board.html"))
+                self.assertEqual(list(output), ["hookSpecificOutput"])
                 self.assertEqual(output["hookSpecificOutput"], {
                     "hookEventName": "SessionStart", "additionalContext": board_hook.context(self.folder, self.env),
                 })

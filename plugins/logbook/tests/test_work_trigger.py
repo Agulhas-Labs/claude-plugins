@@ -83,8 +83,8 @@ class WorkCalls(Hooks):
 
     def assert_started(self, output, folder=None):
         folder = folder or self.folder
-        self.assertTrue(os.path.isfile(os.path.join(folder, ".logbook")))
-        self.assertEqual(output["systemMessage"], "Logbook: " + os.path.join(folder, "board.html"))
+        self.assertTrue(board.is_board(folder), "no board on disk: the call did not publish one")
+        self.assertNotIn("systemMessage", output or {}, "the hook printed to the terminal")
 
 
 class ShortSessions(WorkCalls):
@@ -101,7 +101,7 @@ class ShortSessions(WorkCalls):
         self.assertEqual(self.created_anything(), [self.data, data_calls, self.counter()])
 
         # The same PATH does reach Python at the tenth call, so the check above can see a start.
-        self.assertIsNotNone(self.hook(work_call("Bash"), env))
+        self.assert_started(self.hook(work_call("Bash"), env))
         self.assertTrue(os.path.exists(started))
 
 
@@ -120,7 +120,7 @@ class TheThreshold(WorkCalls):
         self.calls(9)
         output = self.hook(work_call("Bash", event="PostToolUseFailure"))
         self.assert_started(output)
-        self.assertNotIn("hookSpecificOutput", output)
+        self.assertIsNone(output, "a failed call carries no context and the hook prints nothing")
         self.assertIsNone(self.counted())
 
         after = self.hook(work_call("Bash"))

@@ -16,7 +16,7 @@ import unittest
 from datetime import datetime, timezone
 
 from test_hooks import PLUGIN, SESSION, compact, fixture
-from test_work_trigger import WORK_TRANSCRIPT, WorkCalls, work_call
+from test_work_trigger import OTHER_SESSION, WORK_TRANSCRIPT, WorkCalls, work_call
 
 import board  # noqa: E402  (test_hooks puts the board folder on the path)
 import board_hook  # noqa: E402  (and the hooks folder)
@@ -60,9 +60,6 @@ class TurnEnd(WorkCalls):
     def started_python(self, started):
         return os.path.exists(started)
 
-    def page(self):
-        return {"systemMessage": "Logbook: " + os.path.join(self.folder, "board.html")}
-
 
 class ATurnThatChangedSomething(TurnEnd):
 
@@ -77,7 +74,7 @@ class ATurnThatChangedSomething(TurnEnd):
         output = self.hook(stop())
 
         self.assert_started(output)
-        self.assertNotIn("hookSpecificOutput", output)
+        self.assertIsNone(output, "a Stop carries no context and the hook prints nothing")
         state = board.read_state(self.folder)
         self.assertEqual(sorted(os.path.basename(row["path"]) for row in state["changes"]), ["hello.txt", "notes.txt"])
         self.assertEqual([row["command"] for row in state["commands"]], ["echo ok && true"])
@@ -234,7 +231,7 @@ class TheEndOfATurnOnABoard(TurnEnd):
         self.start_with_subagent()
         self.assertIn("hookSpecificOutput", self.hook(fixture("UserPromptSubmit")))
         self.assertIsNone(self.hook(bash("ls")))
-        self.assertEqual(self.hook(stop()), self.page())
+        self.assertIsNone(self.hook(stop()), "a Stop prints nothing")
 
         self.assertIsNone(self.hook(fixture("UserPromptSubmit")))
         self.assertIsNone(self.hook(stop()))
@@ -243,7 +240,7 @@ class TheEndOfATurnOnABoard(TurnEnd):
         now = datetime.now(timezone.utc)
         board.recorded(self.folder, now, "question", text="Which format?", default="CSV", affects=None,
                        reverse=None, hardStop=False)
-        self.assertEqual(self.hook(stop()), self.page())
+        self.assertIsNone(self.hook(stop()), "a Stop prints nothing")
 
     def test_a_question_recorded_through_the_command_line_ends_with_the_page(self):
         self.start_with_subagent()
@@ -256,7 +253,7 @@ class TheEndOfATurnOnABoard(TurnEnd):
             env=self.env, capture_output=True, timeout=60,
         )
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(self.hook(stop()), self.page())
+        self.assertIsNone(self.hook(stop()), "a Stop prints nothing")
 
     def test_the_stop_that_starts_a_board_says_so_once(self):
         self.assertIsNone(self.hook(work_call("Edit")))
@@ -275,6 +272,77 @@ class TheEndOfATurnOnABoard(TurnEnd):
         self.assertIsNone(self.hook(fixture("SessionEnd")))
         self.assertIsNone(self.hook(stop()))
         self.assertIn("reopen", self.kinds())
+
+
+class NothingIsPrinted(TurnEnd):
+    """The hook once printed `Logbook: <path>` through `systemMessage` wherever it started a board, ended a
+    turn that recorded something, or began a session. The band above the prompt points at the board now:
+    no output of the hook carries a `systemMessage`, and the model is still told, once, where the board is."""
+
+    THIRD_SESSION = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+
+    def folder_of(self, session):
+        return os.path.join(self.boards(), session)
+
+    def announced(self, folder):
+        return os.path.exists(os.path.join(folder, "announced"))
+
+    def test_no_start_turn_end_or_session_start_prints_and_the_context_is_still_given_once(self):
+        outputs = []
+
+        def send(payload):
+            output = self.hook(payload)
+            outputs.append(output)
+            return output
+
+        # A start at the threshold, on a call that carries context: the context, and no message.
+        self.calls(9)
+        started = send(work_call("Edit"))
+        self.assertTrue(board.is_board(self.folder))
+        self.assertEqual(list(started), ["hookSpecificOutput"])
+        self.assertIn(os.path.join(self.folder, "board.html"), started["hookSpecificOutput"]["additionalContext"])
+        self.assertTrue(self.announced(self.folder))
+
+        # The end of a turn that recorded something on that board prints nothing.
+        self.assertIsNone(send(bash("ls")))
+        self.assertIsNone(send(stop()))
+        self.assertIn("turn-end", self.kinds())
+
+        # A session start gives the context back every time, as the context alone.
+        for source in ("startup", "compact", "resume"):
+            with self.subTest(source=source):
+                payload = fixture("SessionStart")
+                payload["source"] = source
+                begun = send(payload)
+                self.assertEqual(list(begun), ["hookSpecificOutput"])
+                self.assertEqual(begun["hookSpecificOutput"]["hookEventName"], "SessionStart")
+                self.assertIn(os.path.join(self.folder, "board.html"), begun["hookSpecificOutput"]["additionalContext"])
+
+        # A board a failed call starts: nothing is printed, and the next call that can carry context does.
+        self.calls(9, session=OTHER_SESSION)
+        other = self.folder_of(OTHER_SESSION)
+        self.assertIsNone(send(work_call("Bash", OTHER_SESSION, "PostToolUseFailure")))
+        self.assertTrue(board.is_board(other))
+        self.assertFalse(self.announced(other))
+        delivered = send(work_call("Bash", OTHER_SESSION))
+        self.assertEqual(list(delivered), ["hookSpecificOutput"])
+        self.assertIn(os.path.join(other, "board.html"), delivered["hookSpecificOutput"]["additionalContext"])
+        self.assertIsNone(send(work_call("Bash", OTHER_SESSION)))
+
+        # A board a Stop starts: nothing is printed, and the next prompt carries the context.
+        third = self.folder_of(self.THIRD_SESSION)
+        self.assertIsNone(send(work_call("Edit", self.THIRD_SESSION)))
+        self.assertIsNone(send(stop(session_id=self.THIRD_SESSION)))
+        self.assertTrue(board.is_board(third))
+        self.assertFalse(self.announced(third))
+        prompt = fixture("UserPromptSubmit")
+        prompt["session_id"] = self.THIRD_SESSION
+        prompted = send(prompt)
+        self.assertEqual(list(prompted), ["hookSpecificOutput"])
+        self.assertIn(os.path.join(third, "board.html"), prompted["hookSpecificOutput"]["additionalContext"])
+
+        for output in outputs:
+            self.assertNotIn("systemMessage", output or {})
 
 
 class NoTrigger(TurnEnd):

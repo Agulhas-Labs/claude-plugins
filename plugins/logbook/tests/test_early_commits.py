@@ -92,7 +92,7 @@ class EarlyCommits(Workspace):
 
     def start(self):
         """Start the board as the first subagent does, which starts one at any count of calls."""
-        self.assertIsNotNone(self.hook(fixture("SubagentStart")))
+        self.assertIsNone(self.hook(fixture("SubagentStart")), "a subagent start carries no context and prints nothing")
         self.assertTrue(board.is_board(self.folder))
         return self.folder
 
@@ -269,7 +269,8 @@ class ACommandThatFailedAfterItsCommit(EarlyCommits):
         payload["tool_input"] = {"command": 'git commit -m "The tenth" && git push', "description": "Commit and push"}
         payload["error"] = "Exit code 1\n" + printed + "\nerror: failed to push"
         payload["tool_use_id"] = "toolu_tenth"
-        self.assertIsNotNone(self.hook(payload))
+        self.assertIsNone(self.hook(payload), "a failed call carries no context and prints nothing")
+        self.assertTrue(board.is_board(self.folder))
         self.assertEqual(self.shown(), [(sha, "The tenth call's", "main")])
 
 

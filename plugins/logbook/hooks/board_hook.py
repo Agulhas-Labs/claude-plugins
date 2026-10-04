@@ -14,13 +14,13 @@ other, and this only reads the count (`board.calls_made`, `board.calls_changed`)
 once the board has started. The steps, changes and commands
 made before then are read back from the transcript, the call that started the board is applied on
 top of them (it may or may not be in the transcript yet, so it is matched by its tool-use id and never
-recorded twice), and the path is returned twice: as `systemMessage`, which the terminal shows, and as
-`additionalContext`, which tells the model where the board is and how to record on it. Only the call
-that published the board returns them: when two hooks start it at once, the other records its own
-events on the board and prints nothing. What `SubagentStart` adds to the context goes to the
-subagent, not the main session, and neither `PostToolUseFailure` nor `Stop` is documented to carry
-context at all, so a board started on any of them shows the terminal its path at once and gives the
-model its context on the next main-session event that can carry it. The `announced` file, created
+recorded twice), and the path is returned as `additionalContext`, which tells the model where the board is
+and how to record on it. Nothing is printed to the terminal: the mod's band above the prompt points at the
+board, and its button opens the page. Only the call that published the board returns the context: when two
+hooks start it at once, the other records its own events on the board and prints nothing. What
+`SubagentStart` adds to the context goes to the subagent, not the main session, and neither
+`PostToolUseFailure` nor `Stop` is documented to carry context at all, so a board started on any of them
+gives the model its context on the next main-session event that can carry it. The `announced` file, created
 exclusively, makes that happen once. On an open board, the end of each turn that recorded anything
 shows the terminal the path again.
 
@@ -555,11 +555,10 @@ def start(project, session, folder, payload, env, now):
             record(folder, now, found)
             board.render(folder, now, env)
         return None
-    output = {"systemMessage": page_message(folder)}
     event = payload.get("hook_event_name")
     if event in CARRIES_CONTEXT and announce(folder):
-        output["hookSpecificOutput"] = {"hookEventName": event, "additionalContext": context(folder, env)}
-    return output
+        return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": context(folder, env)}}
+    return None
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -574,11 +573,6 @@ def announce(folder):
         return False
     os.close(fd)
     return True
-
-
-def page_message(folder):
-    """What the terminal is shown: the board's page. The same text wherever it is shown."""
-    return "Logbook: " + os.path.join(folder, board.BOARD_FILE)
 
 
 def recorded_this_turn(log):
@@ -660,7 +654,6 @@ def carry_on(folder, payload, env, now):
         caught_up = catch_up(folder, payload, now, log, env)
         if caught_up:
             log = board.events(folder)
-    output = {"systemMessage": page_message(folder)} if event == "Stop" and recorded_this_turn(log) else None
     if found:
         record(folder, now, found)
         log = board.events(folder)
@@ -674,7 +667,7 @@ def carry_on(folder, payload, env, now):
         board.render(folder, now, env)
     if event in CARRIES_CONTEXT and announce(folder):
         return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": context(folder, env)}}
-    return output
+    return None
 
 
 def session_start(project, folder, payload, env, now):
@@ -691,10 +684,7 @@ def session_start(project, folder, payload, env, now):
         if payload.get("source") != "resume":
             return None
         board.reopen(folder, now, env)
-    return {
-        "systemMessage": page_message(folder),
-        "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context(folder, env)},
-    }
+    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context(folder, env)}}
 
 
 def revive(folder, payload, env, now):

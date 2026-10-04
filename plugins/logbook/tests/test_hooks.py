@@ -184,7 +184,8 @@ class Starting(Hooks):
         output = self.hook(task_create(5, "epsilon"))
 
         page = os.path.join(self.folder, "board.html")
-        self.assertEqual(output["systemMessage"], "Logbook: " + page)
+        self.assertNotIn("systemMessage", output)
+        self.assertEqual(list(output), ["hookSpecificOutput"])
         self.assertEqual(output["hookSpecificOutput"]["hookEventName"], "PostToolUse")
         context = output["hookSpecificOutput"]["additionalContext"]
         self.assertIn(page, context)
@@ -219,13 +220,15 @@ class Starting(Hooks):
                 env = dict(self.env, LOGBOOK_STEPS=setting)
                 self.assertIsNone(self.hook(task_create(first - 1), env))
                 self.assertFalse(os.path.exists(self.folder))
-                self.assertIn("systemMessage", self.hook(task_create(first), env))
+                output = self.hook(task_create(first), env)
+                self.assertTrue(board.is_board(self.folder), "the board did not start at the threshold")
+                self.assertNotIn("systemMessage", output)
                 os.rename(os.path.join(self.project, ".logbook"), os.path.join(self.tmp, "done-" + setting))
 
     def test_a_subagent_starts_a_board_and_the_next_main_session_call_tells_the_model_once(self):
         output = self.start_with_subagent()
-        self.assertEqual(list(output), ["systemMessage"])
-        self.assertEqual(output["systemMessage"], "Logbook: " + os.path.join(self.folder, "board.html"))
+        self.assertIsNone(output, "a subagent start carries no context and prints nothing")
+        self.assertTrue(board.is_board(self.folder))
         self.assertFalse(os.path.exists(os.path.join(self.folder, "announced")))
         self.assertEqual(self.state()["agents"][0]["type"], "general-purpose")
 
@@ -422,7 +425,8 @@ class TodoWriteStarts(Hooks):
         self.assertIsNone(self.hook(todo_write(4)))
         self.assertFalse(os.path.exists(self.folder))
         output = self.hook(todo_write(5))
-        self.assertIn("systemMessage", output)
+        self.assertTrue(board.is_board(self.folder))
+        self.assertNotIn("systemMessage", output)
         self.assertEqual(len(self.state()["steps"]), 5)
 
 

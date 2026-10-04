@@ -79,7 +79,8 @@ class Recovered(AgentInfo):
         self.write(LAUNCH_CALL, LAUNCH_RESULT)
         self.assertIsNone(self.handled(fixture("PostToolUse-Agent")))
         self.assertFalse(board.is_board(self.folder))
-        self.assertIsNotNone(self.handled(fixture("SubagentStart")))
+        self.assertIsNone(self.handled(fixture("SubagentStart")), "a subagent start prints nothing")
+        self.assertTrue(board.is_board(self.folder))
         agent = self.row(BACKGROUND)
         self.assertEqual(
             (agent["type"], agent["model"], agent["description"]), ("general-purpose", MODEL, "Simple reply task"),

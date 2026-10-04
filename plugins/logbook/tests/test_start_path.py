@@ -181,7 +181,8 @@ class Publication(StartPath):
         with mock.patch.object(board, "branch_heads", side_effect=other_hook_meanwhile):
             outputs.append(self.handled(task_create(5, "epsilon")))
 
-        self.assertEqual(sum(1 for o in outputs if o and "systemMessage" in o), 1)
+        self.assertEqual(sum(1 for o in outputs if o and "hookSpecificOutput" in o), 1)
+        self.assertFalse(any("systemMessage" in o for o in outputs if o))
         self.assertEqual(sum(1 for o in outputs if o), 1)
         self.assertEqual(sorted(s["id"] for s in self.state()["steps"]), ["5", "6"])
 

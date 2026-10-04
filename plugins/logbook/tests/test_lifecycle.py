@@ -260,8 +260,8 @@ class CutTaskId(Hooks):
 
         output = self.hook(text)
 
-        self.assertIsNotNone(output, "the gate read the cut id as a smaller one")
-        self.assertIn("systemMessage", output)
+        self.assertTrue(board.is_board(self.folder), "the gate read the cut id as a smaller one")
+        self.assertNotIn("systemMessage", output or {})
         self.assertTrue(os.path.isfile(os.path.join(self.folder, "board.html")))
 
 

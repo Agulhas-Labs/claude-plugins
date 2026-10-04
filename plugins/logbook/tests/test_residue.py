@@ -38,7 +38,7 @@ class CalledUpOnStop(TurnEnd):
 
         output = self.hook(stop())
 
-        self.assertEqual(output, self.page())
+        self.assertIsNone(output, "a Stop prints nothing")
         kinds = self.kinds()
         self.assertIn("change", kinds)
         self.assertLess(kinds.index("change"), kinds.index("turn-end"))
