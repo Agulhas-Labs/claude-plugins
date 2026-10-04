@@ -17,7 +17,7 @@ Start a new session after installing. None of them needs configuring.
 | Plugin | The problem it solves | What it does |
 | --- | --- | --- |
 | [`delegate`](plugins/delegate/README.md) | A few long-running subagents take most of your spend, and you can't see where your tokens go. | Your session leads a roster of subagents on models matched to the job, and re-runs the commands that prove each handoff before it believes the report. Its `agent-cost` report reads the transcripts already on your disk and shows the spend for your sessions and their subagents. |
-| [`cache-guard`](plugins/cache-guard/README.md) | A message sent into a big session after its prompt cache expired costs far more than it looks, and nothing tells you. | Holds that message back once and shows what it will cost. Send it again and it goes through. |
+| [`cache-guard`](plugins/cache-guard/README.md) | A message sent into a big session after its prompt cache expired costs far more than it looks, and nothing tells you. | Holds that message back once and shows what it will cost. Send it again and it goes through. A band above the prompt shows the cache's minutes left, the context size and what a miss would cost, with a Handoff button, and offers to resume the previous session's handoff. |
 | [`logbook`](plugins/logbook/README.md) | A long task ends and you dig through the scroll to find out what happened. | Keeps a live local page of what was built, what was verified, what was decided without you and what's waiting on you. It becomes the report when the session ends. |
 | [`upkeep`](plugins/upkeep/README.md) | Config maintenance (oversized guides, leftover worktrees, stale memory) is easy to forget and nothing reminds you. | Says once, in one line, when a run is due (every 14 days by default). `/upkeep` builds on `/doctor`, adds three checks, and changes nothing without your confirmation. |
 
@@ -26,7 +26,9 @@ Start a new session after installing. None of them needs configuring.
 Your session plans and judges on the model you chose. Haiku runs commands, Sonnet makes changes that are
 already spelled out, and Opus writes the code that still has decisions in it, then reviews the result
 without having seen how it was made. A hook warns an agent as its context grows: freeze scope at 120k,
-hand back at 150k, stop at 200k. At most 4 agents run at once, and you can change that.
+hand back at 150k, stop at 200k. At most 4 agents run at once, and you can change that. No agent runs on a
+model above your session's. A band above the prompt lists the running agents with their tokens and an
+estimated cost, and a toast says when one finishes.
 
 Ask "where did my tokens go this week?" and its `agent-cost` report answers from your local transcripts,
 down to which projects, sessions and subagents cost the most. Each section says what to do about what it
@@ -50,7 +52,9 @@ change resets the cache, while you can still undo it for free.
 
 If you'd rather start fresh, send the single word `handoff`. A script writes
 `.claude/handoffs/<timestamp>.md` from the transcript on disk and a cheap model adds a summary, so your
-session's model isn't used. Run `/clear` and the new session is pointed at the file.
+session's model isn't used. Run `/clear` and the new session is pointed at the file. A `Handoff` button
+on the band above the prompt does the same, with a spinner while it writes and a box that says where the
+file is and how to resume. The band and the resume offer need Claude Code 2.1.287 or later.
 
 [cache-guard README](plugins/cache-guard/README.md): what you see, the settings, and what it never does.
 
