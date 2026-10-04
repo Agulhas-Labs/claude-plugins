@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { SPINNER, cacheHue, contextHue, limitHue, resumeHint, tokens } from './band.tsx'
+import { SPINNER, cacheHue, contextHue, resumeHint, tokens } from './band.tsx'
 
 const NOW = 1_800_000_000_000
 const usage = (input: number, read: number, write: number, output = 100, model = 'claude-opus-5') =>
@@ -19,7 +19,7 @@ function engine(on, world: { status: Record<string, unknown>; startedAt?: number
     const out = e.argv.includes('--write') ? world.handoff : world.status
     return { value: { exitCode: 0, stdout: JSON.stringify(out), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  on('session.usage', () => ({ value: { startedAt: world.startedAt ?? 1, context: { window: 1, percent: 61 }, rateLimits: [{ kind: 'five_hour', percentUsed: 34 }], cost: { usd: 2.51 } } }))
+  on('session.usage', () => ({ value: { startedAt: world.startedAt ?? 1, context: { window: 1, percent: 61 } } }))
   on('ui.toast', (_$, e) => void (seen.toasts.push(e.text), seen.timeouts.push(e.timeoutMs)))
   on('fs.read', (_$, e) => ({ value: seen.files[e.path] ?? '' }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
@@ -81,8 +81,7 @@ test('the band is one row of plain labels under a Cache-Guard tag, Handoff last'
   expect((await textOf(band, '109K'))).toBeDefined()
   expect((await textOf(band, ' (61%)'))?.props.color).toBe('yellow')
   expect((await textOf(band, '$3.34'))).toBeDefined()
-  expect((await textOf(band, '34%'))?.props.color).toBe('green')
-  expect(rowText(await band.drawn())).toBe('Cache-Guard  Cache 60 mins left · Tokens 109K (61%) · Miss cost $3.34 · 5h 34%   Handoff')
+  expect(rowText(await band.drawn())).toBe('Cache-Guard  Cache 60 mins left · Tokens 109K (61%) · Miss cost $3.34   Handoff')
   expect(drawn).not.toContain('Compact')
   expect(drawn).not.toMatch(/[▪▫█░▓▒]/)
 })
@@ -93,7 +92,7 @@ test('one minute left is singular, and the miss cost is left out when cost displ
   await started($)
   await $.classic.SessionStart({ source: 'resume', transcript_path: '/t/s.jsonl', cwd: '/w', session_id: 's' } as never)
   const band = await mountBand($)
-  expect(rowText(await band.drawn())).toBe('Cache-Guard  Cache 1 min left · Tokens 109K (61%) · 5h 34%   Handoff')
+  expect(rowText(await band.drawn())).toBe('Cache-Guard  Cache 1 min left · Tokens 109K (61%)   Handoff')
 })
 
 test('colours follow the thresholds, just below and at each boundary', () => {
@@ -107,10 +106,6 @@ test('colours follow the thresholds, just below and at each boundary', () => {
   expect(contextHue(60)).toBe('yellow')
   expect(contextHue(79)).toBe('yellow')
   expect(contextHue(80)).toBe('red')
-  expect(limitHue(59)).toBe('green')
-  expect(limitHue(60)).toBe('yellow')
-  expect(limitHue(85)).toBe('yellow')
-  expect(limitHue(86)).toBe('red')
 })
 
 test('token counts read 109K and 1.2M', () => {
@@ -128,7 +123,7 @@ test('an expired cache reads Cache expired in red, with the miss cost the next m
   await clock.advance(31 * 60_000)
   expect((await textOf(band, 'Cache expired'))?.props.color).toBe('red')
   expect((await textOf(band, '$3.34'))?.props.color).toBe('yellow')
-  expect(rowText(await band.drawn())).toBe('Cache-Guard  Cache expired · Tokens 109K (61%) · Miss cost $3.34 · 5h 34%   Handoff')
+  expect(rowText(await band.drawn())).toBe('Cache-Guard  Cache expired · Tokens 109K (61%) · Miss cost $3.34   Handoff')
 })
 
 test('there is no Compact button and no [?] legend', async ($, on) => {

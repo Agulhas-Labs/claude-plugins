@@ -59,15 +59,13 @@ export function tokens(count: number): string {
 }
 
 export type Hue = 'green' | 'yellow' | 'red'
-export type Usage5 = { context?: { percent?: number }; rateLimits: { kind: string; percentUsed: number }[]; cost?: { usd: number } }
+export type Usage5 = { context?: { percent?: number } }
 
 // Colour by meaning. These cut-offs are display choices, not measured values.
 export const CACHE_GREEN_FROM = 0.5 // share of the cache lifetime still left
 export const CACHE_YELLOW_FROM = 0.1
 export const CONTEXT_GREEN_BELOW = 60 // % of the window in use
 export const CONTEXT_RED_FROM = 80
-export const LIMIT_GREEN_BELOW = 60 // % of the 5-hour limit used
-export const LIMIT_RED_ABOVE = 85
 
 export function cacheHue(left: number, lifetimeMs: number): Hue {
   const share = left / lifetimeMs
@@ -77,10 +75,6 @@ export function cacheHue(left: number, lifetimeMs: number): Hue {
 
 export function contextHue(percent: number): Hue {
   return percent < CONTEXT_GREEN_BELOW ? 'green' : percent < CONTEXT_RED_FROM ? 'yellow' : 'red'
-}
-
-export function limitHue(percent: number): Hue {
-  return percent < LIMIT_GREEN_BELOW ? 'green' : percent <= LIMIT_RED_ABOVE ? 'yellow' : 'red'
 }
 
 // One reading of the band: a dim label around a (possibly coloured) value.
@@ -109,11 +103,6 @@ export function bandSegments(s: State, usage: Usage5, now: number): Segment[] {
   }
   if (s.status?.show_cost !== false && s.status?.cold_usd != null) {
     out.push({ key: 'miss', before: 'Miss cost ', value: dollars(s.status.cold_usd), hue: left !== null && left <= 0 ? 'yellow' : undefined })
-  }
-  const fiveHour = usage.rateLimits.find(r => r.kind === 'five_hour')
-  if (fiveHour) {
-    const used = Math.round(fiveHour.percentUsed)
-    out.push({ key: 'limit', before: '5h ', value: `${used}%`, hue: limitHue(used) })
   }
   return out
 }

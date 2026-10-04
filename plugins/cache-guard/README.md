@@ -131,7 +131,7 @@ In Claude Code 2.1.287 or later, in the terminal or the desktop app, one row abo
 An example (made-up figures), with each figure coloured by what it means:
 
 ```text
-Cache-Guard  Cache 25 mins left · Tokens 109K (7%) · Miss cost $3.34 · 5h 1%   [ Handoff ]
+Cache-Guard  Cache 25 mins left · Tokens 109K (7%) · Miss cost $3.34   [ Handoff ]
 ```
 
 | Figure | Means | Colour |
@@ -139,7 +139,6 @@ Cache-Guard  Cache 25 mins left · Tokens 109K (7%) · Miss cost $3.34 · 5h 1% 
 | `Cache 25 mins left` | Minutes before the prompt cache expires, counted down from the last answer and the lifetime the session is buying. `Cache expired` once it has gone. | Green with half the lifetime or more left, yellow down to a tenth, red below that or expired. |
 | `Tokens 109K (7%)` | The size of the context the next message re-sends, and the share of the model's window it fills when Claude Code has a reading. | The share is green below 60%, yellow below 80%, red at 80% or more. |
 | `Miss cost $3.34` | What the next message costs if the cache has expired: the whole context written back at list price. Left out when `CACHE_GUARD_SHOW_COST=0`. | Yellow once the cache has expired, plain before. |
-| `5h 1%` | The share of the rolling five-hour usage limit used, when Claude Code has a reading. | Green below 60%, yellow up to 85%, red above. |
 
 The colour cut-offs are display choices, not measured values.
 
