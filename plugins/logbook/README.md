@@ -66,6 +66,29 @@ The hooks only see how a command ended, so the page says "exited 0" or "failed",
 passed". A pipeline ends the way its last command does: `run-tests | tail -3` exits 0 whatever the tests
 did. When that matters, Claude records a check in its own words, and those come first under Verified.
 
+## The band and pane
+
+On Claude Code 2.1.287 or later the board also shows inside the terminal. A row above the prompt reads, for
+example, `Logbook  Stopped · 1 question · 3/5 · 6 pass · 1 fail   Logbook`. It names only what needs your eyes
+and leaves out a part that is zero: open questions (a hard stop reads `Stopped`, in red), stuck or failed items,
+steps done of steps planned, and checks passed and failed. Files changed, commands run and agents are not in
+the row; they are in the pane. The `Logbook` button opens the pane, and the same button, or the pane's own
+`Close`, closes it. The pane is never opened for you.
+
+The pane lists, with an empty section left out: Needs you (each open question with its default, what it
+affects and how to reverse it, and an `Answer` button that puts `Q3: ` in the prompt for you to finish), Stuck,
+Steps, Built, Verified, Decisions, then counts of files changed, commands run and agents, with only the
+failed ones named. A new open question or hard stop also shows as a one-line toast.
+
+The row is drawn from the board's `state.js`, which the hooks keep; the mod runs `board/mod_state.py` to find
+the board, at session start and when a turn completes, and otherwise re-reads `state.js` after a tool call
+that can change it and every 30 seconds while a turn runs. Drawing starts no process. On the first file
+change or commit of a session that has no board yet, the mod starts it from the transcript, so the row is up
+from the first change instead of at the tenth tool call; the hooks' thresholds are unchanged.
+
+The hooks and the browser page work as before everywhere, older hosts included, and the browser page remains
+the end-of-session `report.html`.
+
 ## Using it
 
 A board appears on its own. Every turn that changed a file or made a commit ends with one. A board can
