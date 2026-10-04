@@ -21,8 +21,7 @@ hooks start it at once, the other records its own events on the board and prints
 `SubagentStart` adds to the context goes to the subagent, not the main session, and neither
 `PostToolUseFailure` nor `Stop` is documented to carry context at all, so a board started on any of them
 gives the model its context on the next main-session event that can carry it. The `announced` file, created
-exclusively, makes that happen once. On an open board, the end of each turn that recorded anything
-shows the terminal the path again.
+exclusively, makes that happen once. Nothing is ever printed to the terminal.
 
 A work call records a `change` (the file, and the lines added and removed when the response says)
 or a `command` (its text, `pass`, `fail` or `background`, the exit code a failure names, and how long
@@ -636,10 +635,7 @@ def carry_on(folder, payload, env, now):
     """Record one payload on a board that exists, and deliver the model's context if it is still owed.
 
     A work call made inside a subagent is only recorded: what it returns would reach the subagent.
-    The end of a turn that recorded anything shows the terminal the board's page, decided from the
-    log before its own `turn-end` is appended; a turn that recorded nothing says nothing. On `Stop`,
-    what `catch_up` recovers is appended before that `turn-end`, and counts towards it: a turn whose
-    calls reached the board only through catch-up still ends with the message.
+    On `Stop`, what `catch_up` recovers is appended before the turn's `turn-end`.
     """
     log = board.events(folder)
     if board.is_closed(log):
