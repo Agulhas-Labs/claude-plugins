@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""What the band and pane read: this session's board folder and its state, as one line of JSON.
+
+    mod_state.py --project DIR --session ID                       the board and its state, or {}
+    mod_state.py --project DIR --session ID --start --transcript P   start the board first, if there is none
+
+The board is found as every command finds it (`board.find_board`: the session's folder under the project or
+the nearest folder above it, a linked boards folder refused), in the project the hooks would use
+(`CLAUDE_PROJECT_DIR`, else `--project`, inside the home or temporary folder unless `LOGBOOK_ALLOW_ANY_PATH=1`).
+The state is the one `state.js` holds (`board.read_state`). With no board, or one that cannot be used, the
+line is `{}`.
+
+`--start` starts the board the way the hooks do at their threshold, from the same functions: the title is the
+first prompt in the transcript and the calls made so far are read back from it, marked `early`. It does not
+write the `announced` file, so the next hook that can carry context still tells the model how to record on the
+board (`board.py start` writes it, and the model would never be told). A start that is refused, or fails,
+prints `{}`. This never changes what the hooks do; it only reads, or starts a board they would also have started.
+"""
+import argparse
+import json
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, "..", "hooks"))
+
+import board  # noqa: E402
+import board_hook  # noqa: E402
+
+
+def board_and_state(project, session, env):
+    """({"board": folder, "state": state}, or {}) for the session's board under `project`."""
+    env = dict(env, **{board.SESSION_VARIABLE: session})
+    project = board.contained(os.path.abspath(env.get("CLAUDE_PROJECT_DIR") or project), env)
+    if project is None:
+        return {}
+    folder, _ = board.find_board(project, env)
+    if folder is None:
+        return {}
+    state = board.read_state(folder)
+    return {"board": folder, "state": state} if state is not None else {}
+
+
+def start_board(project, session, transcript, env):
+    """Start the session's board from the transcript unless it has one. Returns whether this call started it."""
+    project = board.contained(os.path.abspath(env.get("CLAUDE_PROJECT_DIR") or project), env)
+    if project is None or board.find_board(project, dict(env, **{board.SESSION_VARIABLE: session}))[0] is not None:
+        return False
+    prompt, earlier = board_hook.read_transcript(transcript, set(), env=env)
+    return board.start(project, session, board.clock(), board_hook.title_from(prompt), env, early=earlier) is not None
+
+
+def main(argv=None):
+    args = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    args.add_argument("--project", required=True)
+    args.add_argument("--session", required=True)
+    args.add_argument("--start", action="store_true")
+    args.add_argument("--transcript")
+    args = args.parse_args(argv)
+    try:
+        if args.start:
+            start_board(args.project, args.session, args.transcript, os.environ)
+        found = board_and_state(args.project, args.session, os.environ)
+    except Exception:
+        found = {}
+    print(json.dumps(found, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
