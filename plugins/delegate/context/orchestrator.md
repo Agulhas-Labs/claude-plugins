@@ -11,6 +11,11 @@ the user chose. It hands the work to the roster, and choosing the rung is its jo
 plugin's agents are named `delegate:<rung>` (`delegate:mechanic`, …); a user-level agent
 with a bare name such as `mechanic` is a different definition.
 
+**Your own model is the ceiling.** Where a rung's pin is above this session's model, pass your model as
+`model` on that Agent call (`model: "sonnet"` on a Sonnet session): it beats the pin, and effort stays as
+pinned. The reviewer still runs, and `builder-lite` or `mechanic` fit more jobs. A Haiku session caps the
+whole roster at Haiku. Where the job needs more, tell the user to run `/advisor` with `opus` or `fable`.
+
 - **runner** (Haiku): a fully scripted command sequence with a mechanical pass/fail. No
   editing and no judgement. If the script's assumptions fail, it stops and reports.
 - **mechanic** (Sonnet, medium): mechanical, fully specified work a gate can judge: sweeps, renames,
@@ -48,10 +53,10 @@ loudly and read what it did.
   main session may get, so a maker that waits on a long suite comes back cold and rewrites its whole
   context. In one measured week that was 7.5% of all subagent spend: 310 cold turns, each after a single
   Bash call, with a median wait of seven minutes in a 115k context. So a maker's last gate is the narrow
-  test that covers its change, never a suite that runs past a few minutes. The maker commits and hands
-  back, the handoff says the full run is owed, and the orchestrator has a `runner` run it once, when it
-  merges. A runner's context is small, so going cold costs it little, and one run covers every branch
-  folded into that merge. A red run goes to a fresh maker with the failures.
+  test that covers its change, never a suite past a few minutes. It commits and hands back, saying the
+  full run is owed, and the orchestrator has a `runner` run it once, when it merges: a runner's context
+  is small, so going cold costs it little, and one run covers every branch folded in. A red run goes to
+  a fresh maker with the failures.
 - **Size the handoff before you send it.** Split it if any of these is true: it lists more than three
   deliverables, it expects more than one commit, or it tells the agent to read a whole document. One
   eight-item handoff with a plan to read spent 160k tokens and delivered the first item; the same work
@@ -93,26 +98,23 @@ loudly and read what it did.
   findings, not the whole branch again (measured: it cost as much as the first review).
 - **Side findings are filed, not fixed in the session,** unless they would lead users to believe
   something wrong and act on it.
-- **Cheap makers, one expensive review.** A middle rung makes fully specified rounds; the reviewer
-  reviews once, at the end. No reviewer round for a diff under about 50 lines, and a fix of a few lines
-  the orchestrator makes itself.
+- **Cheap makers, one expensive review, at the end.** No reviewer round for a diff under about 50 lines,
+  and a fix of a few lines the orchestrator makes itself.
 - **A subagent is warned in three tiers as its context grows, and is expected to hand work back.** At
   120k it freezes scope, at 150k it hands back after landing the item in hand, at 200k it stops where
   it is and reports. So a report that lists unfinished items is the hook working, not an agent failing:
   give the remainder to a fresh agent with what that report learned, rather than resuming the old one.
-  A handoff sized to land inside 120k of context never reaches the first mark.
 - **The cap is on agents running at once, not on how many a session uses.** A long job split into small
-  agents uses many of them, and that is the cheap way to do it. Past about ten in a session, say the
-  count and what they went on the next time you report; don't stop to ask.
+  agents is the cheap way to do it. Past about ten in a session, say the count and what they went on the
+  next time you report; don't stop to ask.
 
 ## The roster's tools
 
 A tool an agent never calls is context re-sent on every turn. `mechanic`, `builder-lite`, `builder` and
 `reviewer` deny the unused built-ins and keep every MCP server; `runner` carries a short allowlist.
 MCP tools arrive as names only, so when a job needs specific ones, name them in the handoff and the agent
-loads them in one `ToolSearch` (`select:mcp__<server>__<tool>,…`). The `agent-cost` skill's `--tools` section shows what each
-agent type actually called. A job that needs a different limit gets its own agent definition rather than
-a wider shared one.
+loads them in one `ToolSearch` (`select:mcp__<server>__<tool>,…`). The `agent-cost` skill's `--tools`
+section shows what each agent type called. A job needing a different limit gets its own agent definition.
 
 ## Conventions
 

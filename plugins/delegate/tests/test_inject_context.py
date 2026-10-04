@@ -81,6 +81,7 @@ class HookWiringTests(unittest.TestCase):
         self.assertEqual(engineering, read(os.path.join(CONTEXT, "engineering.md")))
         self.assertIn("# Orchestrator conventions", orchestrator)
         self.assertIn("At most 4 agents at a time", orchestrator)
+        self.assertIn("Your own model is the ceiling", orchestrator)
         self.assertNotIn("{{", orchestrator)
 
     def test_max_agents_setting_defaults_to_4_and_is_read_from_the_environment(self):
