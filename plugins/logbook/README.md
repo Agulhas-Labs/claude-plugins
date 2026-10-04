@@ -14,13 +14,13 @@ Start a new session. There's nothing to configure.
 
 ## What you get
 
-When a turn changes a file or makes a commit, the terminal shows where the board is as the turn ends:
+When a task runs long enough, or a turn changes a file or makes a commit, a board starts at
+`<project>/.logbook/<session-id>/board.html`. On Claude Code 2.1.287 or later the band above the prompt
+(see [The band](#the-band)) points at it, and its button opens the page in your browser. On an older host
+nothing is printed: run `/logbook:logbook`, or ask Claude, and it gives you the path. Claude is told where the
+board is and how to record on it either way.
 
-```text
-Logbook: <project>/.logbook/<session-id>/board.html
-```
-
-Open it in a browser. A board part-way through a task looks something like this:
+Open the page in a browser. A board part-way through a task looks something like this:
 
 ```text
 Logbook                                              Light  Dark  System
