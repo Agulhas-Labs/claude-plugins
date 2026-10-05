@@ -32,6 +32,7 @@ type State = {
   frame: number
   tick: { cancel: () => void } | null
   poll: { cancel: () => void } | null
+  refreshedAt: number // ms; when a tool call last re-read the transcript
   spin: { cancel: () => void } | null
 }
 
@@ -39,6 +40,7 @@ export const TAG = 'Cache-Guard' // the band's one row starts with the tag, then
 export const GAP = '  '
 const TICK_MS = 30_000
 const POLL_MS = 5_000
+const REFRESH_MIN_MS = 10_000 // a tool call re-reads the transcript at most this often
 const SPIN_MS = 120
 export const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 const POLL_CAP_MS = 6 * 60_000 // the summariser is killed at five minutes; a minute's margin
@@ -256,7 +258,7 @@ export async function drawBand($, e, next, s: State) {
 export const register: Register = on => {
   const s: State = {
     transcriptPath: '', cwd: '', sessionId: '', status: null, startedAt: null,
-    watch: null, saved: null, frame: 0, tick: null, poll: null, spin: null,
+    watch: null, saved: null, frame: 0, tick: null, poll: null, spin: null, refreshedAt: 0,
   }
 
   const remember = (e: { transcript_path?: string; cwd?: string; session_id?: string }) => {
@@ -285,6 +287,20 @@ export const register: Register = on => {
     if (e.agentId === undefined && s.status?.last_turn_at != null) {
       // the transcript may not hold this turn's last entry yet; the cache was used just now either way
       s.status.last_turn_at = Math.max(s.status.last_turn_at, await $.clock.now())
+    }
+    return result
+  })
+
+  // A turn can run for many minutes, and every request in it renews the cache and grows the context, so
+  // the figures are re-read after a tool call, at most every REFRESH_MIN_MS. Local work: no tokens.
+  on('tool.call', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId === undefined && s.transcriptPath) {
+      const now = await $.clock.now()
+      if (now - s.refreshedAt >= REFRESH_MIN_MS) {
+        s.refreshedAt = now
+        await refresh($, s)
+      }
     }
     return result
   })

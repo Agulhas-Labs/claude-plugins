@@ -23,6 +23,7 @@ function engine(on, world: { status: Record<string, unknown>; startedAt?: number
   on('ui.toast', (_$, e) => void (seen.toasts.push(e.text), seen.timeouts.push(e.timeoutMs)))
   on('fs.read', (_$, e) => ({ value: seen.files[e.path] ?? '' }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('tool.call', () => ({ result: {}, text: '' }))
   on('classic.SessionStart', () => ({}))
   on('classic.UserPromptSubmit', () => ({}))
   if (!world.below) on('ui.render', (_$, e) => h(_$.ui.resolve(e).Box, { key: 'engine' }))
@@ -223,4 +224,28 @@ test('drawing runs no process', async ($, on) => {
   await mountBand($)
   await clock.advance(5 * 60_000) // ten ticks redraw the countdown
   expect(seen.runs.length).toBe(runs)
+})
+
+test('a tool call mid-turn re-reads the transcript, at most every 10 seconds, and starts the countdown', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const world = { status: status({ last_turn_at: null, lifetime_s: null, context_tokens: null, cold_usd: null }) as Record<string, unknown> }
+  const seen = engine(on, world)
+  await started($)
+  await $.classic.SessionStart({ source: 'clear', transcript_path: '/t/s.jsonl', cwd: '/w', session_id: 's' } as never)
+  const band = await mountBand($)
+  expect(rowText(await band.drawn())).not.toContain('Cache')
+  world.status = status({ last_turn_at: NOW, context_tokens: 95_000 })
+  await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  expect(rowText(await band.drawn())).toContain('Tokens 95K')
+  expect(rowText(await band.drawn())).toContain('Cache 60 mins left')
+  const runs = seen.runs.length
+  await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  expect(seen.runs.length).toBe(runs) // inside the 10 seconds: no second read
+  world.status = status({ last_turn_at: NOW, context_tokens: 120_000 })
+  await clock.advance(11_000)
+  await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  expect(rowText(await band.drawn())).toContain('Tokens 120K')
+  await clock.advance(31 * 60_000)
+  expect(rowText(await band.drawn())).toContain('Cache 29 mins left')
+  await $.tool.call({ tool: 'Bash', command: 'ls', agentId: 'sub' } as never) // a subagent's call does not read
 })
