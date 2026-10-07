@@ -382,7 +382,7 @@ class Context:
         self.session_id = session_id
         self.agent_id = agent_id
         self.agent_type = agent_type_of(path, kind)
-        self.turns = []       # list of dict(ts, ctx, usage, model, n_tools, tools)
+        self.turns = []       # list of dict(ts, ctx, usage, model, n_tools, tools, cats)
         self.events = []      # list of (turn_index, category, chars) turn_index = len(turns) at event time
         self.versions = set()
         self.start = None     # fixed-start composition dict, filled from attachments before first turn
@@ -472,7 +472,7 @@ def load_context(kind, path, project_dir, session_id, agent_id):
                     ctx.start = start
                 mid_index[mid] = len(ctx.turns)
                 ctx.turns.append(dict(ts=parse_ts(ts), ctx=context_size(u), usage=u,
-                                       model=m.get("model", "?"), n_tools=0, tools=collections.Counter()))
+                                       model=m.get("model", "?"), n_tools=0, tools=collections.Counter(), cats=[]))
             elif mid and mid in mid_index and u:
                 # Streaming writes the same message on several lines. input/cache tokens are fixed for
                 # the turn, but output_tokens accumulates across an agentic-loop message's blocks, so
@@ -490,6 +490,7 @@ def load_context(kind, path, project_dir, session_id, agent_id):
                         pending[tid] = cat
                         if ctx.turns:
                             ctx.turns[-1]["n_tools"] += 1
+                            ctx.turns[-1]["cats"].append(cat)
                             ctx.turns[-1]["tools"][b.get("name") or "?"] += 1
                     ctx.events.append((len(ctx.turns), "assistant: tool-call inputs (edits, commands)", len(json.dumps(b.get("input")))))
                 elif b.get("type") == "text":
@@ -721,6 +722,30 @@ def report_groups(loaded):
     return groups
 
 
+# Categories that only look: a run of single-call turns made of these could have been one request.
+# MCP tools and "bash: other" are left out because they may write, so the figure is a lower bound
+# on what the reads alone could save.
+READ_ONLY_CATEGORIES = frozenset({
+    "Read (ranged)", "Read (whole file)", "Grep/Glob tool", "bash: grep",
+    "bash: cat/sed/head window", "bash: git diff/show", "bash: git log/status/etc",
+})
+
+
+def batchable_followons(turns):
+    """The turns of one context that follow another single read-only call with one of their own.
+    A run of k >= 2 consecutive turns that each made exactly one read-only call contributes its last
+    k-1 turns: the round trips that requesting the reads together could have saved."""
+    followons = []
+    prev_qualified = False
+    for t in turns:
+        cats = t.get("cats", [])
+        qualified = t["n_tools"] == 1 and len(cats) == 1 and cats[0] in READ_ONLY_CATEGORIES
+        if qualified and prev_qualified:
+            followons.append(t)
+        prev_qualified = qualified
+    return followons
+
+
 def section_turn_shape(out, loaded):
     out.append("=== Turn shape ===")
     for label, kind in report_groups(loaded):
@@ -730,6 +755,9 @@ def section_turn_shape(out, loaded):
         one_tool = [t for t in turns if t["n_tools"] == 1]
         ie_one = sum(t["ie"] for t in one_tool)
         out.append(f"  {label:10} turns carrying exactly one tool call: {100*len(one_tool)/n:5.1f}% of turns, {100*ie_one/total_ie:5.1f}% of input-eq spend")
+        follow = [t for l in loaded if kind is None or l.ctx.kind == kind for t in batchable_followons(l.window_turns)]
+        ie_follow = sum(t["ie"] for t in follow)
+        out.append(f"  {label:10} one read-only call, following another:  {100*len(follow)/n:5.1f}% of turns, {100*ie_follow/total_ie:5.1f}% of input-eq spend — the most that requesting them together could save")
     out.append("")
 
 

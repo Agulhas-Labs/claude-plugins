@@ -279,6 +279,75 @@ class TurnShapeTests(unittest.TestCase):
         self.assertAlmostEqual(spend_pct, 100.0 * 100 / 200, places=1)  # (10+10+80) of 200
 
 
+def seq_loaded(kind, specs, agent="s0"):
+    """One Loaded whose single context has one turn per (n_tools, cats, ie) spec, in order."""
+    c = ac.Context(kind, f"/tmp/fake-{agent}.jsonl", "proj", "sess", agent)
+    c.turns = [dict(ts=BASE + timedelta(seconds=i), ctx=int(ie), usage=usage(input_tokens=int(ie), output_tokens=1),
+                    model="claude-sonnet-5", n_tools=n, tools={}, cats=list(cats))
+               for i, (n, cats, ie) in enumerate(specs)]
+    return ac.Loaded(c, BASE - timedelta(minutes=1), BASE + timedelta(minutes=1))
+
+
+R, G, E, B = ["Read (ranged)"], ["Grep/Glob tool"], ["Edit/Write"], ["bash: raw swift build/test"]
+
+
+def followon_idx(*cat_lists, n_tools=None):
+    lc = seq_loaded("main", [(len(c) if n_tools is None else n_tools[i], c, 1) for i, c in enumerate(cat_lists)])
+    return [lc.window_turns.index(t) for t in ac.batchable_followons(lc.window_turns)]
+
+
+class BatchableFollowonTests(unittest.TestCase):
+    def test_runs_contribute_every_turn_after_the_first(self):
+        self.assertEqual(followon_idx(R, R, G, E, R, R), [1, 2, 5])
+
+    def test_a_two_call_turn_and_a_zero_call_turn_each_break_a_run(self):
+        self.assertEqual(followon_idx(R, R + R, R, R), [3])
+        self.assertEqual(followon_idx(R, [], R, R), [3])
+
+    def test_a_non_read_only_single_call_breaks_a_run(self):
+        self.assertEqual(followon_idx(R, B, R), [])
+        self.assertEqual(followon_idx(R, R, B, R, R), [1, 4])
+
+    def test_a_lone_read_contributes_nothing(self):
+        self.assertEqual(followon_idx(R), [])
+        self.assertEqual(followon_idx(E, R, E), [])
+
+    def test_a_turn_without_cats_does_not_qualify(self):
+        t = dict(n_tools=1, tools={})
+        self.assertEqual(ac.batchable_followons([t, t]), [])
+
+    def test_runs_do_not_span_contexts(self):
+        loaded = [seq_loaded("main", [(1, R, 1)], "a"), seq_loaded("main", [(1, R, 1)], "b")]
+        out = []
+        ac.section_turn_shape(out, loaded)
+        line = next(l for l in out if "following another" in l)
+        self.assertIn("  0.0% of turns", line)
+
+    def test_section_line_percentages(self):
+        # one context: Read(ie 10), Read(20), Edit(30), Read(40), Read(100), two-call(200).
+        # follow-ons are turns 2 and 5: 2 of 6 turns, (20+100) of 400.
+        lc = seq_loaded("subagent", [(1, R, 10), (1, R, 20), (1, E, 30), (1, R, 40), (1, R, 100), (2, R + R, 200)])
+        out = []
+        ac.section_turn_shape(out, [lc])
+        line = next(l for l in out if "following another" in l)
+        self.assertTrue(line.strip().startswith("subagent"))
+        self.assertAlmostEqual(float(re.search(r"([\d.]+)% of turns", line).group(1)), 100 * 2 / 6, places=1)
+        self.assertAlmostEqual(float(re.search(r"([\d.]+)% of input-eq spend", line).group(1)), 100 * 120 / 400, places=1)
+
+    def test_load_context_records_each_calls_category(self):
+        root = tempfile.mkdtemp(prefix="agentcost-cats-")
+        self.addCleanup(shutil.rmtree, root)
+        path = os.path.join(root, "agent-a1.jsonl")
+        write_jsonl(path, [
+            assistant("m1", ts_str(BASE), usage(), content=[
+                tool_use_block("t1", "Read", {"file_path": "/x", "limit": 5}),
+                tool_use_block("t2", "Grep", {"pattern": "x"})]),
+            assistant("m2", ts_str(BASE), usage(), content=[tool_use_block("t3", "Bash", {"command": "git diff"})]),
+        ])
+        ctx = ac.load_context("subagent", path, "p", "s", "a1")
+        self.assertEqual([t["cats"] for t in ctx.turns], [["Read (ranged)", "Grep/Glob tool"], ["bash: git diff/show"]])
+
+
 class ConcentrationTests(unittest.TestCase):
     def test_top_10_percent_share(self):
         ies = [100, 90] + [10] * 8   # sum = 270, top 10% (1 context) = 100

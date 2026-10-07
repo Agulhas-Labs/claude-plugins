@@ -70,7 +70,10 @@ spend is all in their own sessions.
   **Action**, main: shorter sessions, as above. **Action**, subagent: hand off one job per agent,
   start a fresh agent for each review round, never resume a long-running one to "just finish one more
   thing."
-- **Turn shape** — the % of turns carrying exactly one tool call, and their share of spend. High values
+- **Turn shape** — the % of turns carrying exactly one tool call, and their share of spend. A second line
+  counts the turns that made one read-only call straight after another such turn (reads, searches, git
+  inspection): an upper bound on what requesting them together would save, since a read may have
+  depended on the one before it. High values
   here mean calls that could have been requested together were made one at a time, each paying the full
   context over again. **Action**: batch independent tool calls into one response. In a main session the
   person can ask for it ("look these up together"); for subagents it belongs in the handoff or the

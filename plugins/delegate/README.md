@@ -194,7 +194,9 @@ back something like this (the figures here are made up for illustration):
 
 === Turn shape ===
   main       turns carrying exactly one tool call:  61.2% of turns,  58.7% of input-eq spend
+  main       one read-only call, following another:  14.3% of turns,  12.9% of input-eq spend — the most that requesting them together could save
   subagent   turns carrying exactly one tool call:  84.5% of turns,  82.9% of input-eq spend
+  subagent   one read-only call, following another:  31.6% of turns,  29.4% of input-eq spend — the most that requesting them together could save
 ```
 
 Here the subagents hold most of the spend, and most of it goes on turns that made a single tool call,
