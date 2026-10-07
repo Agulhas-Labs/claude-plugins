@@ -96,16 +96,19 @@ Previous session: <the handoff's summary line> (2 d ago) · branch feat/x · 2 a
 [Resume] [Dismiss]
 ```
 
-Every figure is computed when the session starts, not remembered: the age is from the handoff file's
-modification time, and the branch, the commits ahead of its upstream and the count of uncommitted files
-come from `git` in the session's working directory. A figure git can't give (no upstream, not a
-repository) is left out. The band says nothing about whether the work is finished or any test passed.
+Every figure is computed when the session starts (or a `/clear` starts a new one), not remembered: the
+age is from the handoff file's modification time, and the branch, the commits ahead of its upstream and
+the count of uncommitted files come from `git` in the session's working directory. A figure git can't
+give (no upstream, not a repository) is left out. The band says nothing about whether the work is
+finished or any test passed.
 
 **Resume** puts `Read <path> and continue from it.` in the prompt box as a draft. Nothing is sent and
 nothing is spent until you press Enter. **Dismiss** and **Resume** hide the band and are remembered: that
-handoff is not offered again in a later session (a newer handoff still is). Sending any prompt hides it for
-the rest of the session. The band is not drawn when there is no handoff, when the newest is older than the limit, or
-while a survey is up.
+handoff is not offered again in a later session (a newer handoff still is). Sending any prompt hides it
+for the rest of the session. A `/clear` or a resume in the same window starts a new session, so the offer
+is evaluated again then: the handoff you just wrote is offered, unless you dismissed or resumed it. The
+band is not drawn when there is no handoff, when the newest is older than the limit, or while a survey is
+up.
 
 It is a mod, so it needs Claude Code 2.1.287 or later and draws in the terminal and the Desktop app only;
 elsewhere it does nothing, and the `SessionStart` hook's notice above is unchanged. The limit is the
@@ -113,8 +116,9 @@ plugin option `resumeMaxAgeDays` (default `7`).
 
 What it reads and runs, since a mod is code with your full permissions: it reads the newest `.md` file in
 the handoffs directory (the one the handoff hook writes to) and the git status of the working directory;
-it runs `hooks/resume.py` once at session start, which runs `git rev-parse`, `git rev-list --count` and
-`git status --porcelain` locally with a three-second limit each and no network. It writes nothing.
+it runs `hooks/resume.py` once when a session starts and again after a `/clear` or a resume, which runs
+`git rev-parse`, `git rev-list --count` and `git status --porcelain` locally with a three-second limit
+each and no network. It writes nothing.
 
 ## Is it worth it for you?
 

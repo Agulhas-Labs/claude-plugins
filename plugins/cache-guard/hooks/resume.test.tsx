@@ -19,7 +19,7 @@ const world: { stdout?: string } = {}
 
 const setup = (on: any, facts: unknown, stdout = JSON.stringify(facts), withBase = true) => {
   world.stdout = undefined
-  mock.clock(on, { now: NOW })
+  const clock = mock.clock(on, { now: NOW })
   const kept = new Map<string, unknown>() // the plugin's store, which outlives a session
   on('store.get', (_$: unknown, e: { key: string }) => ({ value: kept.get(e.key) }))
   on('store.set', (_$: unknown, e: { key: string; value: unknown }) => {
@@ -34,6 +34,8 @@ const setup = (on: any, facts: unknown, stdout = JSON.stringify(facts), withBase
   }
   const calls: string[][] = []
   on('session.start', (_$: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('session.end', (_$: unknown, e: { sessionId: string }) => ({ sessionId: e.sessionId }))
+  on('session.cwd', () => ({ value: '/work' }))
   on('process.run', (_$: unknown, e: { argv: string[] }) => {
     calls.push([...e.argv])
     return { value: { exitCode: 0, stdout: world.stdout ?? stdout, stderr: '' } }
@@ -43,7 +45,7 @@ const setup = (on: any, facts: unknown, stdout = JSON.stringify(facts), withBase
     fills.push({ text: e.text, mode: e.mode })
     return { isFilled: true }
   })
-  return { calls, fills }
+  return { calls, fills, clock }
 }
 
 const mountBand = ($: any, surface: 'terminal' | 'desktop') =>
@@ -178,4 +180,55 @@ test('Resume is remembered too, and a newer handoff is still offered', async ($,
   world.stdout = JSON.stringify({ ...handoffWritten(0.5), path: '/work/.claude/handoffs/2026-10-02.md' })
   await $.session.start(start)
   expect(await ui.find({ type: 'Text', text: /Previous session/ })).toBeDefined()
+})
+
+// A /clear (or a resume) moves the process to a new session id and the engine fires no session.start for it.
+const end = async ($: any, clock: { settle: () => Promise<void> }, reason: string) => {
+  await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
+  await clock.settle() // the script runs on a timer once the end chain is done
+}
+
+const newer = () => ({ ...handoffWritten(0.5), path: '/work/.claude/handoffs/2026-10-02.md', summary: 'Written after the first' })
+
+test('a /clear after a prompt offers the newest handoff again, read in the directory the engine names', async ($, on) => {
+  const { calls, clock } = setup(on, handoffWritten(1))
+  on('prompt.submit', (_$: unknown, e: { text: string }) => ({ text: e.text }))
+  await $.session.start(start)
+  const ui = await mountBand($, 'terminal')
+  await $.prompt.submit({ text: 'hello' } as never)
+  expect(await ui.find({ type: 'Text', text: /Previous session/ })).toBeUndefined()
+
+  world.stdout = JSON.stringify(newer())
+  await end($, clock, 'clear')
+
+  const line = await ui.find({ type: 'Text', text: /Previous session/ })
+  expect(line?.text).toContain('Previous session: Written after the first')
+  expect(calls).toHaveLength(2)
+  expect(calls[1]?.at(-1)).toBe('/work')
+})
+
+test('a handoff dismissed before a /clear is not offered after it', async ($, on) => {
+  const { calls, clock } = setup(on, handoffWritten(1))
+  await $.session.start(start)
+  const ui = await mountBand($, 'terminal')
+  await ui.press({ key: 'dismiss' })
+
+  await end($, clock, 'clear')
+
+  expect(calls).toHaveLength(2)
+  expect(await ui.find({ type: 'Text', text: /Previous session/ })).toBeUndefined()
+})
+
+test('a session.end for another reason neither runs the script nor brings the band back', async ($, on) => {
+  const { calls, clock } = setup(on, handoffWritten(1))
+  on('prompt.submit', (_$: unknown, e: { text: string }) => ({ text: e.text }))
+  await $.session.start(start)
+  const ui = await mountBand($, 'terminal')
+  await $.prompt.submit({ text: 'hello' } as never)
+
+  world.stdout = JSON.stringify(newer())
+  await end($, clock, 'prompt_input_exit')
+
+  expect(calls).toHaveLength(1)
+  expect(await ui.find({ type: 'Text', text: /Previous session/ })).toBeUndefined()
 })
