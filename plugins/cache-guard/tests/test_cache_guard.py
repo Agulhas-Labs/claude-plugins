@@ -538,6 +538,13 @@ class StateDirectoryTests(GuardTestCase):
             self.assertNotEqual(directory, os.path.join(tempfile.gettempdir(), old))
         self.assertFalse(os.path.exists(directory))  # naming it is not creating it
 
+    def test_the_state_directory_follows_the_claude_config_dir(self):
+        config = os.path.join(self.tmp.name, "config")
+        self.assertEqual(cache_guard.state_dir({"CLAUDE_CONFIG_DIR": config}), os.path.join(config, "cache-guard"))
+        self.assertEqual(
+            cache_guard.state_dir({"CLAUDE_CONFIG_DIR": config, "CACHE_GUARD_STATE_DIR": self.markers}), self.markers
+        )
+
     def test_the_state_directory_can_still_be_pointed_somewhere_else(self):
         self.assertEqual(cache_guard.state_dir({"CACHE_GUARD_STATE_DIR": self.markers}), self.markers)
 

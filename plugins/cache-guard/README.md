@@ -169,7 +169,7 @@ All optional, set under `env` in `~/.claude/settings.json` or a repository's `.c
 | `CACHE_GUARD_HANDOFF_FRESH_MINUTES` | `30` | How recent a handoff must be for a new session to be told about it. |
 | `resumeMaxAgeDays` (plugin option, not an environment variable) | `7` | How old the newest handoff may be for the resume band to be offered. |
 | `CACHE_GUARD_NOTIFY` | on | `0` sends no desktop notifications; the terminal messages are unchanged. |
-| `CACHE_GUARD_STATE_DIR` | `~/.claude/cache-guard` | Where the guard keeps its few small marker files. |
+| `CACHE_GUARD_STATE_DIR` | `cache-guard` in `CLAUDE_CONFIG_DIR`, else `~/.claude/cache-guard` | Where the guard keeps its few small marker files. |
 | `CACHE_GUARD_DISABLE` | off | `1` switches the guard off. |
 
 ## Requirements and limits

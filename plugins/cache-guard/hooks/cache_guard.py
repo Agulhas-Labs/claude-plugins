@@ -43,7 +43,7 @@ FIVE_MINUTES = 300
 DEFAULT_MIN_TOKENS = 100_000
 DEFAULT_CONFIRM_SECONDS = 120
 MARKER_MAX_AGE = 86_400  # a marker older than a day belongs to a session that has long since ended
-STATE_DIR_NAME = "cache-guard"  # inside the user's own ~/.claude, never a directory anyone else writes
+STATE_DIR_NAME = "cache-guard"  # inside the user's own Claude Code directory, never a directory anyone else writes
 STATE_DIR_MODE = 0o700
 HANDOFF_WORD = "handoff"  # a message that is only this word asks for a handoff file, never the model
 HANDOFF_COMMANDS = ("/handoff", "/cache-guard:handoff")  # the same thing, but written by the model
@@ -663,9 +663,7 @@ def state_dir(env):
     Under the user's own home, not the shared temporary directory: this directory is swept, and a
     sweep of a path any local user can pre-create is a way to delete someone else's files.
     """
-    return env.get("CACHE_GUARD_STATE_DIR") or os.path.join(
-        os.path.expanduser("~"), ".claude", STATE_DIR_NAME
-    )
+    return env.get("CACHE_GUARD_STATE_DIR") or os.path.join(config_dir(env), STATE_DIR_NAME)
 
 
 def usable_state_dir(directory):
