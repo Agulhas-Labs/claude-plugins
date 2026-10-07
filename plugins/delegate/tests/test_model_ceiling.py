@@ -68,7 +68,7 @@ class ModelCeilingTests(unittest.TestCase):
 
     def test_a_subagent_type_from_elsewhere_is_left_alone(self):
         self.session(SONNET)
-        for other in ("general-purpose", "builder", "other-plugin:builder", f"{NAME}:../builder", f"{NAME}:absent"):
+        for other in ("general-purpose", "builder", "other-plugin:builder", f"{NAME}:../builder", f"{NAME}:x/../builder", f"{NAME}:absent"):
             payload = {"transcript_path": self.transcript, "tool_name": "Agent",
                        "tool_input": {"prompt": "p", "subagent_type": other}}
             self.assertIsNone(ceiling.decision(payload, ENV), other)

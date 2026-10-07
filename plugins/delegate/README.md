@@ -3,8 +3,8 @@
 Your Claude Code session leads a team of agents, each on the cheapest model that can do its job, and no
 work counts as done until a command proves it. Haiku runs commands, Sonnet makes changes that are already
 spelled out, and Opus writes the code that still needs decisions. A separate reviewer sees only the
-spec and the diff. A hook keeps every agent at or below your session's model, so a Sonnet session stays
-on Sonnet and below. A built-in report shows where your tokens went.
+spec and the diff. A hook caps the plugin's own agents at the model your session's transcript last
+names, so a Sonnet session's builders run on Sonnet. A built-in report shows where your tokens went.
 
 A plugin for Claude Code, the terminal and IDE tool. It does not work in claude.ai chat or Cowork.
 
@@ -91,8 +91,9 @@ whole context on every turn, so its cost grows with the square of its length. Me
   Hence a fresh builder per round, and two rounds at most.
 - 70% of subagent turns made a single tool call, and those turns were two thirds of subagent spend.
   Agents are told to ask for independent calls together.
-- Before the background-run hold was retired, about 20 main-session turns in one day were agents waking
-  it with nothing to report.
+- Before the background-run hold existed, about 20 main-session turns in one day were agents waking it
+  with nothing to report. The hold has since been retired, as above; the rule about not stopping on a
+  background run stays, for the reason the conventions now give.
 
 Those are shares of cost, weighted by price with cache reads at a tenth of fresh input, from one machine.
 Your numbers will differ; `agent-cost` shows you yours.
@@ -116,8 +117,11 @@ higher, a hook passes your session's model as a per-call override, so on Sonnet 
 
 ## The model you start on is the ceiling
 
-No agent runs on a model above your session's. Start on Opus and the whole ladder is available. Start
-on Sonnet and a hook adds `model: "sonnet"` to any call whose agent is pinned higher, so `builder` and
+The plugin's own agents run at or below the model your session's transcript last names. That is a cap
+on `delegate:` rungs, read before each call: a call that names its own `model`, an agent copied under
+another name, a machine without Python, or a model id the hook cannot place is not capped, and the
+first call after a model change can still be judged by the model before it. Start on Opus and the whole
+ladder is available. Start on Sonnet and a hook adds `model: "sonnet"` to any call whose agent is pinned higher, so `builder` and
 `reviewer` run on Sonnet (at their high effort, which a call cannot change) and `builder-lite` or
 `mechanic` take whatever fits them. Start on Haiku and everything runs on Haiku. The reviewer always
 runs: it is the only reader that sees just the spec and the diff.
@@ -304,8 +308,7 @@ run with `python3`; where that is missing (often on Windows), the skill runs it 
 It isn't tied to a language. Agents use whatever code intelligence you have, such as an LSP plugin or a
 code-index server, and plain search otherwise.
 
-The context hooks need a POSIX shell with `cat`, `sed`, `awk` and `tr`. The context-budget
-hook needs Python 3 (standard library only) as `python3` or `python` (also `py` on
+The context hooks need a POSIX shell with `cat`, `sed`, `awk` and `tr`. The context-budget and model-ceiling hooks need Python 3 (standard library only) as `python3` or `python` (also `py` on
 Windows). Without it that hook is skipped silently and nothing else changes. The context-budget hook runs
 after every tool call, in your session too, where it exits at once. On Windows, hooks need
 Git Bash, Claude Code's usual setup; Windows is untested.

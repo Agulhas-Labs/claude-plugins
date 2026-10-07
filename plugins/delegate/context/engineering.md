@@ -61,8 +61,8 @@ of all subagent spend: each one re-sent the whole context to do one small thing.
   change between edits.
 - Run a build or suite in the foreground, with a timeout long enough for it. Background a command only
   when you have other work to do meanwhile, never to wait on it, and never end your turn while one you
-  started is still running: a subagent that does wakes the main session with nothing to report. In one
-  measured day that was about 20 main-session turns that could do nothing.
+  started is still running: your report is delivered once, when you hand back, so a result that lands
+  after it has nowhere to go, and the turn that wakes you for it is paid cold.
 - Your context has three budget marks, and a hook tells you as you pass each. They ask for different
   things, so read which one arrived. At 120k, freeze scope: start no new deliverable, and put
   everything into landing what is already open. At 150k, hand back: finish the item in hand, commit it
