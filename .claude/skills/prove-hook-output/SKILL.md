@@ -40,6 +40,10 @@ Use the cheapest one that answers the question you actually have.
    `Hook <Event>:<matcher> (<Event>) success`, which carries the hook's output (an `updatedInput`, say).
    And at a first turn's `PreToolUse`, the transcript does not yet hold the message making the call, so
    a hook that reads "the last assistant turn" finds the turn before it, or nothing.
+   Two more, from proving a `PostToolUseFailure` hook: a probe prompt must forbid the agent from
+   changing the command it is given (a runner appended `echo "exit=$?"` to a failing command, the call
+   succeeded, and the wrong event fired), and `--debug-file` leaves a `latest` symlink beside the log that
+   cleanup has to remove too.
 3. **A real PTY.** The only thing that proves a person would see it. This is what the rest of this
    skill is for.
 
