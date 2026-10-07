@@ -2,7 +2,7 @@
 name: agent-cost
 description: >-
   Report where Claude Code token spend goes, for main sessions and subagents separately — totals,
-  per-day trend, the costliest projects and sessions, concentration, turn shape, cold cache, what fills
+  spend by agent type, per-day trend, the costliest projects and sessions, concentration, turn shape, cold cache, what fills
   the context, and the fixed start every context pays. Use when asked where tokens/usage went, why
   Claude Code usage or cost is high, which session or project cost the most, how much a subagent or
   agent type is spending, what a session or subagent starts with (instructions, deferred tools, skill listing), or to compare spend before/after a change.
@@ -36,7 +36,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/agent_cost.py" [--since X] [--until X] [--p
   ignoring the window — use it to inspect a single agent's start or shape. A transcript is a
   `.jsonl` file; any other name is refused before it is read.
 - `--sections NAMES` prints only those sections, comma-separated, each named by any prefix of it:
-  `totals, per-day, main-sessions, concentration, turn-shape, cold-cache, what-fills-the-context,
+  `totals, spend-by-type, per-day, main-sessions, concentration, turn-shape, cold-cache, what-fills-the-context,
   fixed-start, largest-contexts, tools-called`. An unknown name fails before any transcript is read
   and lists the ones that exist.
 - **Ask for the sections the question needs.** The full report is about 200 lines and every line of it
@@ -57,6 +57,11 @@ holds the spend first, and give advice for that kind. Delegation advice means no
 spend is all in their own sessions.
 
 - **Totals** (`/ by model`) — the top-line number, main and subagent each on its own row.
+- **Spend by agent type** — one row per agent type (plugin prefix dropped, so a renamed plugin's types
+  line up) and `main`: contexts, median turns and peak context, input-eq and its share, output, and how
+  many contexts peaked at 150k or 200k and over. **Action**: a rung whose average cost per context is
+  close to the rung above it is not a cheaper rung; a rung with a handful of uses is one the
+  orchestrator does not reach for.
 - **Per day** — trend, with each day's main and subagent spend. A rising top-10% share or rising median
   turns over days means contexts are running longer, not that more work is happening. A day with under
   ten contexts shows `-` for the top-10% share: there is no decile to take.

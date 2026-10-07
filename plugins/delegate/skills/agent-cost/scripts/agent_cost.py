@@ -603,6 +603,44 @@ def section_totals(out, loaded):
     out.append("")
 
 
+def folded_type(l):
+    """The row a context lands in: `main` for a main session, otherwise its agent type without the
+    plugin prefix, so `some-plugin:builder` and a renamed plugin's `builder` share one row."""
+    return "main" if l.ctx.kind == "main" else l.ctx.agent_type.rsplit(":", 1)[-1]
+
+
+def section_spend_by_type(out, loaded):
+    """What each agent type cost: a rung of a roster earns its place by being cheaper than the one
+    above it, and that shows only with each type's spend, size and count side by side."""
+    by_type = collections.defaultdict(list)
+    for l in loaded:
+        if l.window_turns:
+            by_type[folded_type(l)].append(l)
+    if not by_type:
+        return
+    out.append("=== Spend by agent type ===")
+    out.append(f"  {'type':20} {'contexts':>8} {'med turns':>9} {'med peak':>9} {'input-eq':>9} {'share':>6}"
+               f" {'output':>9} {'>=150k':>7} {'>=200k':>7}")
+
+    def row(name, group, total_ie):
+        peaks = [max(t["ctx"] for t in l.window_turns) for l in group]
+        ie = sum(t["ie"] for l in group for t in l.window_turns)
+        outp = sum(t["usage"].get("output_tokens", 0) for l in group for t in l.window_turns)
+        share = 100 * ie / total_ie if total_ie else 0
+        med_turns = median(len(l.window_turns) for l in group)
+        return ie, (f"  {name_tail(name, 20):20} {len(group):8} {med_turns:9.0f} {fmt_tok(median(peaks)):>9}"
+                    f" {fmt_tok(ie):>9} {share:5.1f}% {fmt_tok(outp):>9}"
+                    f" {sum(p >= 150_000 for p in peaks):7} {sum(p >= 200_000 for p in peaks):7}")
+
+    every = [l for group in by_type.values() for l in group]
+    total_ie = sum(t["ie"] for l in every for t in l.window_turns)
+    rows = sorted((row(name, group, total_ie) + (name,) for name, group in by_type.items()),
+                  key=lambda r: (-r[0], r[2]))
+    out.extend(line for _, line, _ in rows)
+    out.append(row("total", every, total_ie)[1])
+    out.append("")
+
+
 def section_per_day(out, loaded):
     out.append("=== Per day (local day of the turn) ===")
     by_day = collections.defaultdict(list)          # day -> list of (context, turn)
@@ -1138,6 +1176,7 @@ def section_tools(out, loaded, per_type=25):
 # and hyphenated, with what only decorates the heading (the window, the top-n) left out.
 SECTIONS = (
     ("totals", "Totals", lambda out, loaded, top_n: section_totals(out, loaded)),
+    ("spend-by-type", "Spend by agent type", lambda out, loaded, top_n: section_spend_by_type(out, loaded)),
     ("per-day", "Per day", lambda out, loaded, top_n: section_per_day(out, loaded)),
     ("main-sessions", "Main sessions", section_main_sessions),
     ("concentration", "Concentration", lambda out, loaded, top_n: section_concentration(out, loaded)),

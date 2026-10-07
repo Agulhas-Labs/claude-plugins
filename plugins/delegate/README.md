@@ -213,6 +213,7 @@ and each one says what to do about what it shows:
 
 | Section | What it tells you | What helps |
 | --- | --- | --- |
+| Spend by agent type | What each agent type cost, your own sessions as `main`: contexts, typical turns and peak context, share of spend, and how many contexts grew past 150k and 200k. | Not counting on a type as the cheap option when its cost per context is close to the type above it, and reconsidering a type that is hardly used. |
 | Main sessions | Which projects and which of your own sessions cost the most, with each one's turns and peak context. | Ending a long session at a natural break: `/clear` and start the next piece of work from a short note, or `/compact`. |
 | Concentration, Turn shape | Whether a few long-running contexts, or turns that make one tool call each, are taking most of your spend. | In your own sessions: shorter sessions, and asking for independent lookups together. For subagents, the rest of this plugin: one job per agent, a context budget, calls requested together. |
 | Cold cache | How much went on messages sent into a large context after its prompt cache expired, and whether your sessions get the five-minute or the one-hour cache lifetime. | [`cache-guard`](../cache-guard/README.md), a sibling plugin, which warns you with the cost before that message is sent. |

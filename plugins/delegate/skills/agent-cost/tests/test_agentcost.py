@@ -1405,6 +1405,7 @@ class NameTailTests(unittest.TestCase):
 # that recomputes the name from the code under test pins nothing.
 SECTION_HEADINGS = {
     "totals": "=== Totals ===",
+    "spend-by-type": "=== Spend by agent type ===",
     "per-day": "=== Per day",
     "main-sessions": "=== Main sessions ===",
     "concentration": "=== Concentration ===",
@@ -1523,6 +1524,71 @@ class SectionSelectionTests(unittest.TestCase):
             ac.main(["--projects", "/nonexistent-projects-dir", "--sections", "collder"])
         self.assertIn("collder", err.getvalue())
         self.assertIn("what-fills-the-context", err.getvalue())
+
+
+def typed_loaded(kind, agent_type, ctxs, agent):
+    """One Loaded whose context has one turn per size in `ctxs`, each priced at its size (pure uncached
+    input) with 1 output token, and the agent type set by hand."""
+    c = ac.Context(kind, f"/tmp/fake-{agent}.jsonl", "proj", "sess", agent)
+    c.agent_type = agent_type
+    c.turns = [dict(ts=BASE + timedelta(seconds=i), ctx=n, usage=usage(input_tokens=n, output_tokens=1),
+                    model="claude-sonnet-5", n_tools=1, tools={}) for i, n in enumerate(ctxs)]
+    return ac.Loaded(c, BASE - timedelta(minutes=1), BASE + timedelta(minutes=1))
+
+
+class SpendByTypeTests(unittest.TestCase):
+    """One row per agent type, the plugin prefix folded, so each rung's cost can be set against the next."""
+
+    def _rows(self, loaded):
+        out = []
+        ac.section_spend_by_type(out, loaded)
+        self.assertEqual(out[0], "=== Spend by agent type ===")
+        return {line.split()[0]: line.split()[1:] for line in out[2:] if line.strip()}, [
+            line.split()[0] for line in out[2:] if line.strip()]
+
+    def test_rows_fold_the_plugin_prefix_count_peaks_and_shares_add_to_100(self):
+        loaded = [
+            typed_loaded("subagent", "delegate:builder", [100_000, 150_000], "b1"),  # peak exactly 150k
+            typed_loaded("subagent", "old-name:builder", [210_000], "b2"),
+            typed_loaded("subagent", "builder", [199_999], "b3"),
+            typed_loaded("subagent", "reviewer", [50_000], "r1"),
+            typed_loaded("main", "main", [120_000, 200_000, 180_000], "m1"),
+        ]
+        rows, order = self._rows(loaded)
+        # builder 659,999 input-eq, main 500,000, reviewer 50,000: sorted by input-eq, then the total
+        self.assertEqual(order, ["builder", "main", "reviewer", "total"])
+        # columns: contexts, median turns, median peak, input-eq, share, output, >=150k, >=200k
+        self.assertEqual(rows["builder"], ["3", "1", "200k", "660k", "54.5%", "4", "3", "1"])
+        self.assertEqual(rows["main"], ["1", "3", "200k", "500k", "41.3%", "3", "1", "1"])
+        self.assertEqual(rows["reviewer"], ["1", "1", "50k", "50k", "4.1%", "1", "0", "0"])
+        self.assertEqual(rows["total"], ["5", "1", "200k", "1.2M", "100.0%", "8", "4", "2"])
+        shares = sum(float(rows[name][4].rstrip("%")) for name in ("builder", "main", "reviewer"))
+        self.assertAlmostEqual(shares, 100.0, delta=0.15)
+
+    def _fixture(self):
+        fx = FixtureRoot(self)
+        fx.main_session(entries=[assistant("m1", ts_str(BASE), usage(input_tokens=5000))])
+        fx.subagent(agent="a1", agent_type="delegate:builder",
+                    entries=[assistant("s1", ts_str(BASE), usage(input_tokens=3000))])
+        fx.subagent(agent="a2", agent_type="reviewer",
+                    entries=[assistant("s2", ts_str(BASE), usage(input_tokens=1000))])
+        return fx
+
+    def test_in_the_default_report_straight_after_totals(self):
+        fx = self._fixture()
+        report = ac.build_report(ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1)), 12)
+        headings = [l for l in report.splitlines() if l.startswith("=== ")]
+        self.assertEqual(headings[:2], ["=== Totals ===", "=== Spend by agent type ==="])
+
+    def test_asked_for_alone_with_sections(self):
+        fx = self._fixture()
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            ac.main(["--projects", fx.root, "--since", ts_str(BASE - timedelta(hours=1)),
+                     "--until", ts_str(BASE + timedelta(hours=1)), "--sections", "spend-by-type"])
+        lines = buf.getvalue().splitlines()
+        self.assertEqual([l for l in lines if l.startswith("=== ")], ["=== Spend by agent type ==="])
+        self.assertEqual([l.split()[0] for l in lines[2:6]], ["main", "builder", "reviewer", "total"])
 
 
 if __name__ == "__main__":
