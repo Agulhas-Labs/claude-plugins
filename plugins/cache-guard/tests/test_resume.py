@@ -103,6 +103,16 @@ class ResumeTestCase(unittest.TestCase):
 
         self.assertEqual(self.run_script()["summary"], "Fix the login redirect")
 
+    def test_without_a_summary_line_the_goal_comes_before_the_requests(self):
+        self.make_repo()
+        self.write_handoff(
+            "h.md",
+            "# Handoff\n\n## Goal\n\nShip the resume band after a clear\n\n## What was asked\n\n"
+            "Nothing in the transcript was a plain request.\n",
+        )
+
+        self.assertEqual(self.run_script()["summary"], "Ship the resume band after a clear")
+
     def test_prints_an_empty_object_without_a_handoff(self):
         self.make_repo()
 
