@@ -14,10 +14,18 @@ budget = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(budget)
 
 
-def assistant(mid, context, *tool_ids):
+def assistant(mid, context, *tool_ids, timestamp=None):
     usage = {"input_tokens": 2, "cache_read_input_tokens": context - 2, "cache_creation_input_tokens": 0}
     content = [{"type": "tool_use", "id": t, "name": "Bash", "input": {}} for t in tool_ids]
-    return {"type": "assistant", "message": {"id": mid, "usage": usage, "content": content}}
+    entry = {"type": "assistant", "message": {"id": mid, "usage": usage, "content": content}}
+    if timestamp is not None:
+        entry["timestamp"] = timestamp
+    return entry
+
+
+# Transcripts write UTC with milliseconds and a trailing "Z".
+ISSUED = "2026-01-01T12:00:00.123Z"
+ISSUED_AT = 1767268800.123  # ISSUED as epoch seconds
 
 
 class BudgetTests(unittest.TestCase):
@@ -34,8 +42,10 @@ class BudgetTests(unittest.TestCase):
                 # A message with several blocks is written as one line per block, each repeating the usage.
                 f.write(json.dumps(e) + "\n")
 
-    def advise(self, tool_id, agent="a1", path=None):
-        return budget.advice({"transcript_path": path or self.parent, "agent_id": agent, "tool_use_id": tool_id})
+    def advise(self, tool_id, agent="a1", path=None, env=None, now=None):
+        payload = {"transcript_path": path or self.parent, "agent_id": agent, "tool_use_id": tool_id}
+        given = {k: v for k, v in (("env", env), ("now", now)) if v is not None}
+        return budget.advice(payload, **given)
 
     def test_the_freeze_tier_fires_at_120k_and_not_before(self):
         self.write(assistant("m1", 110_000, "t1"), assistant("m2", 119_000, "t2"), assistant("m3", 121_000, "t3"))
@@ -119,6 +129,64 @@ class BudgetTests(unittest.TestCase):
         self.assertIsNone(self.advise("t2", agent="nobody"))
         self.write(assistant("m1", 125_000, "t1"), assistant("m2", 151_000, "t2"))
         self.assertIsNone(self.advise("t9"))
+
+    def test_a_call_that_outlived_the_cache_is_told_with_its_minutes_and_context(self):
+        self.write(assistant("m1", 90_000, "t1"), assistant("m2", 114_000, "t2", timestamp=ISSUED))
+        said = self.advise("t2", now=ISSUED_AT + 9 * 60 + 30)
+        self.assertIn("Cache expired", said)
+        self.assertIn("9 minutes", said)
+        self.assertIn("114k", said)
+        self.assertIn("report", said)
+        self.assertNotIn("Context budget", said)
+
+    def test_a_call_within_the_cache_lifetime_gets_no_line(self):
+        self.write(assistant("m1", 90_000, "t1"), assistant("m2", 114_000, "t2", timestamp=ISSUED))
+        self.assertIsNone(self.advise("t2", now=ISSUED_AT + 299))
+
+    def test_the_cache_lifetime_override_is_honoured(self):
+        self.write(assistant("m1", 90_000, "t1"), assistant("m2", 114_000, "t2", timestamp=ISSUED))
+        longer = {"DELEGATE_SUBAGENT_CACHE_SECONDS": "3600"}
+        self.assertIsNone(self.advise("t2", env=longer, now=ISSUED_AT + 9 * 60))
+        shorter = {"DELEGATE_SUBAGENT_CACHE_SECONDS": "60"}
+        self.assertIn("2 minutes", self.advise("t2", env=shorter, now=ISSUED_AT + 2 * 60 + 5))
+        self.assertIn("took 1 minute,", self.advise("t2", env=shorter, now=ISSUED_AT + 65))
+        # Anything that isn't a positive integer means the default.
+        for bad in ("soon", "0", "-5", ""):
+            self.assertIsNone(self.advise("t2", env={"DELEGATE_SUBAGENT_CACHE_SECONDS": bad}, now=ISSUED_AT + 299))
+            self.assertIsNotNone(self.advise("t2", env={"DELEGATE_SUBAGENT_CACHE_SECONDS": bad}, now=ISSUED_AT + 301))
+
+    def test_an_overrun_that_crosses_a_tier_gets_both(self):
+        self.write(assistant("m1", 110_000, "t1"), assistant("m2", 121_000, "t2", timestamp=ISSUED))
+        said = self.advise("t2", now=ISSUED_AT + 12 * 60)
+        self.assertIn("Scope freeze", said)
+        self.assertIn("Cache expired", said)
+        self.assertIn("12 minutes", said)
+        self.assertLess(said.index("Scope freeze"), said.index("Cache expired"))
+
+    def test_the_slow_one_of_parallel_calls_is_told(self):
+        m2a = assistant("m2", 114_000, "t2", timestamp=ISSUED)
+        m2b = assistant("m2", 114_000, "t3", timestamp="2026-01-01T12:00:00.456Z")
+        self.write(assistant("m1", 90_000, "t1"), m2a, m2b)
+        self.assertIn("Cache expired", self.advise("t3", now=ISSUED_AT + 10 * 60))
+
+    def test_a_missing_or_unreadable_timestamp_gets_no_line_and_no_error(self):
+        self.write(assistant("m1", 110_000, "t1"), assistant("m2", 121_000, "t2"))
+        said = self.advise("t2", now=ISSUED_AT + 60 * 60)
+        self.assertIn("Scope freeze", said)
+        self.assertNotIn("Cache expired", said)
+        self.write(assistant("m1", 90_000, "t1"), assistant("m2", 114_000, "t2", timestamp="yesterday"))
+        self.assertIsNone(self.advise("t2", now=ISSUED_AT + 60 * 60))
+
+    def test_the_hook_reads_the_override_from_its_environment(self):
+        self.write(assistant("m1", 90_000, "t1"), assistant("m2", 114_000, "t2", timestamp=ISSUED))
+        payload = json.dumps({"transcript_path": self.parent, "agent_id": "a1", "tool_use_id": "t2"})
+        env = {k: v for k, v in os.environ.items() if k != "DELEGATE_SUBAGENT_CACHE_SECONDS"}
+        told = subprocess.run([sys.executable, HOOK], input=payload.encode(), capture_output=True, env=env)
+        self.assertIn(b"Cache expired", told.stdout)
+        # An issued time long past, so only a lifetime longer than that keeps it quiet.
+        env["DELEGATE_SUBAGENT_CACHE_SECONDS"] = str(10 ** 12)
+        quiet = subprocess.run([sys.executable, HOOK], input=payload.encode(), capture_output=True, env=env)
+        self.assertEqual(b"", quiet.stdout)
 
     def test_a_non_ascii_utf8_payload_is_read_under_a_non_utf8_locale(self):
         # On native Windows Python, sys.stdin decodes with the locale code page rather than UTF-8.
