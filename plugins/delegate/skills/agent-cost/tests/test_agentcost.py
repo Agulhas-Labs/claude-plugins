@@ -1887,3 +1887,17 @@ class RuleScorecardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VerdictLabelFormTests(unittest.TestCase):
+    def test_a_dash_after_the_verdict_label_still_classifies(self):
+        cases = (("Verdict - fail", "fail"), ("**Verdict** \u2014 fail: the hook swallows errors", "fail"),
+                 ("Verdict \u2014 pass", "pass"), ("Verdict: pass with low-severity items only", "pass with lows"))
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(ac.reviewer_verdict(text), want)
+
+    def test_not_ready_in_the_body_is_not_a_failing_verdict(self):
+        report = "Final verdict: merge-ready.\nThe Windows path is not ready yet; file it."
+        self.assertEqual(ac.reviewer_verdict(report), "pass")
+        self.assertEqual(ac.reviewer_verdict("Verdict: not ready to merge."), "fail")

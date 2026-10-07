@@ -1185,10 +1185,10 @@ def section_fixed_start(out, loaded):
     out.append("")
 
 
-# The rule scorecard's baselines, each measured over the one week of real agent work the plugin's rules
-# came from: the first and third are the figures its README quotes, the cold-turn share is the one its
-# orchestrator conventions quote (the week it was measured in is not recorded here). The model-ceiling
-# line's baseline is a target, not a measurement.
+# The rule scorecard's baselines: three measured figures and one target. The first and third are the
+# figures the plugin's README quotes from the one week of real agent work its rules came from; the
+# cold-turn share is the one its orchestrator conventions quote (the week it was measured in is not
+# recorded here); the model-ceiling line's baseline is a target, not a measurement.
 BASELINE_TOP_DECILE_SHARE = 45.0    # % of subagent spend in the longest-running 10% of subagents
 BASELINE_SINGLE_CALL_SHARE = 70.0   # % of subagent turns that made a single tool call
 BASELINE_COLD_SHARE = 7.5           # % of subagent spend on cold turns
@@ -1204,9 +1204,9 @@ VERDICT_RULES = (
     ("pass after fixes", re.compile(r"pass(ed)? after|merge-ready after|mergeable after"
                                     r"|after (the|one|two|\d) (named )?fix"
                                     r"|(merge|publish|ship|ready) after (the |those |these )?(named )?fix")),
-    ("fail", re.compile(r"verdict\**:?\**\s*\**fail|not merge-ready|not mergeable|do not merge"
-                        r"|fix first|fix(es)? (is |are )?needed before|not ready|blocks? (the )?merge")),
-    ("pass", re.compile(r"verdict\**:?\**\s*\**pass|merge-ready|mergeable|ready to merge")),
+    ("fail", re.compile(r"verdict\**\s*[:—–-]?\**\s*\**fail|not merge-ready|not mergeable|do not merge"
+                        r"|fix first|fix(es)? (is |are )?needed before|not ready (to|for) merge|blocks? (the )?merge")),
+    ("pass", re.compile(r"verdict\**\s*[:—–-]?\**\s*\**pass|merge-ready|mergeable|ready to merge")),
 )
 VERDICT_LINE = re.compile(r"(?im)^(\W*verdict\W*[:\u2014\u2013-]\s*.+)$")  # the whole line, label included
 VERDICTS = tuple(name for name, _ in VERDICT_RULES) + ("unclassified",)
@@ -1271,8 +1271,8 @@ def section_rule_scorecard(out, loaded):
         return
     sub_ie = sum(t["ie"] for l in subs for t in l.window_turns)
     out.append("=== Rule scorecard ===")
-    out.append("  each rule the plugin states: its metric in this window, the baseline measured over the week the"
-               " rules came from (a target where marked), and whether it holds")
+    out.append("  each rule the plugin states: its metric in this window, the measured baseline where there is one (a target"
+               " for the model ceiling), and whether it holds")
 
     def line(rule, metric, value, baseline, verdict):
         label = baseline if baseline is not None and baseline.startswith("target") else f"baseline {baseline}"

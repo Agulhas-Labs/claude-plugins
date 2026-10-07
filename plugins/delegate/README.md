@@ -74,8 +74,8 @@ Another hook watches subagents: it warns an agent as its context grows, in three
 - at 150k, finish the item in hand and hand the rest back;
 - at 200k, stop where it is and report, repeated every further 50k.
 
-Separately, when one tool call outlives a subagent's five-minute prompt cache, whether it succeeded,
-failed or timed out, it adds a line telling the agent that each further turn now rewrites its whole
+Separately, when one tool call outlives a subagent's five-minute prompt cache, whether it succeeded
+or failed, it adds a line telling the agent that each further turn now rewrites its whole
 context, so it should land what is verified and report rather than wait on another long command: measured
 on one machine over eight days, 79 of 84 cold subagent turns followed a single Bash call, after a median
 wait of nine minutes; cold turns were 2.6% of subagent spend, and agents that went cold twice or more
@@ -247,7 +247,7 @@ and each one says what to do about what it shows:
 | Cold cache | How much went on messages sent into a large context after its prompt cache expired, and whether your sessions get the five-minute or the one-hour cache lifetime. | [`cache-guard`](../cache-guard/README.md), a sibling plugin, which warns you with the cost before that message is sent. |
 | What fills the context | Which kind of content you keep re-sending, with your sessions' share and subagents' share side by side. | Reading files by range, and a code index in place of `cat` and `grep`. |
 | Fixed start | What every context pays before any work: instruction files, MCP tool listings, the skill listing. | Trimming the instruction files every session loads (and every subagent loads again), and disconnecting servers a coding session never calls. |
-| Rule scorecard | One line per rule this plugin states: the metric that measures it in the window, the baseline measured over the week the rules came from, and whether it holds. | Running it over the windows before and after a change to see which rules your agents keep. |
+| Rule scorecard | One line per rule this plugin states: the metric that measures it in the window, the measured baseline where there is one (a target for the model ceiling), and whether it holds. | Running it over the windows before and after a change to see which rules your agents keep. |
 | Tools called (`--tools`) | The tools each agent type actually called. | Editing an agent definition's `tools:` or `disallowedTools:` line. |
 
 ### Asking for what you need
