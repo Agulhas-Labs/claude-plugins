@@ -490,7 +490,7 @@ def load_context(kind, path, project_dir, session_id, agent_id):
                         pending[tid] = cat
                         if ctx.turns:
                             ctx.turns[-1]["n_tools"] += 1
-                            ctx.turns[-1]["cats"].append(cat)
+                            ctx.turns[-1]["cats"].append(turn_shape_category(cat, b.get("input") or {}))
                             ctx.turns[-1]["tools"][b.get("name") or "?"] += 1
                     ctx.events.append((len(ctx.turns), "assistant: tool-call inputs (edits, commands)", len(json.dumps(b.get("input")))))
                 elif b.get("type") == "text":
@@ -729,6 +729,20 @@ READ_ONLY_CATEGORIES = frozenset({
     "Read (ranged)", "Read (whole file)", "Grep/Glob tool", "bash: grep",
     "bash: cat/sed/head window", "bash: git diff/show", "bash: git log/status/etc",
 })
+
+
+# Commands that the categories above file as looking but that change something: an in-place sed, a
+# redirect into a file, tee, and the git subcommands that move refs or worktrees.
+WRITES = re.compile(r"\bsed\b[^|;&]*\s-i|(?<![0-9&>])>>?(?!&)\s*(?!/dev/null)[^\s&|;]|\btee\b"
+                    r"|\bgit (branch -[dDmM]|worktree (add|remove|move|prune)|fetch|tag)\b")
+
+
+def turn_shape_category(cat, inp):
+    """A call's category for the turn shape: a looking category is kept only when the command writes
+    nothing, so a sed -i or a heredoc into a file never counts as a read."""
+    if cat in READ_ONLY_CATEGORIES and cat.startswith("bash: ") and WRITES.search(inp.get("command", "")):
+        return "bash: writes"
+    return cat
 
 
 def batchable_followons(turns):

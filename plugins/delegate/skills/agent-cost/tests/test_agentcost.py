@@ -347,6 +347,15 @@ class BatchableFollowonTests(unittest.TestCase):
         ctx = ac.load_context("subagent", path, "p", "s", "a1")
         self.assertEqual([t["cats"] for t in ctx.turns], [["Read (ranged)", "Grep/Glob tool"], ["bash: git diff/show"]])
 
+    def test_a_command_that_writes_is_not_a_read(self):
+        for command in ("sed -i '' 's/a/b/' f.json", "cat > notes.md <<'EOF'\nx\nEOF", "head -5 a | tee b",
+                        "git branch -D old", "git worktree remove ../wt", "cat a >> b"):
+            self.assertEqual(ac.turn_shape_category(ac.bash_class(command), {"command": command}), "bash: writes", command)
+        for command in ("sed -n 1,5p f", "cat a 2>&1 | head", "grep -n x f >/dev/null", "git log -3", "git branch"):
+            self.assertIn(ac.turn_shape_category(ac.bash_class(command), {"command": command}),
+                          ac.READ_ONLY_CATEGORIES, command)
+        self.assertEqual(followon_idx(R, ["bash: writes"], R), [])
+
 
 class ConcentrationTests(unittest.TestCase):
     def test_top_10_percent_share(self):
