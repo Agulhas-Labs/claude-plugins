@@ -2,7 +2,7 @@
 """What the band reads: this session's board folder and its state, as one line of JSON.
 
     mod_state.py --project DIR --session ID                       the board and its state, or {}
-    mod_state.py --project DIR --session ID --start --transcript P   start the board first, if there is none
+    mod_state.py --project DIR --session ID --start [--transcript P] start the board first, if there is none
     mod_state.py --project DIR --session ID --open                   also open the board's page in the browser
 
 The board is found as every command finds it (`board.find_board`: the session's folder under the project or
@@ -16,11 +16,16 @@ first prompt in the transcript and the calls made so far are read back from it, 
 write the `announced` file, so the next hook that can carry context still tells the model how to record on the
 board (`board.py start` writes it, and the model would never be told). A start that is refused, or fails,
 prints `{}`. This never changes what the hooks do; it only reads, or starts a board they would also have started.
+Without `--transcript` (the mod is told the session's id, not its transcript's path), the transcript is the one
+file named for the id under `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/*/`; an id that is not UUID-shaped, or
+no single match, starts the board untitled.
 """
 import argparse
+import glob
 import json
 import os
 import pathlib
+import re
 import sys
 import webbrowser
 
@@ -45,11 +50,25 @@ def board_and_state(project, session, env):
     return {"board": folder, "state": state} if state is not None else {}
 
 
+UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+def find_transcript(session, env):
+    """The session's transcript, `<config>/projects/*/<session>.jsonl`, when exactly one file matches; else None."""
+    if not UUID.fullmatch(session):
+        return None
+    config = env.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    found = glob.glob(os.path.join(glob.escape(config), "projects", "*", session + ".jsonl"))
+    return found[0] if len(found) == 1 else None
+
+
 def start_board(project, session, transcript, env):
     """Start the session's board from the transcript unless it has one. Returns whether this call started it."""
     project = board.contained(os.path.abspath(env.get("CLAUDE_PROJECT_DIR") or project), env)
     if project is None or board.find_board(project, dict(env, **{board.SESSION_VARIABLE: session}))[0] is not None:
         return False
+    if transcript is None:
+        transcript = find_transcript(session, env)
     prompt, earlier = board_hook.read_transcript(transcript, set(), env=env)
     return board.start(project, session, board.clock(), board_hook.title_from(prompt), env, early=earlier) is not None
 

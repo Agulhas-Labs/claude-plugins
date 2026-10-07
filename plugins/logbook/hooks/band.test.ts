@@ -16,14 +16,24 @@ const question = (id: string, over: Record<string, unknown> = {}) => ({
 })
 const file = (state: unknown) => `window.BOARD = ${JSON.stringify(state)};\n`
 
-type Seen = { runs: string[][]; toasts: string[]; opens: unknown[]; closes: unknown[]; fills: unknown[]; files: Record<string, string> }
+type Seen = { runs: string[][]; toasts: string[]; opens: unknown[]; closes: unknown[]; fills: unknown[]; files: Record<string, string>; classic: string[] }
+type World = {
+  found: Record<string, unknown>; opened?: boolean; panes?: { id: string }[]; below?: boolean; failEdit?: boolean
+  id?: string // the engine's session id ($.session.id()); a /clear changes it
+  bySession?: Record<string, Record<string, unknown>> // what the helper finds for a given --session, over `found`
+}
 
-// The engine beneath the plugin: a process that answers the helper, a file system, and a record of the UI calls.
-function engine(on, world: { found: Record<string, unknown>; opened?: boolean; panes?: { id: string }[]; below?: boolean; failEdit?: boolean }) {
-  const seen: Seen = { runs: [], toasts: [], opens: [], closes: [], fills: [], files: {} }
+// The engine beneath the plugin: the session's id and folder, a process that answers the helper, a file system,
+// and a record of the UI calls.
+function engine(on, world: World) {
+  const seen: Seen = { runs: [], toasts: [], opens: [], closes: [], fills: [], files: {}, classic: [] }
+  on('session.id', () => ({ value: world.id ?? SESSION }))
+  on('session.cwd', () => ({ value: '/w' }))
   on('process.run', (_$, e) => {
     seen.runs.push([...e.argv])
-    return { value: { exitCode: 0, stdout: JSON.stringify(e.argv.includes('--open') ? { ...world.found, opened: world.opened ?? true } : world.found), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    const session = e.argv[e.argv.indexOf('--session') + 1]
+    const found = world.bySession?.[session] ?? world.found
+    return { value: { exitCode: 0, stdout: JSON.stringify(e.argv.includes('--open') ? { ...found, opened: world.opened ?? true } : found), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('fs.read', (_$, e) => ({ value: seen.files[e.path] ?? '' }))
   on('ui.toast', (_$, e) => (seen.toasts.push(e.text), { value: {} }))
@@ -32,8 +42,11 @@ function engine(on, world: { found: Record<string, unknown>; opened?: boolean; p
   on('ui.panes', () => ({ value: world.panes ?? [] }))
   on('prompt.fill', (_$, e) => (seen.fills.push(e), { isFilled: true }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
-  on('classic.SessionStart', () => ({}))
-  on('classic.UserPromptSubmit', () => ({}))
+  on('classic.SessionStart', () => (seen.classic.push('SessionStart'), {}))
+  on('classic.UserPromptSubmit', () => (seen.classic.push('UserPromptSubmit'), {}))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+  on('prompt.submit', (_$, e) => ({ text: e.text }))
   on('tool.call', (_$, e) => (world.failEdit && e.tool === 'Edit' ? { isError: true, result: 'no', text: 'no' } : { result: {}, text: '' }))
   if (!world.below) on('ui.render', (_$, e) => h(_$.ui.resolve(e).Box, { key: 'engine' }))
   return seen
@@ -43,6 +56,10 @@ const start = async $ =>
   $.classic.SessionStart({ source: 'startup', transcript_path: '/t/s.jsonl', cwd: '/w', session_id: SESSION } as never)
 const prompt = async $ =>
   $.classic.UserPromptSubmit({ prompt: 'hi', transcript_path: '/t/s.jsonl', cwd: '/w', session_id: SESSION } as never)
+// The same session as a host that skips a plugin's classic.* hooks sees it: none of these raises one.
+const begin = async $ => $.session.start({ cwd: '/w', surface: 'terminal' } as never)
+const submit = async $ => $.prompt.submit({ text: 'hi', wait: false, origin: { kind: 'composer' } } as never)
+const end = async ($, reason: string, sessionId = SESSION) => $.session.end({ reason, sessionId, resume: { id: sessionId } } as never)
 const turn = ($, agentId?: string) =>
   $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't', agentId, reason: 'answer', usage: undefined } as never)
 const tool = ($, input: Record<string, unknown>) => $.tool.call({ ...input } as never)
@@ -206,6 +223,73 @@ test('a git commit also starts the board, and a failed edit does not', async ($,
   expect(seen.runs.filter(r => r.includes('--start')).length).toBe(0)
   await tool($, { tool: 'Bash', command: 'git commit -m x' })
   expect(seen.runs.filter(r => r.includes('--start')).length).toBe(1)
+})
+
+test('with no classic hook at all, the band finds the running logbook from the engine, and its tick starts on a prompt', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const seen = engine(on, { found: live(board()) })
+  await submit($)
+  const band = await mountBand($)
+  expect(rowText(await band.drawn())).toBe('Logbook  Logbook')
+  expect(seen.runs[0].slice(-4)).toEqual(['--project', '/w', '--session', SESSION])
+  seen.files[`${BOARD}/state.js`] = file(board({ steps: [{ id: '1', subject: 'a', status: 'completed' }] }))
+  await clock.advance(30_000)
+  await clock.advance(1)
+  expect(rowText(await band.drawn())).toContain('1/1')
+  expect(seen.classic).toEqual([])
+})
+
+test('with no classic hook at all, a resumed session shows its board at session start', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const seen = engine(on, { found: live(board()) })
+  await begin($)
+  expect(rowText(await (await mountBand($)).drawn())).toBe('Logbook  Logbook')
+  expect(seen.classic).toEqual([])
+})
+
+test('with no classic hook at all, the first changed file starts the board, and the helper finds the transcript', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const world = { found: {} as Record<string, unknown> }
+  const seen = engine(on, world)
+  await submit($)
+  world.found = live(board())
+  await tool($, { tool: 'Edit', file_path: '/w/a', old_string: 'a', new_string: 'b' })
+  const started = seen.runs.filter(r => r.includes('--start'))
+  expect(started.length).toBe(1)
+  expect(started[0].slice(-5)).toEqual(['--project', '/w', '--session', SESSION, '--start'])
+  expect(rowText(await (await mountBand($)).drawn())).toBe('Logbook  Logbook')
+  expect(seen.classic).toEqual([])
+})
+
+test('a /clear: the session id changes with no session.start, and the band drops the old session\'s board', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const world: World = { id: SESSION, found: {}, bySession: { [SESSION]: live(board()) } }
+  const seen = engine(on, world)
+  seen.files[`${BOARD}/state.js`] = file(board({ steps: [{ id: '1', subject: 'a', status: 'pending' }] }))
+  await submit($)
+  const band = await mountBand($)
+  expect(rowText(await band.drawn())).toBe('Logbook  Logbook')
+  world.id = 's2'
+  await tool($, { tool: 'Bash', command: 'ls' }) // would re-read the old board's state.js
+  expect(JSON.stringify(await band.drawn())).not.toContain('Logbook')
+  await turn($)
+  expect(seen.runs.at(-1)!.slice(-4)).toEqual(['--project', '/w', '--session', 's2'])
+  expect(JSON.stringify(await band.drawn())).not.toContain('Logbook')
+})
+
+test('a /clear\'s session.end drops the band at once, and the next prompt reads the new session', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const world: World = { id: SESSION, found: {}, bySession: { [SESSION]: live(board()), s2: live(board()) } }
+  const seen = engine(on, world)
+  await submit($)
+  const band = await mountBand($)
+  expect(rowText(await band.drawn())).toBe('Logbook  Logbook')
+  await end($, 'clear')
+  world.id = 's2'
+  expect(JSON.stringify(await band.drawn())).not.toContain('Logbook')
+  await submit($)
+  expect(seen.runs.at(-1)!.slice(-4)).toEqual(['--project', '/w', '--session', 's2'])
+  expect(rowText(await band.drawn())).toBe('Logbook  Logbook')
 })
 
 test('the view rules: stuck, verified and the state file', () => {

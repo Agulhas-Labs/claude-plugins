@@ -8,6 +8,8 @@ import type { BoardState } from './view'
 // and its state (and starts the board early); it runs at session start, when a turn completes, and at the first
 // changed file or commit of a session with no board. Every other update re-reads `state.js` with $.fs.read, after
 // a tool call that can have changed it and on a 30-second tick while a turn runs. Drawing runs no process.
+// The session's id and folder come from the engine ($.session), read each time they are needed: a host may skip
+// a plugin's classic.* hooks, and a /clear changes the id with no session.start after it.
 
 export const TAG = 'Logbook'
 export const GAP = '  '
@@ -85,10 +87,25 @@ async function run<T>(work: () => Promise<T>): Promise<T | undefined> {
   }
 }
 
+// Who the session is now. A changed id is a /clear or a resume: another session, another board, and the
+// transcript path learnt for the old one no longer applies.
+export async function identify($, s: State) {
+  const id = await $.session.id()
+  if (id && id !== s.sessionId) {
+    forget(s)
+    s.sessionId = id
+    s.transcriptPath = ''
+    $.ui.invalidate('ui.render')
+  }
+  s.cwd = (await $.session.cwd()) || s.cwd
+}
+
 export async function locate($, s: State, opts: { start?: boolean; quiet?: boolean } = {}) {
+  await identify($, s)
   if (!s.sessionId || !s.cwd) return
   const args = ['--project', s.cwd, '--session', s.sessionId]
-  if (opts.start && s.transcriptPath) args.push('--start', '--transcript', s.transcriptPath)
+  if (opts.start) args.push('--start') // with no transcript path, mod_state.py finds the transcript by the id
+  if (opts.start && s.transcriptPath) args.push('--transcript', s.transcriptPath)
   const { stdout } = await $.process.run(
     ['sh', `${$.plugin.root}/hooks/run-python.sh`, `${$.plugin.root}/${HELPER}`, ...args],
     { timeoutMs: 20_000 },
@@ -108,6 +125,7 @@ export async function reread($, s: State) {
 // The board's page is the full view: the button hands it to the browser. mod_state.py does the opening, so the
 // platform's own opener is not guessed at here.
 export async function openBoard($, s: State) {
+  await identify($, s)
   if (!s.sessionId || !s.cwd) return
   const { stdout } = await $.process.run(
     ['sh', `${$.plugin.root}/hooks/run-python.sh`, `${$.plugin.root}/${HELPER}`, '--project', s.cwd, '--session', s.sessionId, '--open'],
@@ -142,6 +160,13 @@ export async function drawBand($, e, next, s: State) {
   ) : row
 }
 
+// Where a host still delivers the classic hooks, they add the transcript path, which $.session has no accessor
+// for, and do what the engine's own events also do. Nothing depends on them.
+async function remember($, s: State, e: { transcript_path?: string }) {
+  await identify($, s)
+  s.transcriptPath = e.transcript_path || s.transcriptPath
+}
+
 function startTick($, s: State) {
   s.tick ??= $.clock.every(TICK_MS, () => void run(() => reread($, s)))
 }
@@ -157,27 +182,45 @@ export const register: Register = on => {
     located: false, startTried: false, tick: null,
   }
 
-  const remember = (e: { transcript_path?: string; cwd?: string; session_id?: string }) => {
-    if (e.session_id && e.session_id !== s.sessionId) {
-      forget(s) // a /clear or a resume: another session, another board
-      s.sessionId = e.session_id
-    }
-    s.transcriptPath = e.transcript_path || s.transcriptPath
-    s.cwd = e.cwd || s.cwd
-  }
-
   on('classic.SessionStart', async ($, e, next) => {
-    remember(e)
+    await run(() => remember($, s, e))
     const result = await next(e)
     await run(() => locate($, s, { quiet: true }))
     return result
   })
 
   on('classic.UserPromptSubmit', async ($, e, next) => {
-    remember(e)
+    await run(() => remember($, s, e))
+    const result = await next(e)
+    startTick($, s) // prompt.submit starts it too; a second start is a no-op
+    if (!s.located) await run(() => locate($, s, { quiet: true }))
+    return result
+  })
+
+  on('session.start', async ($, e, next) => {
+    const result = await next(e)
+    if (!s.located) await run(() => locate($, s, { quiet: true })) // a resumed session's board shows before its first prompt
+    return result
+  })
+
+  on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
     startTick($, s)
-    if (!s.located) await run(() => locate($, s, { quiet: true })) // a mod loaded mid-session has seen no SessionStart
+    await run(async () => {
+      await identify($, s)
+      if (!s.located) await locate($, s, { quiet: true }) // a mod loaded mid-session has seen no session start
+    })
+    return result
+  })
+
+  on('session.end', async ($, e, next) => {
+    const result = await next(e)
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      stopTick(s)
+      forget(s) // the process goes on under another id; the next read of it finds that session's board
+      s.sessionId = ''
+      $.ui.invalidate('ui.render')
+    }
     return result
   })
 
@@ -193,6 +236,7 @@ export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
     const result = await next(e)
     await run(async () => {
+      await identify($, s) // after a /clear, the old session's state.js is not this session's
       const isMain = e.agentId === undefined
       const worked = result.deny === undefined && result.isError !== true
       const command = e.tool === 'Bash' ? String(e.command ?? '') : ''
@@ -200,7 +244,7 @@ export const register: Register = on => {
       const recorded = command.includes('board.py')
       if (s.board) {
         if (changed || recorded || e.tool === 'Bash') await reread($, s)
-      } else if (isMain && changed && !s.startTried && s.transcriptPath) {
+      } else if (isMain && changed && !s.startTried) {
         s.startTried = true // once: the Python hooks start the board themselves at their thresholds
         await locate($, s, { start: true })
       } else if (recorded) {

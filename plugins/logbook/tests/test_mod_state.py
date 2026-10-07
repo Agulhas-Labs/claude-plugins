@@ -179,6 +179,33 @@ class EarlyStart(ModState):
         found = self.run_helper("--start", "--transcript", os.path.join(self.tmp, "missing.jsonl"))
         self.assertEqual(found["state"]["title"], board.UNTITLED)
 
+    def plant_transcript(self, session=SESSION, project="-p"):
+        # The config folder is the test's own, so the real one is never searched.
+        self.env["CLAUDE_CONFIG_DIR"] = os.path.join(self.tmp, "config")
+        folder = os.path.join(self.env["CLAUDE_CONFIG_DIR"], "projects", project)
+        os.makedirs(folder, exist_ok=True)
+        shutil.copy(WORK_TRANSCRIPT, os.path.join(folder, session + ".jsonl"))
+
+    def test_start_without_a_transcript_path_finds_the_transcript_by_the_session_id(self):
+        self.plant_transcript()
+        found = self.run_helper("--start")
+        self.assertNotEqual(found["state"]["title"], board.UNTITLED)
+        self.assertGreater(len(found["state"]["changes"]), 0)
+
+    def test_no_transcript_for_the_session_id_starts_an_untitled_board(self):
+        self.plant_transcript(session="99999999-2222-4333-8444-555555555555")
+        self.assertEqual(self.run_helper("--start")["state"]["title"], board.UNTITLED)
+
+    def test_two_transcripts_for_the_session_id_start_an_untitled_board(self):
+        self.plant_transcript(project="-a")
+        self.plant_transcript(project="-b")
+        self.assertEqual(self.run_helper("--start")["state"]["title"], board.UNTITLED)
+
+    def test_a_session_id_that_is_not_a_uuid_is_never_looked_up(self):
+        self.plant_transcript(session="not-a-uuid")
+        found = self.run_helper("--start", session="not-a-uuid")
+        self.assertEqual(found["state"]["title"], board.UNTITLED)
+
     def test_start_in_a_linked_boards_folder_starts_nothing(self):
         elsewhere = os.path.join(self.tmp, "elsewhere")
         os.mkdir(elsewhere)
