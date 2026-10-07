@@ -108,7 +108,7 @@ class HookWiringTests(unittest.TestCase):
         for command in hook_commands("SessionStart") + hook_commands("SubagentStart"):
             script = read(os.path.join(ROOT, "hooks", command.split("/hooks/", 1)[1].rstrip('"')))
             self.assertNotIn("run-python", script, command)
-        for command in hook_commands("PostToolUse") + hook_commands("SubagentStop"):
+        for command in hook_commands("PostToolUse"):
             script = read(os.path.join(ROOT, "hooks", command.split("/hooks/", 1)[1].rstrip('"')))
             self.assertIn('"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh"', script, command)
 

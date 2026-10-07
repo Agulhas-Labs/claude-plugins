@@ -46,8 +46,6 @@ where a second agent to check the first would cost a whole context.
 Around that, a few rules hold:
 
 - Each agent gets one job, and hands the rest back as its context grows.
-- A subagent that tries to stop with a background command still running is held back once and told to
-  wait for it or stop it.
 - A change gets two review rounds at most, and each round goes to fresh agents, never a resumed one.
   Minor findings go in an issue.
 - At most 4 agents run at once. That's a [setting](#running-more-or-fewer-agents-at-once), and it
@@ -68,7 +66,7 @@ delete what you create, and stop only processes you started. The orchestrator ru
 session and govern how it delegates: which agent gets which job, how a handoff ends, the concurrency cap,
 and a separate git worktree for each agent that makes changes.
 
-Two more hooks watch subagents. One warns an agent as its context grows, in three tiers:
+Another hook watches subagents: it warns an agent as its context grows, in three tiers:
 
 - at 120k, freeze scope and start nothing new;
 - at 150k, finish the item in hand and hand the rest back;
@@ -81,8 +79,9 @@ subagent turns followed a single Bash call, after a median wait of nine minutes;
 subagent spend, and agents that went cold twice or more held 74% of it, so the first cold wait predicts
 the next.
 
-The other holds back, once, a subagent that tries to stop with a background run still going, and names
-the run so the agent can wait for its verdict or stop it.
+The plugin once also held a subagent's stop while a command it had backgrounded still ran. Measured on
+Claude Code 2.1.293, the harness re-invokes the agent when the command exits and a report is delivered
+once, so the hold changed nothing the parent receives and was retired.
 
 The rules come from running `agent-cost` over one heavy week of real agent work. An agent re-sends its
 whole context on every turn, so its cost grows with the square of its length. Measured that week:
@@ -92,8 +91,8 @@ whole context on every turn, so its cost grows with the square of its length. Me
   Hence a fresh builder per round, and two rounds at most.
 - 70% of subagent turns made a single tool call, and those turns were two thirds of subagent spend.
   Agents are told to ask for independent calls together.
-- Before the background-run hook, about 20 main-session turns in one day were agents waking it with
-  nothing to report.
+- Before the background-run hold was retired, about 20 main-session turns in one day were agents waking
+  it with nothing to report.
 
 Those are shares of cost, weighted by price with cache reads at a tenth of fresh input, from one machine.
 Your numbers will differ; `agent-cost` shows you yours.
@@ -305,9 +304,9 @@ run with `python3`; where that is missing (often on Windows), the skill runs it 
 It isn't tied to a language. Agents use whatever code intelligence you have, such as an LSP plugin or a
 code-index server, and plain search otherwise.
 
-The context hooks need a POSIX shell with `cat`, `sed`, `awk` and `tr`. The context-budget and
-background-run hooks need Python 3 (standard library only) as `python3` or `python` (also `py` on
-Windows). Without it those two are skipped silently and nothing else changes. The context-budget hook runs
+The context hooks need a POSIX shell with `cat`, `sed`, `awk` and `tr`. The context-budget
+hook needs Python 3 (standard library only) as `python3` or `python` (also `py` on
+Windows). Without it that hook is skipped silently and nothing else changes. The context-budget hook runs
 after every tool call, in your session too, where it exits at once. On Windows, hooks need
 Git Bash, Claude Code's usual setup; Windows is untested.
 
