@@ -134,7 +134,8 @@ class BudgetTests(unittest.TestCase):
         self.write(assistant("m1", 90_000, "t1"), assistant("m2", 114_000, "t2", timestamp=ISSUED))
         said = self.advise("t2", now=ISSUED_AT + 9 * 60 + 30)
         self.assertIn("Cache expired", said)
-        self.assertIn("9 minutes", said)
+        # The time since the turn that issued it, not the call's own run: parallel calls share a turn.
+        self.assertIn("returned 9 minutes after the turn that issued it", said)
         self.assertIn("114k", said)
         self.assertIn("report", said)
         self.assertNotIn("Context budget", said)
@@ -149,7 +150,7 @@ class BudgetTests(unittest.TestCase):
         self.assertIsNone(self.advise("t2", env=longer, now=ISSUED_AT + 9 * 60))
         shorter = {"DELEGATE_SUBAGENT_CACHE_SECONDS": "60"}
         self.assertIn("2 minutes", self.advise("t2", env=shorter, now=ISSUED_AT + 2 * 60 + 5))
-        self.assertIn("took 1 minute,", self.advise("t2", env=shorter, now=ISSUED_AT + 65))
+        self.assertIn("returned 1 minute after", self.advise("t2", env=shorter, now=ISSUED_AT + 65))
         # Anything that isn't a positive integer means the default.
         for bad in ("soon", "0", "-5", ""):
             self.assertIsNone(self.advise("t2", env={"DELEGATE_SUBAGENT_CACHE_SECONDS": bad}, now=ISSUED_AT + 299))
@@ -187,6 +188,19 @@ class BudgetTests(unittest.TestCase):
         env["DELEGATE_SUBAGENT_CACHE_SECONDS"] = str(10 ** 12)
         quiet = subprocess.run([sys.executable, HOOK], input=payload.encode(), capture_output=True, env=env)
         self.assertEqual(b"", quiet.stdout)
+
+    def test_a_failed_call_is_told_like_a_successful_one_and_answers_its_own_event(self):
+        # A command that exits non-zero or times out arrives as PostToolUseFailure, with the same
+        # tool_use_id and transcript, and a long red suite outlives the cache like a green one.
+        self.write(assistant("m1", 90_000, "t1"), assistant("m2", 114_000, "t2", timestamp=ISSUED))
+        env = {k: v for k, v in os.environ.items() if k != "DELEGATE_SUBAGENT_CACHE_SECONDS"}
+        for event in ("PostToolUse", "PostToolUseFailure"):
+            payload = {"hook_event_name": event, "transcript_path": self.parent, "agent_id": "a1",
+                       "tool_use_id": "t2", "error": "Exit code 1", "is_interrupt": False}
+            told = subprocess.run([sys.executable, HOOK], input=json.dumps(payload).encode(), capture_output=True, env=env)
+            answer = json.loads(told.stdout)["hookSpecificOutput"]
+            self.assertEqual(answer["hookEventName"], event)
+            self.assertIn("Cache expired", answer["additionalContext"])
 
     def test_a_non_ascii_utf8_payload_is_read_under_a_non_utf8_locale(self):
         # On native Windows Python, sys.stdin decodes with the locale code page rather than UTF-8.

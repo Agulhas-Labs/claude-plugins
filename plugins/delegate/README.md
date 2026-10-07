@@ -72,12 +72,12 @@ Another hook watches subagents: it warns an agent as its context grows, in three
 - at 150k, finish the item in hand and hand the rest back;
 - at 200k, stop where it is and report, repeated every further 50k.
 
-Separately, when one tool call outlives a subagent's five-minute prompt cache, it adds a line telling the
-agent that each further turn now rewrites its whole context, so it should land what is verified and
-report rather than wait on another long command: measured on one machine over eight days, 79 of 84 cold
-subagent turns followed a single Bash call, after a median wait of nine minutes; cold turns were 2.6% of
-subagent spend, and agents that went cold twice or more held 74% of it, so the first cold wait predicts
-the next.
+Separately, when one tool call outlives a subagent's five-minute prompt cache, whether it succeeded,
+failed or timed out, it adds a line telling the agent that each further turn now rewrites its whole
+context, so it should land what is verified and report rather than wait on another long command: measured
+on one machine over eight days, 79 of 84 cold subagent turns followed a single Bash call, after a median
+wait of nine minutes; cold turns were 2.6% of subagent spend, and agents that went cold twice or more
+held 74% of it, so the first cold wait predicts the next.
 
 The plugin once also held a subagent's stop while a command it had backgrounded still ran. Measured on
 Claude Code 2.1.293, the harness re-invokes the agent when the command exits and a report is delivered
