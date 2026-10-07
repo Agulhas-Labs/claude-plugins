@@ -386,6 +386,29 @@ class Context:
         self.events = []      # list of (turn_index, category, chars) turn_index = len(turns) at event time
         self.versions = set()
         self.start = None     # fixed-start composition dict, filled from attachments before first turn
+        self.hand_back_nudge_turn = None   # len(turns) when the budget hook first asked it to hand back
+        self.handback_report = None        # the last SubagentHandback call's message, if it made one
+        self.prompted_after_handback = False   # a prompt arrived after a SubagentHandback call
+
+
+# The budget hook's hand-back words (the 150k tier, or the 200k one for a context that jumped past it),
+# as a hook attachment records them. Matched on attachment entries only: a file read that quotes the
+# hook is a tool result, not the hook speaking.
+HAND_BACK_NUDGE = re.compile(r"Context budget: this agent's context is now \d+k tokens"
+                             r".*?(?:Finish only the item in hand|Stop here, even mid-item)")
+
+
+def is_prompt(e):
+    """A user entry that gives the context a prompt: a person's message, or the parent's message to a
+    subagent (an entry of coordinator origin), not a tool result or a hook's or the harness's own text."""
+    if (e.get("origin") or {}).get("kind") == "coordinator":
+        return True
+    if e.get("isMeta"):
+        return False
+    c = (e.get("message") or {}).get("content")
+    if isinstance(c, str):
+        return bool(c.strip())
+    return any(isinstance(b, dict) and b.get("type") == "text" for b in c or [])
 
 
 def load_context(kind, path, project_dir, session_id, agent_id):
@@ -415,6 +438,9 @@ def load_context(kind, path, project_dir, session_id, agent_id):
             ctx.versions.add(v)
         etype = e.get("type")
         m = e.get("message") or {}
+
+        if etype == "attachment" and ctx.hand_back_nudge_turn is None and HAND_BACK_NUDGE.search(ln):
+            ctx.hand_back_nudge_turn = len(ctx.turns)
 
         if etype == "attachment" and not first_turn_seen:
             a = e.get("attachment") or {}
@@ -484,6 +510,8 @@ def load_context(kind, path, project_dir, session_id, agent_id):
                 if not isinstance(b, dict):
                     continue
                 if b.get("type") == "tool_use":
+                    if b.get("name") == "SubagentHandback":
+                        ctx.handback_report = (b.get("input") or {}).get("message") or ""
                     cat = classify(b.get("name", ""), b.get("input") or {})
                     tid = b.get("id")
                     if tid and tid not in pending:
@@ -496,6 +524,8 @@ def load_context(kind, path, project_dir, session_id, agent_id):
                 elif b.get("type") == "text":
                     ctx.events.append((len(ctx.turns), "assistant: text", len(b.get("text", ""))))
         elif etype == "user":
+            if ctx.handback_report is not None and is_prompt(e):
+                ctx.prompted_after_handback = True
             c = m.get("content")
             if isinstance(c, list):
                 for b in c:
@@ -609,6 +639,11 @@ def folded_type(l):
     return "main" if l.ctx.kind == "main" else l.ctx.agent_type.rsplit(":", 1)[-1]
 
 
+def window_peak(l):
+    """The largest context a Loaded reached inside the window."""
+    return max(t["ctx"] for t in l.window_turns)
+
+
 def section_spend_by_type(out, loaded):
     """What each agent type cost: a rung of a roster earns its place by being cheaper than the one
     above it, and that shows only with each type's spend, size and count side by side."""
@@ -623,7 +658,7 @@ def section_spend_by_type(out, loaded):
                f" {'output':>9} {'>=150k':>7} {'>=200k':>7}")
 
     def row(name, group, total_ie):
-        peaks = [max(t["ctx"] for t in l.window_turns) for l in group]
+        peaks = [window_peak(l) for l in group]
         ie = sum(t["ie"] for l in group for t in l.window_turns)
         outp = sum(t["usage"].get("output_tokens", 0) for l in group for t in l.window_turns)
         share = 100 * ie / total_ie if total_ie else 0
@@ -718,6 +753,24 @@ def section_main_sessions(out, loaded, top_n):
     out.append("")
 
 
+def spend_per_context(loaded, kind):
+    """(input-eq, window turns) for each context of `kind` (None: every kind), largest spend first."""
+    per_ctx = [(sum(t["ie"] for t in l.window_turns), len(l.window_turns))
+               for l in loaded if kind is None or l.ctx.kind == kind]
+    per_ctx.sort(key=lambda p: -p[0])
+    return per_ctx
+
+
+def top_decile(per_ctx):
+    """(how many contexts make the top 10%, their % of the spend) for `spend_per_context`'s list, or
+    None under ten contexts, where a top 10% would be one or two contexts dressed up as a decile."""
+    if len(per_ctx) < 10:
+        return None
+    top_n = len(per_ctx) // 10
+    total_ie = sum(p[0] for p in per_ctx) or 1
+    return top_n, 100 * sum(p[0] for p in per_ctx[:top_n]) / total_ie
+
+
 def section_concentration(out, loaded):
     """Per kind, because where subagents are most of the spend a combined figure hides the main
     session's own shape. A "top 10%" of fewer than ten contexts is one or two of them dressed up as a
@@ -725,18 +778,13 @@ def section_concentration(out, loaded):
     small window rather than a misleading one."""
     out.append("=== Concentration ===")
     for label, kind in report_groups(loaded):
-        per_ctx = []
-        for l in loaded:
-            if kind is not None and l.ctx.kind != kind:
-                continue
-            per_ctx.append((sum(t["ie"] for t in l.window_turns), len(l.window_turns)))
-        per_ctx.sort(key=lambda p: -p[0])
+        per_ctx = spend_per_context(loaded, kind)
         n = len(per_ctx)
         total_ie = sum(p[0] for p in per_ctx) or 1
         if n >= 10:
-            top_n = n // 10
+            top_n, share = top_decile(per_ctx)
             top = per_ctx[:top_n]
-            out.append(f"  {label:10} top 10% of contexts ({top_n} of {n}): {100*sum(p[0] for p in top)/total_ie:.1f}%"
+            out.append(f"  {label:10} top 10% of contexts ({top_n} of {n}): {share:.1f}%"
                         f" of input-eq spend, median turns {median(p[1] for p in top):.0f}")
         elif n == 1:
             ie, turns = per_ctx[0]
@@ -798,18 +846,25 @@ def batchable_followons(turns):
     return followons
 
 
+def turn_shape_shares(loaded, kind):
+    """For the contexts of `kind` (None: every kind): turns carrying exactly one tool call as a % of
+    turns and of input-eq, then the batchable follow-on turns the same two ways."""
+    turns = [t for l in loaded for t in l.window_turns if kind is None or l.ctx.kind == kind]
+    n = len(turns) or 1
+    total_ie = sum(t["ie"] for t in turns) or 1
+    one_tool = [t for t in turns if t["n_tools"] == 1]
+    ie_one = sum(t["ie"] for t in one_tool)
+    follow = [t for l in loaded if kind is None or l.ctx.kind == kind for t in batchable_followons(l.window_turns)]
+    ie_follow = sum(t["ie"] for t in follow)
+    return 100*len(one_tool)/n, 100*ie_one/total_ie, 100*len(follow)/n, 100*ie_follow/total_ie
+
+
 def section_turn_shape(out, loaded):
     out.append("=== Turn shape ===")
     for label, kind in report_groups(loaded):
-        turns = [t for l in loaded for t in l.window_turns if kind is None or l.ctx.kind == kind]
-        n = len(turns) or 1
-        total_ie = sum(t["ie"] for t in turns) or 1
-        one_tool = [t for t in turns if t["n_tools"] == 1]
-        ie_one = sum(t["ie"] for t in one_tool)
-        out.append(f"  {label:10} turns carrying exactly one tool call: {100*len(one_tool)/n:5.1f}% of turns, {100*ie_one/total_ie:5.1f}% of input-eq spend")
-        follow = [t for l in loaded if kind is None or l.ctx.kind == kind for t in batchable_followons(l.window_turns)]
-        ie_follow = sum(t["ie"] for t in follow)
-        out.append(f"  {label:10} one read-only call, following another: {100*len(follow)/n:5.1f}% of turns, {100*ie_follow/total_ie:5.1f}% of input-eq spend — the most that requesting them together could save")
+        one_turns, one_ie, follow_turns, follow_ie = turn_shape_shares(loaded, kind)
+        out.append(f"  {label:10} turns carrying exactly one tool call: {one_turns:5.1f}% of turns, {one_ie:5.1f}% of input-eq spend")
+        out.append(f"  {label:10} one read-only call, following another: {follow_turns:5.1f}% of turns, {follow_ie:5.1f}% of input-eq spend — the most that requesting them together could save")
     out.append("")
 
 
@@ -879,6 +934,13 @@ def subagent_cold_breakdown(records_by_context):
                 multi_avoidable=multi_avoidable)
 
 
+def cold_records(group):
+    """(the group's window turns, `cold_turns` records for those of them that went cold)."""
+    turns = [t for l in group for t in l.window_turns]
+    in_window = {id(t) for t in turns}
+    return turns, [r for l in group for r in cold_turns(l.ctx.turns) if id(r["turn"]) in in_window]
+
+
 def section_cold_cache(out, loaded):
     """Spend on turns that arrived after the prompt cache had expired, and how much of it a guard
     that warned before sending into a cold, large context could have saved."""
@@ -890,9 +952,7 @@ def section_cold_cache(out, loaded):
     kinds = kinds_in(loaded)
     for kind in kinds:
         group = [l for l in loaded if l.ctx.kind == kind]
-        turns = [t for l in group for t in l.window_turns]
-        in_window = {id(t) for t in turns}
-        records = [r for l in group for r in cold_turns(l.ctx.turns) if id(r["turn"]) in in_window]
+        turns, records = cold_records(group)
         per_kind[kind] = (turns, records)
         groups_by_kind[kind] = group
         out.append(cache_lifetime_line(kind, turns))
@@ -1125,6 +1185,147 @@ def section_fixed_start(out, loaded):
     out.append("")
 
 
+# The rule scorecard's baselines, each measured over the one week of real agent work the plugin's rules
+# came from: the first and third are the figures its README quotes, the cold-turn share is the one its
+# orchestrator conventions quote for the same week.
+BASELINE_TOP_DECILE_SHARE = 45.0    # % of subagent spend in the longest-running 10% of subagents
+BASELINE_SINGLE_CALL_SHARE = 70.0   # % of subagent turns that made a single tool call
+BASELINE_COLD_SHARE = 7.5           # % of subagent spend on cold turns
+
+MODEL_FAMILIES = ("haiku", "sonnet", "opus", "fable")  # lowest first, as the model-ceiling hook ranks them
+
+# A reviewer's verdict, read from its hand-back report: the first rule that matches the report's opening
+# or closing lines names it, so a fail is checked before the "merge-ready" a fail report may also say.
+VERDICT_RULES = (
+    ("fail", re.compile(r"verdict\**:?\**\s*\**fail|not merge-ready|not mergeable|do not merge"
+                        r"|\bfail\b.{0,40}before|needs? (one|a|two|\d) .{0,20}fix")),
+    ("pass after fixes", re.compile(r"pass(ed)? after|merge-ready after|mergeable after"
+                                    r"|after (the|one|two|\d) (named )?fix")),
+    ("pass with lows", re.compile(r"pass with low|merge-ready with low|low(-severity)? (items|findings) only")),
+    ("pass", re.compile(r"verdict\**:?\**\s*\**pass|merge-ready|mergeable|ready to merge")),
+)
+VERDICTS = tuple(name for name, _ in VERDICT_RULES) + ("unclassified",)
+
+
+def model_rank(model):
+    """The rank of the highest family a model id names, or None for an id that names none."""
+    model = (model or "").lower()
+    found = [rank for rank, name in enumerate(MODEL_FAMILIES) if name in model]
+    return found[-1] if found else None
+
+
+def above_ceiling(loaded):
+    """(subagents judged, subagents above their parent session's model), as Loaded lists. The parent is
+    the main context of the same project and session in the window, its model the one its last turn at
+    or before the subagent's first used, the model the ceiling hook would have read. A subagent whose
+    parent is not in the window, or whose model or parent's names no family, is not judged."""
+    parents = {(l.ctx.project_dir, l.ctx.session_id): l for l in loaded if l.ctx.kind == "main"}
+    judged, above = [], []
+    for l in loaded:
+        parent = parents.get((l.ctx.project_dir, l.ctx.session_id))
+        if l.ctx.kind != "subagent" or parent is None:
+            continue
+        own = [(t["ts"], model_rank(t["model"])) for t in l.window_turns if model_rank(t["model"]) is not None]
+        theirs = [(t["ts"], model_rank(t["model"])) for t in parent.ctx.turns if model_rank(t["model"]) is not None]
+        if not own or not theirs:
+            continue
+        start, rank = own[0]
+        before = [r for ts, r in theirs if ts <= start]
+        parent_rank = before[-1] if before else theirs[0][1]
+        judged.append(l)
+        if rank > parent_rank:
+            above.append(l)
+    return judged, above
+
+
+def reviewer_verdict(report):
+    """One of VERDICTS for a reviewer's hand-back report; no report at all is unclassified."""
+    text = (report or "").lower()
+    head = text[:600] + " " + text[-900:]
+    for name, rule in VERDICT_RULES:
+        if text and rule.search(head):
+            return name
+    return "unclassified"
+
+
+def judgement(value, baseline):
+    """'holds' at or under the baseline, 'not holding' over it, 'n/a' where the window gave no value."""
+    if value is None:
+        return "n/a"
+    return "holds" if value <= baseline else "not holding"
+
+
+def section_rule_scorecard(out, loaded):
+    """One line per rule the plugin states: the metric that measures it in this window, the measured
+    baseline where there is one, and whether the rule holds. Run over two windows it is the before and
+    after of a change, without picking the sections that measure each rule by hand."""
+    if not loaded:
+        return
+    subs = [l for l in loaded if l.ctx.kind == "subagent"]
+    sub_ie = sum(t["ie"] for l in subs for t in l.window_turns)
+    out.append("=== Rule scorecard ===")
+    out.append("  each rule the plugin states: its metric in this window, the baseline measured over the week the"
+               " rules came from, and whether it holds")
+
+    def line(rule, metric, value, baseline, verdict):
+        against = f"baseline {baseline}: {verdict}" if baseline is not None else verdict
+        out.append(f"  {rule:32} {metric}: {value}; {against}")
+
+    # one job per agent, and the budget tiers
+    decile = top_decile(spend_per_context(loaded, "subagent"))
+    peaks = [window_peak(l) for l in subs]
+    after = [len(l.ctx.turns) - l.ctx.hand_back_nudge_turn for l in subs if l.ctx.hand_back_nudge_turn is not None]
+    tiers = (f"past 150k {sum(p >= 150_000 for p in peaks)}, past 200k {sum(p >= 200_000 for p in peaks)}, "
+             + (f"median {median(after):.0f} turns after the hand-back nudge, {len(after)} nudged" if after
+                else "none nudged to hand back"))
+    share = decile[1] if decile else None
+    line("one job per agent, budget tiers", "top 10% of subagents' share of subagent spend",
+         (f"{share:.1f}%" if decile else "n/a (under 10 subagents)") + f" ({tiers})",
+         f"{BASELINE_TOP_DECILE_SHARE:.0f}%", judgement(share, BASELINE_TOP_DECILE_SHARE))
+
+    # a fresh agent per round
+    handed = [l for l in subs if l.ctx.handback_report is not None]
+    resumed = sum(l.ctx.prompted_after_handback for l in handed)
+    line("a fresh agent per round", "subagents prompted again after their hand-back",
+         f"{resumed} of {len(handed)} that handed back" if handed else "n/a", None,
+         "no baseline" if handed else "n/a")
+
+    # calls requested together
+    single = batchable = None
+    if subs:
+        single, _, batchable, _ = turn_shape_shares(loaded, "subagent")
+    line("calls requested together", "single-tool-call share of subagent turns",
+         f"{single:.1f}% (batchable {batchable:.1f}%)" if subs else "n/a",
+         f"{BASELINE_SINGLE_CALL_SHARE:.0f}%", judgement(single, BASELINE_SINGLE_CALL_SHARE))
+
+    # the slow check goes to a runner
+    cold = None
+    if sub_ie:
+        _, records = cold_records(subs)
+        cold = 100 * sum(r["turn"]["ie"] for r in records) / sub_ie
+    line("the slow check goes to a runner", "cold turns' share of subagent spend",
+         f"{cold:.1f}%" if cold is not None else "n/a", f"{BASELINE_COLD_SHARE:g}%",
+         judgement(cold, BASELINE_COLD_SHARE))
+
+    # the model ceiling
+    judged, above = above_ceiling(loaded)
+    above_ie = sum(t["ie"] for l in above for t in l.window_turns)
+    line("the model ceiling", "subagents above their parent session's model",
+         f"{len(above)} of {len(judged)}, {100 * above_ie / (sub_ie or 1):.1f}% of subagent spend" if judged else "n/a",
+         "0", judgement(len(above) if judged else None, 0))
+
+    # the reviewer pays
+    verdicts = collections.Counter(reviewer_verdict(l.ctx.handback_report) for l in subs
+                                   if folded_type(l) == "reviewer")
+    mix = ", ".join(f"{name} {verdicts[name]}" for name in VERDICTS if verdicts[name])
+    line("the reviewer pays", "reviewer verdicts from the hand-back report",
+         f"{mix} of {sum(verdicts.values())}" if verdicts else "n/a", None,
+         "no baseline" if verdicts else "n/a")
+    out.append("  not scored: two review rounds at most, since the branch a transcript records is the one checked"
+               " out where the agent ran, not the change it reviewed")
+    out.append("")
+
+
 def section_largest(out, loaded, top_n):
     out.append(f"=== Largest contexts (top {top_n} by input-eq) ===")
     rows = []
@@ -1185,6 +1386,7 @@ SECTIONS = (
     ("what-fills-the-context", "What fills the context",
      lambda out, loaded, top_n: section_fills_context(out, loaded)),
     ("fixed-start", "Fixed start", lambda out, loaded, top_n: section_fixed_start(out, loaded)),
+    ("rule-scorecard", "Rule scorecard", lambda out, loaded, top_n: section_rule_scorecard(out, loaded)),
     ("largest-contexts", "Largest contexts", section_largest),
     ("tools-called", "Tools called", lambda out, loaded, top_n: section_tools(out, loaded)),
 )

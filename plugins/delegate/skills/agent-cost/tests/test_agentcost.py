@@ -1413,6 +1413,7 @@ SECTION_HEADINGS = {
     "cold-cache": "=== Cold cache ===",
     "what-fills-the-context": "=== What fills the context ===",
     "fixed-start": "=== Fixed start ===",
+    "rule-scorecard": "=== Rule scorecard ===",
     "largest-contexts": "=== Largest contexts",
     "tools-called": "=== Tools called",
 }
@@ -1589,6 +1590,266 @@ class SpendByTypeTests(unittest.TestCase):
         lines = buf.getvalue().splitlines()
         self.assertEqual([l for l in lines if l.startswith("=== ")], ["=== Spend by agent type ==="])
         self.assertEqual([l.split()[0] for l in lines[2:6]], ["main", "builder", "reviewer", "total"])
+
+
+
+# ---------------------------------------------------------------------------
+# rule scorecard
+# ---------------------------------------------------------------------------
+
+SONNET, OPUS, HAIKU = "claude-sonnet-5", "claude-opus-5", "claude-haiku-5"
+SPLIT_5M = {"ephemeral_5m_input_tokens": 1, "ephemeral_1h_input_tokens": 0}
+
+
+def budget_nudge(ts, size_k, tier_text):
+    """The budget hook's words as a subagent transcript records them: a hook_success attachment whose
+    stdout carries the additionalContext."""
+    stdout = json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext":
+                         f"Context budget: this agent's context is now {size_k}k tokens, and every "
+                         f"further turn re-sends all of it. {tier_text}"}})
+    return attachment(ts, {"type": "hook_success", "hookEvent": "PostToolUse", "stdout": stdout})
+
+
+def handback(tid, message):
+    return tool_use_block(tid, "SubagentHandback", {"message": message})
+
+
+def meta_prompt(ts, text, origin=None):
+    e = user_text(ts, text)
+    e["isMeta"] = True
+    if origin:
+        e["origin"] = {"kind": origin}
+    return e
+
+
+def rule_tree(case):
+    """A window that touches every scorecard line: a Sonnet session with 12 subagents (so a top 10%
+    exists), one Opus builder above its parent that is nudged at 150k, goes cold after a Bash call,
+    hands back and is prompted again; a reviewer that fails and one that passes; and one Opus agent
+    whose parent session is not in the window."""
+    fx = FixtureRoot(case)
+    at = lambda s: ts_str(BASE + timedelta(seconds=s))
+    fx.main_session(entries=[
+        assistant("m1", at(0), usage(cache_read=5000), [tool_use_block("t1", "Grep", {"pattern": "x"})], model=SONNET),
+        user_tool_result(at(1), "t1", "hit"),
+        assistant("m2", at(10), usage(cache_read=6000), [tool_use_block("t2", "Grep", {"pattern": "y"})], model=SONNET),
+        user_tool_result(at(11), "t2", "hit"),
+        assistant("m3", at(1200), usage(cache_creation=7000, split=dict(SPLIT_5M, ephemeral_5m_input_tokens=7000)),
+                  model=SONNET),
+    ])
+    fx.subagent(agent="b1", agent_type="delegate:builder", entries=[
+        assistant("s1", at(60), usage(cache_creation=140_000), [tool_use_block("u1", "Bash", {"command": "make test"})], model=OPUS),
+        user_tool_result(at(61), "u1", "ok"),
+        budget_nudge(at(61), 155, "Finish only the item in hand: get it to a verified commit."),
+        assistant("s2", at(120), usage(input_tokens=15_000, cache_read=140_000), [tool_use_block("u2", "Bash", {"command": "make check"})], model=OPUS),
+        user_tool_result(at(121), "u2", "ok"),
+        assistant("s3", at(900), usage(cache_creation=160_000), [tool_use_block("u3", "Read", {"file_path": "/a"})], model=OPUS),
+        user_tool_result(at(901), "u3", "text"),
+        assistant("s4", at(910), usage(input_tokens=45_000, cache_read=160_000), [handback("u4", "Done: one commit.")], model=OPUS),
+        user_tool_result(at(911), "u4", "delivered"),
+        meta_prompt(at(960), "The coordinator sent a message while you were working: one more fix.", "coordinator"),
+        assistant("s5", at(970), usage(input_tokens=2, cache_read=205_000), model=OPUS),
+    ])
+    fx.subagent(agent="r1", agent_type="reviewer", entries=[
+        assistant("s1", at(60), usage(input_tokens=20_000), [tool_use_block("v1", "Read", {"file_path": "/hook.py"})], model=SONNET),
+        # a file that quotes the hook's words is not the hook speaking
+        user_tool_result(at(61), "v1", "Context budget: this agent's context is now 150k tokens. Finish only the item in hand"),
+        assistant("s1b", at(65), usage(input_tokens=20_500), [tool_use_block("v3", "Grep", {"pattern": "q"})], model=SONNET),
+        user_tool_result(at(66), "v3", "hit"),
+        assistant("s2", at(70), usage(input_tokens=21_000), [handback("v2", "Verdict: FAIL. One blocker before merge.")], model=SONNET),
+        user_tool_result(at(71), "v2", "delivered"),
+        meta_prompt(at(72), "Stop hook feedback:\nsomething"),  # a hook talking, not a second prompt
+    ])
+    fx.subagent(agent="r2", agent_type="delegate:reviewer", entries=[
+        assistant("s1", at(60), usage(input_tokens=18_000), [handback("w1", "Verdict: pass. Merge-ready.")], model=HAIKU),
+    ])
+    for i in range(9):
+        fx.subagent(agent=f"k{i}", agent_type="mechanic", entries=[
+            assistant(f"s{i}", at(30 + i), usage(input_tokens=3000 + 1000 * i), [tool_use_block(f"k{i}", "Grep", {"pattern": "z"})], model=HAIKU),
+            user_tool_result(at(31 + i), f"k{i}", "hit"),
+        ])
+    fx.subagent(session="orphan", agent="o1", agent_type="mechanic", entries=[
+        assistant("s1", at(60), usage(input_tokens=4000), model=OPUS),
+    ])
+    return fx, ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
+
+
+# The four sections the scorecard draws on, rendered from `rule_tree` by the code before the scorecard
+# was added: factoring their helpers out for it must leave every byte of them as it was.
+SECTIONS_BEFORE_SCORECARD = {
+    'spend-by-type': (
+        '=== Spend by agent type ===\n'
+        '  type                 contexts med turns  med peak  input-eq  share    output  >=150k  >=200k\n'
+        '  builder                     1         5      205k      486k  75.6%        50       1       1\n'
+        '  reviewer                    2         2       20k       80k  12.4%        40       0       0\n'
+        '  mechanic                   10         1        6k       67k  10.4%       100       0       0\n'
+        '  main                        1         3        7k       10k   1.5%        30       0       0\n'
+        '  total                      14         1        8k      642k 100.0%       220       1       1\n'
+        '\n'
+        'harness versions in this window: 2.1.272\n'
+        'note: input-eq is a price comparison against the uncached input rate, not a token count.'
+    ),
+    'concentration': (
+        '=== Concentration ===\n'
+        '  main       one context in this window: all of the input-eq spend, 3 turns\n'
+        '  main       contexts under 50 turns: 100.0% of input-eq spend\n'
+        '  subagent   top 10% of contexts (1 of 13): 76.8% of input-eq spend, median turns 5\n'
+        '  subagent   contexts under 50 turns: 100.0% of input-eq spend\n'
+        '  combined   top 10% of contexts (1 of 14): 75.6% of input-eq spend, median turns 5\n'
+        '  combined   contexts under 50 turns: 100.0% of input-eq spend\n'
+        '\n'
+        'harness versions in this window: 2.1.272\n'
+        'note: input-eq is a price comparison against the uncached input rate, not a token count.'
+    ),
+    'turn-shape': (
+        '=== Turn shape ===\n'
+        '  main       turns carrying exactly one tool call:  66.7% of turns,  11.2% of input-eq spend\n'
+        '  main       one read-only call, following another:  33.3% of turns,   6.1% of input-eq spend — the most that requesting them together could save\n'
+        '  subagent   turns carrying exactly one tool call:  89.5% of turns,  96.1% of input-eq spend\n'
+        '  subagent   one read-only call, following another:   5.3% of turns,   3.2% of input-eq spend — the most that requesting them together could save\n'
+        '  combined   turns carrying exactly one tool call:  86.4% of turns,  94.8% of input-eq spend\n'
+        '  combined   one read-only call, following another:   9.1% of turns,   3.3% of input-eq spend — the most that requesting them together could save\n'
+        '\n'
+        'harness versions in this window: 2.1.272\n'
+        'note: input-eq is a price comparison against the uncached input rate, not a token count.'
+    ),
+    'cold-cache': (
+        '=== Cold cache ===\n'
+        '  a turn is cold when it follows a gap of 5 minutes or more and read under half of the previous context from cache\n'
+        '  main       cache writes  1-hour 0%              5-minute 100% (7k)\n'
+        '  subagent   cache writes  no lifetime recorded\n'
+        '  main       cold turns    1 of      3  input-eq     9k  (88.8% of main spend)      avoidable     7k (70.0%)\n'
+        '  subagent   cold turns    1 of     19  input-eq   200k  (31.6% of subagent spend)  avoidable   178k (28.2%)\n'
+        '\n'
+        '  main, by gap and context size (avoidable input-eq):\n'
+        '    gap            under 100k       100k and over\n'
+        '    5m to 1h       7k (1 turn)      0 (0 turns)\n'
+        '    over 1h        0 (0 turns)      0 (0 turns)\n'
+        '\n'
+        '  subagent, what the cold turns were waiting on (avoidable input-eq):\n'
+        '    after a Bash call              178k (1 turn)   median wait 13m, median context 155k\n'
+        '    after another tool                0 (0 turns)\n'
+        '    after no tool call                0 (0 turns)\n'
+        '    by command:  bash: build/test 178k (1)\n'
+        '    agents with a cold turn: 1 of 13; the 0 with two or more hold 0% of it\n'
+        '\n'
+        'harness versions in this window: 2.1.272\n'
+        'note: input-eq is a price comparison against the uncached input rate, not a token count.'
+    ),
+}
+
+
+def scorecard_lines(report):
+    """The scorecard's rule lines, keyed by the rule's words."""
+    body = section_body(report, "Rule scorecard")
+    rules = ("one job per agent, budget tiers", "a fresh agent per round", "calls requested together",
+             "the slow check goes to a runner", "the model ceiling", "the reviewer pays")
+    found = {}
+    for raw in body.splitlines():
+        for rule in rules:
+            if raw.strip().startswith(rule):
+                found[rule] = raw.strip()[len(rule):].strip()
+    return found
+
+
+class RuleScorecardTests(unittest.TestCase):
+    """One line per rule the plugin states, each with its metric, value, baseline and judgement."""
+
+    def test_the_sections_it_draws_on_render_as_they_did_before_it(self):
+        _, loaded = rule_tree(self)
+        for name, before in SECTIONS_BEFORE_SCORECARD.items():
+            with self.subTest(section=name):
+                self.assertEqual(ac.build_report(loaded, 12, sections=[name]), before)
+
+    def test_each_rule_on_the_fixture(self):
+        _, loaded = rule_tree(self)
+        lines = scorecard_lines(ac.build_report(loaded, 12, sections=["rule-scorecard"]))
+        self.assertEqual(len(lines), 6, lines)
+        # 13 subagents: the builder's 486k of 633k is the top 10%; it peaked at 205k and took 4 turns
+        # after its nudge; the reviewer's quoted hook text in a tool result is no nudge
+        self.assertEqual(lines["one job per agent, budget tiers"],
+                         "top 10% of subagents' share of subagent spend: 76.8% (past 150k 1, past 200k 1, "
+                         "median 4 turns after the hand-back nudge, 1 nudged); baseline 45%: not holding")
+        # the builder was prompted again after handing back; the reviewer's hook feedback is no prompt
+        self.assertEqual(lines["a fresh agent per round"],
+                         "subagents prompted again after their hand-back: 1 of 3 that handed back; no baseline")
+        self.assertEqual(lines["calls requested together"],
+                         "single-tool-call share of subagent turns: 89.5% (batchable 5.3%); baseline 70%: not holding")
+        self.assertEqual(lines["the slow check goes to a runner"],
+                         "cold turns' share of subagent spend: 31.6%; baseline 7.5%: not holding")
+        # the Opus builder under a Sonnet session is above; the Opus agent with no parent in the window is
+        # not judged, so 12 of the 13
+        self.assertEqual(lines["the model ceiling"],
+                         "subagents above their parent session's model: 1 of 12, 76.8% of subagent spend; "
+                         "baseline 0: not holding")
+        self.assertEqual(lines["the reviewer pays"],
+                         "reviewer verdicts from the hand-back report: fail 1, pass 1 of 2; no baseline")
+        self.assertIn("not scored: two review rounds at most", section_body(
+            ac.build_report(loaded, 12, sections=["rule-scorecard"]), "Rule scorecard"))
+
+    def test_load_context_keeps_the_nudge_turn_the_handback_and_a_second_prompt(self):
+        _, loaded = rule_tree(self)
+        by_agent = {l.ctx.agent_id: l.ctx for l in loaded}
+        self.assertEqual(by_agent["b1"].hand_back_nudge_turn, 1)
+        self.assertEqual(by_agent["b1"].handback_report, "Done: one commit.")
+        self.assertTrue(by_agent["b1"].prompted_after_handback)
+        self.assertIsNone(by_agent["r1"].hand_back_nudge_turn)
+        self.assertFalse(by_agent["r1"].prompted_after_handback)
+        self.assertIsNone(by_agent["k0"].handback_report)
+
+    def test_a_subagent_on_its_parents_family_or_below_is_within_the_ceiling(self):
+        _, loaded = rule_tree(self)
+        judged, above = ac.above_ceiling(loaded)
+        self.assertEqual([l.ctx.agent_id for l in above], ["b1"])
+        self.assertIn("r1", [l.ctx.agent_id for l in judged])   # Sonnet under Sonnet
+        self.assertNotIn("o1", [l.ctx.agent_id for l in judged])  # no parent in the window
+
+    def test_reviewer_verdicts(self):
+        for report, verdict in (("Verdict: FAIL. One blocker before merge.", "fail"),
+                                ("Not merge-ready: two findings.", "fail"),
+                                ("Merge-ready after the named fix.", "pass after fixes"),
+                                ("Pass with lows: one naming nit.", "pass with lows"),
+                                ("Verdict: pass. Merge-ready.", "pass"),
+                                ("I looked at the diff.", "unclassified"),
+                                (None, "unclassified")):
+            with self.subTest(report=report):
+                self.assertEqual(ac.reviewer_verdict(report), verdict)
+
+    def test_judgement_words(self):
+        self.assertEqual(ac.judgement(30.0, 45.0), "holds")
+        self.assertEqual(ac.judgement(45.0, 45.0), "holds")
+        self.assertEqual(ac.judgement(45.1, 45.0), "not holding")
+        self.assertEqual(ac.judgement(None, 45.0), "n/a")
+
+    def test_an_even_spread_holds_against_the_concentration_baseline(self):
+        loaded = [typed_loaded("subagent", "mechanic", [1000], f"s{i}") for i in range(10)]
+        lines = scorecard_lines(ac.build_report(loaded, 12, sections=["rule-scorecard"]))
+        self.assertTrue(lines["one job per agent, budget tiers"].startswith(
+            "top 10% of subagents' share of subagent spend: 10.0% "), lines)
+        self.assertTrue(lines["one job per agent, budget tiers"].endswith("baseline 45%: holds"))
+
+    def test_a_window_without_subagents_prints_na_rather_than_failing(self):
+        loaded = [typed_loaded("main", "main", [1000, 2000], "m")]
+        lines = scorecard_lines(ac.build_report(loaded, 12, sections=["rule-scorecard"]))
+        self.assertEqual(len(lines), 6, lines)
+        for rule, rest in lines.items():
+            self.assertTrue(rest.endswith("n/a"), (rule, rest))
+
+    def test_in_the_default_report_just_before_largest_contexts(self):
+        _, loaded = rule_tree(self)
+        headings = [l for l in ac.build_report(loaded, 12).splitlines() if l.startswith("=== ")]
+        self.assertEqual(headings[-2], "=== Rule scorecard ===")
+        self.assertTrue(headings[-1].startswith("=== Largest contexts"))
+
+    def test_asked_for_alone_with_sections(self):
+        fx, _ = rule_tree(self)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            ac.main(["--projects", fx.root, "--since", ts_str(BASE - timedelta(hours=1)),
+                     "--until", ts_str(BASE + timedelta(hours=1)), "--sections", "rule-scorecard"])
+        output = buf.getvalue()
+        self.assertEqual([l for l in output.splitlines() if l.startswith("=== ")], ["=== Rule scorecard ==="])
+        self.assertEqual(len(scorecard_lines(output)), 6)
 
 
 if __name__ == "__main__":

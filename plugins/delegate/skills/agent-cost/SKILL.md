@@ -110,6 +110,7 @@ spend is all in their own sessions.
   say which MCP servers/connectors to disconnect for coding sessions; the skill listing likewise if it's
   large relative to what a session actually uses. All of it applies to a main session as much as to a
   subagent: the difference is that a subagent pays it again for every agent started.
+- **Rule scorecard** — one line per rule the `delegate` plugin states, with the metric that measures it in the window, the baseline measured over the week the rules came from, and `holds` or `not holding`.
 - **Largest contexts** — the worst individual offenders, for a closer look with `--transcript`.
 
 ## Caveats (the report states these too)
