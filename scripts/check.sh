@@ -55,7 +55,9 @@ fi
 
 terms="${PRIVATE_TERMS:-$HOME/.config/agulhas/private-terms.txt}"
 if [ -f "$terms" ]; then
-  if grep -rniF -f "$terms" --exclude-dir=.git --exclude=.git --exclude-dir=__pycache__ --exclude-dir=.build --exclude-dir=.logbook . ; then
+  # What git would commit: tracked files and untracked ones it does not ignore. An ignored file (a
+  # handoff, a logbook, build scratch) never ships, so it is not scanned.
+  if git ls-files -z --cached --others --exclude-standard | xargs -0 grep -sniF -f "$terms" -- ; then
     echo "privacy gate: the lines above carry a private term" >&2
     exit 1
   fi
