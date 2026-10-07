@@ -118,7 +118,7 @@ What it reads and runs, since a mod is code with your full permissions: it reads
 the handoffs directory (the one the handoff hook writes to) and the git status of the working directory;
 it runs `hooks/resume.py` once when a session starts and again after a `/clear` or a resume, which runs
 `git rev-parse`, `git rev-list --count` and `git status --porcelain` locally with a three-second limit
-each and no network. It writes nothing.
+each and no network. It writes one thing: the paths of the handoffs you dismissed or resumed, in the plugin's own store, so they are not offered again.
 
 ## Is it worth it for you?
 
