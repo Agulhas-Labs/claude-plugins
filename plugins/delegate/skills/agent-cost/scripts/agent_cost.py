@@ -1187,23 +1187,28 @@ def section_fixed_start(out, loaded):
 
 # The rule scorecard's baselines, each measured over the one week of real agent work the plugin's rules
 # came from: the first and third are the figures its README quotes, the cold-turn share is the one its
-# orchestrator conventions quote for the same week.
+# orchestrator conventions quote (the week it was measured in is not recorded here). The model-ceiling
+# line's baseline is a target, not a measurement.
 BASELINE_TOP_DECILE_SHARE = 45.0    # % of subagent spend in the longest-running 10% of subagents
 BASELINE_SINGLE_CALL_SHARE = 70.0   # % of subagent turns that made a single tool call
 BASELINE_COLD_SHARE = 7.5           # % of subagent spend on cold turns
 
 MODEL_FAMILIES = ("haiku", "sonnet", "opus", "fable")  # lowest first, as the model-ceiling hook ranks them
 
-# A reviewer's verdict, read from its hand-back report: the first rule that matches the report's opening
-# or closing lines names it, so a fail is checked before the "merge-ready" a fail report may also say.
+# A reviewer's verdict, read from its hand-back report: the text of its last "Verdict:" line where it has
+# one, else the whole report. The first rule that matches names it: lows, then fixes, then fail, then pass,
+# so a "merge-ready after the named fixes" is not read as a fail for a negative gate ("it should fail
+# before the fix") the report also states.
 VERDICT_RULES = (
-    ("fail", re.compile(r"verdict\**:?\**\s*\**fail|not merge-ready|not mergeable|do not merge"
-                        r"|\bfail\b.{0,40}before|needs? (one|a|two|\d) .{0,20}fix")),
-    ("pass after fixes", re.compile(r"pass(ed)? after|merge-ready after|mergeable after"
-                                    r"|after (the|one|two|\d) (named )?fix")),
     ("pass with lows", re.compile(r"pass with low|merge-ready with low|low(-severity)? (items|findings) only")),
+    ("pass after fixes", re.compile(r"pass(ed)? after|merge-ready after|mergeable after"
+                                    r"|after (the|one|two|\d) (named )?fix"
+                                    r"|(merge|publish|ship|ready) after (the |those |these )?(named )?fix")),
+    ("fail", re.compile(r"verdict\**:?\**\s*\**fail|not merge-ready|not mergeable|do not merge"
+                        r"|fix first|fix(es)? (is |are )?needed before|not ready|blocks? (the )?merge")),
     ("pass", re.compile(r"verdict\**:?\**\s*\**pass|merge-ready|mergeable|ready to merge")),
 )
+VERDICT_LINE = re.compile(r"(?im)^(\W*verdict\W*[:\u2014\u2013-]\s*.+)$")  # the whole line, label included
 VERDICTS = tuple(name for name, _ in VERDICT_RULES) + ("unclassified",)
 
 
@@ -1241,9 +1246,11 @@ def above_ceiling(loaded):
 def reviewer_verdict(report):
     """One of VERDICTS for a reviewer's hand-back report; no report at all is unclassified."""
     text = (report or "").lower()
-    head = text[:600] + " " + text[-900:]
+    lines = VERDICT_LINE.findall(text)
+    if lines:
+        text = lines[-1]
     for name, rule in VERDICT_RULES:
-        if text and rule.search(head):
+        if text and rule.search(text):
             return name
     return "unclassified"
 
@@ -1259,16 +1266,17 @@ def section_rule_scorecard(out, loaded):
     """One line per rule the plugin states: the metric that measures it in this window, the measured
     baseline where there is one, and whether the rule holds. Run over two windows it is the before and
     after of a change, without picking the sections that measure each rule by hand."""
-    if not loaded:
-        return
     subs = [l for l in loaded if l.ctx.kind == "subagent"]
+    if not subs:
+        return
     sub_ie = sum(t["ie"] for l in subs for t in l.window_turns)
     out.append("=== Rule scorecard ===")
     out.append("  each rule the plugin states: its metric in this window, the baseline measured over the week the"
-               " rules came from, and whether it holds")
+               " rules came from (a target where marked), and whether it holds")
 
     def line(rule, metric, value, baseline, verdict):
-        against = f"baseline {baseline}: {verdict}" if baseline is not None else verdict
+        label = baseline if baseline is not None and baseline.startswith("target") else f"baseline {baseline}"
+        against = f"{label}: {verdict}" if baseline is not None else verdict
         out.append(f"  {rule:32} {metric}: {value}; {against}")
 
     # one job per agent, and the budget tiers
@@ -1298,12 +1306,12 @@ def section_rule_scorecard(out, loaded):
          f"{single:.1f}% (batchable {batchable:.1f}%)" if subs else "n/a",
          f"{BASELINE_SINGLE_CALL_SHARE:.0f}%", judgement(single, BASELINE_SINGLE_CALL_SHARE))
 
-    # the slow check goes to a runner
+    # the slow check goes to a runner: the cold turns that followed a Bash call
     cold = None
     if sub_ie:
         _, records = cold_records(subs)
-        cold = 100 * sum(r["turn"]["ie"] for r in records) / sub_ie
-    line("the slow check goes to a runner", "cold turns' share of subagent spend",
+        cold = 100 * sum(r["turn"]["ie"] for r in records if "Bash" in r["prev"]["tools"]) / sub_ie
+    line("the slow check goes to a runner", "cold turns after a Bash call, share of subagent spend",
          f"{cold:.1f}%" if cold is not None else "n/a", f"{BASELINE_COLD_SHARE:g}%",
          judgement(cold, BASELINE_COLD_SHARE))
 
@@ -1312,7 +1320,7 @@ def section_rule_scorecard(out, loaded):
     above_ie = sum(t["ie"] for l in above for t in l.window_turns)
     line("the model ceiling", "subagents above their parent session's model",
          f"{len(above)} of {len(judged)}, {100 * above_ie / (sub_ie or 1):.1f}% of subagent spend" if judged else "n/a",
-         "0", judgement(len(above) if judged else None, 0))
+         "target 0", judgement(len(above) if judged else None, 0))
 
     # the reviewer pays
     verdicts = collections.Counter(reviewer_verdict(l.ctx.handback_report) for l in subs
@@ -1321,6 +1329,8 @@ def section_rule_scorecard(out, loaded):
     line("the reviewer pays", "reviewer verdicts from the hand-back report",
          f"{mix} of {sum(verdicts.values())}" if verdicts else "n/a", None,
          "no baseline" if verdicts else "n/a")
+    out.append("  note: the model ceiling counts every subagent, including calls that named their own model, which the"
+               " hook leaves alone")
     out.append("  not scored: two review rounds at most, since the branch a transcript records is the one checked"
                " out where the agent ran, not the change it reviewed")
     out.append("")

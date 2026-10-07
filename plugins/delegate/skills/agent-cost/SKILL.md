@@ -3,7 +3,7 @@ name: agent-cost
 description: >-
   Report where Claude Code token spend goes, for main sessions and subagents separately — totals,
   spend by agent type, per-day trend, the costliest projects and sessions, concentration, turn shape, cold cache, what fills
-  the context, and the fixed start every context pays. Use when asked where tokens/usage went, why
+  the context, the fixed start every context pays, and whether the plugin's rules are holding. Use when asked where tokens/usage went, why
   Claude Code usage or cost is high, which session or project cost the most, how much a subagent or
   agent type is spending, what a session or subagent starts with (instructions, deferred tools, skill listing), or to compare spend before/after a change.
 ---
@@ -37,7 +37,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/agent_cost.py" [--since X] [--until X] [--p
   `.jsonl` file; any other name is refused before it is read.
 - `--sections NAMES` prints only those sections, comma-separated, each named by any prefix of it:
   `totals, spend-by-type, per-day, main-sessions, concentration, turn-shape, cold-cache, what-fills-the-context,
-  fixed-start, largest-contexts, tools-called`. An unknown name fails before any transcript is read
+  fixed-start, rule-scorecard, largest-contexts, tools-called`. An unknown name fails before any transcript is read
   and lists the ones that exist.
 - **Ask for the sections the question needs.** The full report is about 200 lines and every line of it
   lands in the context. "Why was yesterday expensive?" is `--sections totals,per-day,main-sessions`,
