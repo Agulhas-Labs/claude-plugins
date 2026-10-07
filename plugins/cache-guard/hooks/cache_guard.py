@@ -96,6 +96,7 @@ INPUT_PRICES = {
     "opus": 5.00,
     "sonnet5": 2.00,
     "sonnet4": 3.00,
+    "haiku55": 0.10,  # Haiku 5.5: the list price up to 100k tokens of prompt; past that it is $0.50
     "haiku": 1.00,
 }
 CACHE_READ_PRICES = {"fable51": 0.25, "opus55": 0.20}
