@@ -1776,12 +1776,12 @@ class RuleScorecardTests(unittest.TestCase):
         self.assertEqual(lines["calls requested together"],
                          "single-tool-call share of subagent turns: 89.5% (batchable 5.3%); baseline 70%: not holding")
         self.assertEqual(lines["the slow check goes to a runner"],
-                         "cold turns' share of subagent spend: 31.6%; baseline 7.5%: not holding")
+                         "cold turns after a Bash call, share of subagent spend: 31.6%; baseline 7.5%: not holding")
         # the Opus builder under a Sonnet session is above; the Opus agent with no parent in the window is
         # not judged, so 12 of the 13
         self.assertEqual(lines["the model ceiling"],
                          "subagents above their parent session's model: 1 of 12, 76.8% of subagent spend; "
-                         "baseline 0: not holding")
+                         "target 0: not holding")
         self.assertEqual(lines["the reviewer pays"],
                          "reviewer verdicts from the hand-back report: fail 1, pass 1 of 2; no baseline")
         self.assertIn("not scored: two review rounds at most", section_body(
@@ -1815,6 +1815,39 @@ class RuleScorecardTests(unittest.TestCase):
             with self.subTest(report=report):
                 self.assertEqual(ac.reviewer_verdict(report), verdict)
 
+    def test_negative_gate_text_and_other_verdict_wordings(self):
+        notes = "cleanup note. " * 90   # over 1,200 characters
+        for report, verdict in (
+                ("Verdict: merge-ready. Gate: name the test; it should fail before the fix.", "pass"),
+                ("Merge-ready after the named fixes. Finding 1 needs a one-line fix", "pass after fixes"),
+                ("Fix first: the hook swallows errors", "fail"),
+                ("Merge after fixes.", "pass after fixes"),
+                ("Publish after fixes.", "pass after fixes"),
+                (notes + "\nVerdict: not merge-ready, fix needed before merge.", "fail"),
+                (notes + "\n**Verdict** - merge after the named fixes\n" + notes, "pass after fixes"),
+                ("Verdict: fail\nnotes: the pass here is a pass on lint only", "fail"),
+                ("It should fail before the fix.", "unclassified")):
+            with self.subTest(report=report[-60:]):
+                self.assertEqual(ac.reviewer_verdict(report), verdict)
+
+    def test_a_subagent_is_judged_against_the_model_its_parent_used_at_its_first_turn(self):
+        # (parent model before, after the subagent's first turn; the subagent's model; above?)
+        for before, after, own, expect_above in (
+                ("claude-sonnet-5", "claude-opus-5", "claude-sonnet-5", False),
+                ("claude-opus-5", "claude-sonnet-5", "claude-opus-5", False),   # a last-turn read says above
+                ("claude-sonnet-5", "claude-opus-5", "claude-opus-5", True)):   # a last-turn read says not
+            with self.subTest(before=before, after=after, own=own):
+                parent = typed_loaded("main", "main", [1000, 1000], "m")
+                sub = typed_loaded("subagent", "builder", [1000], "s")
+                parent.ctx.turns[0]["model"] = before
+                parent.ctx.turns[1]["model"] = after
+                parent.ctx.turns[1]["ts"] = BASE + timedelta(seconds=30)
+                sub.ctx.turns[0]["ts"] = BASE + timedelta(seconds=10)
+                sub.ctx.turns[0]["model"] = own
+                judged, above = ac.above_ceiling([parent, sub])
+                self.assertEqual(len(judged), 1)
+                self.assertEqual(len(above), 1 if expect_above else 0)
+
     def test_judgement_words(self):
         self.assertEqual(ac.judgement(30.0, 45.0), "holds")
         self.assertEqual(ac.judgement(45.0, 45.0), "holds")
@@ -1828,12 +1861,12 @@ class RuleScorecardTests(unittest.TestCase):
             "top 10% of subagents' share of subagent spend: 10.0% "), lines)
         self.assertTrue(lines["one job per agent, budget tiers"].endswith("baseline 45%: holds"))
 
-    def test_a_window_without_subagents_prints_na_rather_than_failing(self):
+    def test_a_window_without_subagents_says_none_in_this_window(self):
         loaded = [typed_loaded("main", "main", [1000, 2000], "m")]
         lines = scorecard_lines(ac.build_report(loaded, 12, sections=["rule-scorecard"]))
-        self.assertEqual(len(lines), 6, lines)
-        for rule, rest in lines.items():
-            self.assertTrue(rest.endswith("n/a"), (rule, rest))
+        self.assertEqual(lines, {})
+        report = ac.build_report(loaded, 12, sections=["rule-scorecard"])
+        self.assertEqual(section_body(report, "Rule scorecard").splitlines()[0].strip(), "none in this window")
 
     def test_in_the_default_report_just_before_largest_contexts(self):
         _, loaded = rule_tree(self)
