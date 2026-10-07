@@ -435,6 +435,16 @@ class CostTests(GuardTestCase):
         self.assertIn("$0.06", reason)
         self.assertIn("under $0.01", reason)
 
+    def test_haiku_five_five_has_its_own_row_ten_times_below_the_older_haiku(self):
+        # Haiku 5.5 is $0.10/MTok input; the "haiku" row is the older generation's $1.00, which would price
+        # a Haiku 5.5 session ten times too high. The generation row sits ahead of the family row.
+        self.assertEqual(cache_guard.family_of("claude-haiku-5-5"), "haiku55")
+        self.assertEqual(cache_guard.family_of("Haiku 5.5"), "haiku55")
+        self.assertEqual(cache_guard.family_of("claude-haiku-4-5"), "haiku")
+        write, read = cache_guard.prices("claude-haiku-5-5", 300, {})
+        self.assertAlmostEqual(write, 0.10 * cache_guard.WRITE_MULTIPLIER_5M)
+        self.assertAlmostEqual(read, 0.01)
+
     def test_a_model_with_no_published_price_is_warned_about_without_dollars(self):
         reason = self.cold("some-other-assistant-v2")
         self.assertNotIn("$", reason)
