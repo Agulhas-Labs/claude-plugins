@@ -34,9 +34,10 @@ loudly and read what it did.
 
 ## Handoffs
 
-- **Carry what the agent cannot infer:** the goal, the constraints, the files, the conventions in
-  play, and the verification command that must run green before it reports. Quote the paragraphs of a
-  large document the job needs; never write "read first: <doc>".
+- **Carry what the agent cannot infer:** the goal, the constraints, the conventions in play, the
+  files and first commands as one batch to request together (found one by one, each costs a turn),
+  and the check that must pass before it reports. Quote what a large document says; never write
+  "read first: <doc>".
 - **End with gates, one per required outcome.** A green suite does not prove every requested outcome
   exists. Each line reads `G<n> <outcome> — CHECK: <command> — EXPECT: <token>`. For every fix a test
   is said to pin, add the negative gate: set the fix aside (diffed against the base branch, so the gate still
