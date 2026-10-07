@@ -11,7 +11,7 @@ const status = (over: Record<string, unknown> = {}) => ({
 })
 
 // The engine beneath the plugin: a session whose usage, status script and handoff script the test sets.
-function engine(on, world: { status: Record<string, unknown>; startedAt?: number; handoff?: Record<string, unknown>; below?: boolean }) {
+function engine(on, world: { status: Record<string, unknown>; startedAt?: number; sessionId?: string; handoff?: Record<string, unknown>; below?: boolean }) {
   const seen = { runs: [] as string[][], stdin: [] as string[], toasts: [] as string[], timeouts: [] as unknown[], files: {} as Record<string, string> }
   on('process.run', (_$, e) => {
     seen.runs.push([...e.argv])
@@ -20,6 +20,10 @@ function engine(on, world: { status: Record<string, unknown>; startedAt?: number
     return { value: { exitCode: 0, stdout: JSON.stringify(out), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.usage', () => ({ value: { startedAt: world.startedAt ?? 1, context: { window: 1, percent: 61 } } }))
+  on('session.id', () => ({ value: world.sessionId ?? 's' }))
+  on('session.cwd', () => ({ value: '/w' }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
   on('ui.toast', (_$, e) => (seen.toasts.push(e.text), seen.timeouts.push(e.timeoutMs), { value: {} }))
   on('fs.read', (_$, e) => ({ value: seen.files[e.path] ?? '' }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
@@ -248,4 +252,70 @@ test('a tool call mid-turn re-reads the transcript, at most every 10 seconds, an
   await clock.advance(31 * 60_000)
   expect(rowText(await band.drawn())).toContain('Cache 29 mins left')
   await $.tool.call({ tool: 'Bash', command: 'ls', agentId: 'sub' } as never) // a subagent's call does not read
+})
+
+// A host may skip a user plugin's classic.* hooks (Claude Code 2.1.292 does): the band must not need them.
+const START = { cwd: '/w', surface: 'terminal', isInteractive: true } as never
+const SID = '0b6f2c1e-4a7d-4c3b-9e21-5f8a7d6c4b3a'
+const statusStdin = seen => seen.runs.flatMap((run, i) => (run.at(-1).endsWith('/hooks/status.py') ? [JSON.parse(seen.stdin[i])] : []))
+
+test('with no classic hook at all, a turn draws the band from the session the engine names', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const seen = engine(on, { status: status(), sessionId: SID })
+  await $.session.start(START)
+  await $.turn.complete(turn(usage(10, 980, 10)))
+  const band = await mountBand($)
+  expect(rowText(await band.drawn())).toBe('Cache-Guard  Cache 60 mins left · Tokens 109K (61%) · Miss cost $3.34   Handoff')
+  expect(statusStdin(seen).at(-1)).toEqual({ cwd: '/w', session_id: SID })
+})
+
+test('with no classic hook, a resumed session draws the band when it starts, before any turn', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  engine(on, { status: status(), sessionId: SID })
+  await $.session.start(START)
+  const band = await mountBand($)
+  expect(rowText(await band.drawn())).toContain('Cache-Guard  Cache 60 mins left')
+})
+
+test('a /clear takes the old figures down at once, and the next reading asks for the new session', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const world = { status: status(), sessionId: SID }
+  const seen = engine(on, world)
+  await $.session.start(START)
+  await $.turn.complete(turn(usage(10, 980, 10)))
+  const band = await mountBand($)
+  expect(rowText(await band.drawn())).toContain('Cache-Guard')
+  world.sessionId = 'f1e2d3c4-b5a6-4978-8a6b-5c4d3e2f1a0b'
+  world.status = status({ last_turn_at: null, lifetime_s: null, context_tokens: null, cold_usd: null })
+  await $.session.end({ reason: 'clear', sessionId: SID, resume: { id: SID } } as never)
+  expect(rowText(await band.drawn())).not.toContain('Cache-Guard')
+  await $.turn.complete(turn(usage(10, 980, 10)))
+  expect(statusStdin(seen).at(-1)).toEqual({ cwd: '/w', session_id: world.sessionId })
+})
+
+test('a classic transcript path is not sent once the engine names another session', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const world = { status: status(), sessionId: 's' }
+  const seen = engine(on, world)
+  await started($)
+  await $.turn.complete(turn(usage(10, 980, 10)))
+  expect(statusStdin(seen).at(-1)).toEqual({ transcript_path: '/t/s.jsonl', cwd: '/w', session_id: 's' })
+  world.sessionId = SID // a /clear the classic hooks never reported
+  await $.turn.complete(turn(usage(10, 980, 10)))
+  expect(statusStdin(seen).at(-1)).toEqual({ cwd: '/w', session_id: SID })
+})
+
+test('with no classic hook, a tool call re-reads the transcript and Handoff sends the session', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const world = { status: status({ last_turn_at: null, lifetime_s: null, context_tokens: null, cold_usd: null }) as Record<string, unknown>, sessionId: SID, handoff: { path: HANDOFF.path } }
+  const seen = engine(on, world)
+  await $.session.start(START)
+  const band = await mountBand($)
+  expect(rowText(await band.drawn())).not.toContain('Cache-Guard')
+  world.status = status({ context_tokens: 95_000 })
+  await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  expect(rowText(await band.drawn())).toContain('Tokens 95K')
+  await $.ui.press({ plugin: 'cache-guard', key: 'cache-guard-handoff' })
+  expect(JSON.parse(seen.stdin.at(-1)!)).toEqual({ cwd: '/w', session_id: SID })
+  expect(JSON.stringify(await band.drawn())).toContain('Handoff ready')
 })

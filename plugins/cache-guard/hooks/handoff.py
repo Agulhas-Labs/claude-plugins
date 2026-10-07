@@ -598,11 +598,19 @@ def summarise(out_path, model):
 
 
 def write_from_stdin(env):
-    """`--write`: the band's Handoff button. The hook's payload on stdin, write_handoff's result as JSON."""
+    """`--write`: the band's Handoff button. The hook's payload on stdin, write_handoff's result as JSON.
+
+    The band sends the session's id and directory; the transcript is found from the id when no path comes.
+    """
     from datetime import datetime
 
     try:
-        result = write_handoff(json.load(sys.stdin), datetime.now(timezone.utc), env)
+        payload = json.load(sys.stdin)
+        transcript = cache_guard.transcript_of(payload, env)
+        if not transcript:
+            print(json.dumps({"error": "no transcript yet: nothing to hand off"}))
+            return
+        result = write_handoff(dict(payload, transcript_path=transcript), datetime.now(timezone.utc), env)
         result["pending_text"] = PENDING_SUMMARY
     except Exception as failure:
         result = {"error": cache_guard.failed_handoff_reason(failure)}

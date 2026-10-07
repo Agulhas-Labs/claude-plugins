@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """The band's reading of the prompt cache, as JSON on stdout, from the guard's own functions.
 
-stdin: {"transcript_path": str, "agents": [usage, ...]}, each usage a subagent turn's token counts with
-its `model`. stdout: when the last main-session turn was answered, the cache lifetime it bought, the
-context size, what resending that context costs cold and warm, and the subagents' usage priced at list
-rates. Nothing here is computed twice: the band only counts down from these figures between turns.
+stdin: {"transcript_path": str, "session_id": str, "agents": [usage, ...]}: the transcript is found
+from the session id when its path is not given (cache_guard.transcript_of), and each usage is a
+subagent turn's token counts with its `model`. stdout: when the last main-session turn was answered,
+the cache lifetime it bought, the context size, what resending that context costs cold and warm, and
+the subagents' usage priced at list rates. Nothing here is computed twice: the band only counts down
+from these figures between turns.
 """
 import json
 import os
@@ -41,7 +43,7 @@ def status(request, env):
     if agents:
         out["agents_usd"] = sum(c for c in priced if c is not None)
         out["agents_unpriced"] = sum(1 for c in priced if c is None)
-    path = request.get("transcript_path")
+    path = cache_guard.transcript_of(request, env)
     if not path or not os.path.isfile(path):
         return out
     found = cache_guard.turns(cache_guard.read_tail(path))

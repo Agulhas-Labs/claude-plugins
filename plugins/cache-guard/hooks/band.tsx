@@ -5,6 +5,9 @@ import type { Register } from 'claude-code'
 // Every figure about the cache comes from status.py, which reads the transcript with the guard's own
 // functions; it runs when a turn completes or a session starts, never while drawing. Between turns the
 // band only counts down from the last reading, on a 30-second tick.
+// Which session that is comes from the engine ($.session.id(), asked on every reading, since a /clear
+// changes it), and status.py finds the transcript from the id. A host may skip a user plugin's classic.*
+// hooks, so nothing here waits on one; where they run, the transcript path they carry is used as given.
 
 type Status = {
   disabled: boolean
@@ -22,9 +25,7 @@ type Watch = { path: string; pending: string; startedAt: number }
 type Saved = { path: string; partial: boolean }
 
 type State = {
-  transcriptPath: string
-  cwd: string
-  sessionId: string
+  classic: { transcriptPath: string; sessionId: string } // what a classic hook said, where one ran
   status: Status | null
   startedAt: number | null
   watch: Watch | null
@@ -109,10 +110,18 @@ export function bandSegments(s: State, usage: Usage5, now: number): Segment[] {
   return out
 }
 
+// The session the band is about, asked of the engine each time: a /clear moves the process to a new id
+// with no session.start. The transcript path a classic hook gave is sent only while it is that session's.
+export async function identity($, s: State) {
+  const [sessionId, cwd] = await Promise.all([$.session.id(), $.session.cwd()])
+  const known = s.classic.sessionId === sessionId && s.classic.transcriptPath
+  return known ? { transcript_path: known, cwd, session_id: sessionId } : { cwd, session_id: sessionId }
+}
+
 export async function refresh($, s: State) {
   const { stdout } = await $.process.run(
     ['sh', `${$.plugin.root}/hooks/run-python.sh`, `${$.plugin.root}/hooks/status.py`],
-    { stdin: JSON.stringify({ transcript_path: s.transcriptPath }), timeoutMs: 10_000 },
+    { stdin: JSON.stringify(await identity($, s)), timeoutMs: 10_000 },
   )
   s.status = stdout.trim() ? (JSON.parse(stdout) as Status) : null
   const left = msLeft(s.status, await $.clock.now())
@@ -157,17 +166,10 @@ export function resumeHint(path: string): string {
 
 export async function startHandoff($, s: State) {
   if (s.watch) return // already writing: the button reads "Writing handoff" and the spinner is turning
-  if (!s.transcriptPath) {
-    $.ui.toast('No transcript yet: nothing to hand off')
-    return
-  }
   s.saved = null
   const { stdout } = await $.process.run(
     ['sh', `${$.plugin.root}/hooks/run-python.sh`, `${$.plugin.root}/hooks/handoff.py`, '--write'],
-    {
-      stdin: JSON.stringify({ transcript_path: s.transcriptPath, cwd: s.cwd, session_id: s.sessionId }),
-      timeoutMs: 30_000,
-    },
+    { stdin: JSON.stringify(await identity($, s)), timeoutMs: 30_000 },
   )
   const result = stdout.trim() ? JSON.parse(stdout) : { error: 'Python 3 was not found' }
   if (result.error) {
@@ -257,15 +259,22 @@ export async function drawBand($, e, next, s: State) {
 
 export const register: Register = on => {
   const s: State = {
-    transcriptPath: '', cwd: '', sessionId: '', status: null, startedAt: null,
+    classic: { transcriptPath: '', sessionId: '' }, status: null, startedAt: null,
     watch: null, saved: null, frame: 0, tick: null, poll: null, spin: null, refreshedAt: 0,
   }
 
-  const remember = (e: { transcript_path?: string; cwd?: string; session_id?: string }) => {
-    s.transcriptPath = e.transcript_path || s.transcriptPath
-    s.cwd = e.cwd || s.cwd
-    s.sessionId = e.session_id || s.sessionId
+  const remember = (e: { transcript_path?: string; session_id?: string }) => {
+    if (e.transcript_path && e.session_id) s.classic = { transcriptPath: e.transcript_path, sessionId: e.session_id }
   }
+
+  // A /clear ends the session with no session.start after it: the old figures go at once, not at the next turn.
+  on('session.end', async ($, e, next) => {
+    const result = await next(e)
+    s.status = null
+    s.saved = null
+    $.ui.invalidate('ui.render')
+    return result
+  })
 
   on('classic.SessionStart', async ($, e, next) => {
     remember(e)
@@ -283,7 +292,7 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     await resetOnClear($, s)
-    if (s.transcriptPath) await refresh($, s)
+    await refresh($, s)
     if (e.agentId === undefined && s.status?.last_turn_at != null) {
       // the transcript may not hold this turn's last entry yet; the cache was used just now either way
       s.status.last_turn_at = Math.max(s.status.last_turn_at, await $.clock.now())
@@ -295,7 +304,7 @@ export const register: Register = on => {
   // the figures are re-read after a tool call, at most every REFRESH_MIN_MS. Local work: no tokens.
   on('tool.call', async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId === undefined && s.transcriptPath) {
+    if (e.agentId === undefined) {
       const now = await $.clock.now()
       if (now - s.refreshedAt >= REFRESH_MIN_MS) {
         s.refreshedAt = now
@@ -306,4 +315,14 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => drawBand($, e, next, s))
+
+  // Once per process: a resumed session's transcript is on disk already, so the band can draw before a turn.
+  // resume.tsx hooks session.start too, and the engine refuses a second hook on it without a matcher; every
+  // session has a working directory, so this one matches them all.
+  on('session.start', { cwd: /./ }, async ($, e, next) => {
+    const result = await next(e)
+    await resetOnClear($, s)
+    await refresh($, s)
+    return result
+  })
 }

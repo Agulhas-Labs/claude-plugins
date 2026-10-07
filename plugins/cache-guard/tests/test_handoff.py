@@ -521,6 +521,37 @@ class WriteHandoffTests(HandoffTestCase):
         self.assertEqual(len(condensed), 800_000 * 4)
 
 
+class HandoffButtonTests(HandoffTestCase):
+    """`--write`, the band's button: it sends the session's id and directory, and no transcript path."""
+
+    SESSION = "0b6f2c1e-4a7d-4c3b-9e21-5f8a7d6c4b3a"
+
+    def write_from(self, payload, env):
+        out = io.StringIO()
+        with mock.patch.object(handoff.sys, "stdin", io.StringIO(json.dumps(payload))), \
+                contextlib.redirect_stdout(out):
+            handoff.write_from_stdin(env)
+        return json.loads(out.getvalue())
+
+    def test_the_transcript_is_found_from_the_session_id(self):
+        self.patch("find_claude", lambda env: None)
+        config = os.path.join(self.tmp.name, "config")
+        os.makedirs(os.path.join(config, "projects", "-work"))
+        with open(self.transcript([user(LONG_REQUEST), assistant([text_block("Fixed the parser.")])]),
+                  encoding="utf-8") as f, \
+                open(os.path.join(config, "projects", "-work", self.SESSION + ".jsonl"), "w", encoding="utf-8") as g:
+            g.write(f.read())
+        result = self.write_from({"session_id": self.SESSION, "cwd": "/work"}, dict(self.env, CLAUDE_CONFIG_DIR=config))
+        self.assertNotIn("error", result)
+        self.assertIn("Fixed the parser.", self.read(result["path"]))
+
+    def test_no_transcript_for_the_session_is_an_error_and_no_file(self):
+        result = self.write_from({"session_id": self.SESSION, "cwd": "/work"},
+                                 dict(self.env, CLAUDE_CONFIG_DIR=os.path.join(self.tmp.name, "config")))
+        self.assertEqual(result, {"error": "no transcript yet: nothing to hand off"})
+        self.assertFalse(os.path.exists(self.handoffs))
+
+
 class HandoffDirectoryTests(HandoffTestCase):
     """The default place for a handoff is inside the user's repository, and it stays out of its commits."""
 

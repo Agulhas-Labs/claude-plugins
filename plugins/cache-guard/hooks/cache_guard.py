@@ -27,6 +27,7 @@ model-written summary would. `CACHE_GUARD_DISABLE=1` switches the whole guard of
 Anything unexpected — bad JSON, no transcript, no usable turn, any exception at all — allows the prompt.
 A guard that breaks a session costs more than the turn it saves.
 """
+import glob
 import json
 import os
 import re
@@ -48,6 +49,8 @@ HANDOFF_WORD = "handoff"  # a message that is only this word asks for a handoff 
 HANDOFF_COMMANDS = ("/handoff", "/cache-guard:handoff")  # the same thing, but written by the model
 UNDER_A_CENT = "under $0.01"
 MARKER_NAME = re.compile(r"[A-Za-z0-9_-]+\Z")  # a sanitised session id, and nothing else
+# A session id as Claude Code mints one, and the only thing put into the transcript lookup's pattern.
+SESSION_ID = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\Z")
 # The plugin's other files, which carry a suffix. `announced-` is no longer written — the session-start
 # announcement is made to every fresh session inside the freshness window — but it stays in the sweep so
 # that the ones an earlier version left behind are cleared out like everything else. `condensed-` is the
@@ -150,6 +153,30 @@ def read_tail(path):
         f.seek(start)
         lines = f.read().splitlines()
     return lines[1:] if start and lines else lines
+
+
+def config_dir(env):
+    """Claude Code's own directory: CLAUDE_CONFIG_DIR when set, else ~/.claude."""
+    return env.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+
+
+def transcript_of(request, env):
+    """The transcript a request is about, or None.
+
+    Its `transcript_path` when it carries one. Otherwise the one file `projects/*/<session_id>.jsonl`
+    under Claude Code's directory: the band learns the session's id from the engine, which has no
+    accessor for the transcript's path. Anything but a session id is refused before it reaches the
+    pattern, and none or several matches is no transcript, never a guess.
+    """
+    path = request.get("transcript_path")
+    if path:
+        return path
+    session = str(request.get("session_id") or "")
+    if not SESSION_ID.match(session):
+        return None
+    pattern = os.path.join(glob.escape(config_dir(env)), "projects", "*", session + ".jsonl")
+    found = [p for p in glob.glob(pattern) if os.path.isfile(p)]
+    return found[0] if len(found) == 1 else None
 
 
 def turns(lines):
