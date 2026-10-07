@@ -723,8 +723,8 @@ def report_groups(loaded):
 
 
 # Categories that only look: a run of single-call turns made of these could have been one request.
-# MCP tools and "bash: other" are left out because they may write, so the figure is a lower bound
-# on what the reads alone could save.
+# MCP tools and "bash: other" are left out because they may write, so some reads go uncounted; and a
+# read may have needed the one before it, so not every counted turn could have been saved.
 READ_ONLY_CATEGORIES = frozenset({
     "Read (ranged)", "Read (whole file)", "Grep/Glob tool", "bash: grep",
     "bash: cat/sed/head window", "bash: git diff/show", "bash: git log/status/etc",
@@ -757,7 +757,7 @@ def section_turn_shape(out, loaded):
         out.append(f"  {label:10} turns carrying exactly one tool call: {100*len(one_tool)/n:5.1f}% of turns, {100*ie_one/total_ie:5.1f}% of input-eq spend")
         follow = [t for l in loaded if kind is None or l.ctx.kind == kind for t in batchable_followons(l.window_turns)]
         ie_follow = sum(t["ie"] for t in follow)
-        out.append(f"  {label:10} one read-only call, following another:  {100*len(follow)/n:5.1f}% of turns, {100*ie_follow/total_ie:5.1f}% of input-eq spend — the most that requesting them together could save")
+        out.append(f"  {label:10} one read-only call, following another: {100*len(follow)/n:5.1f}% of turns, {100*ie_follow/total_ie:5.1f}% of input-eq spend — the most that requesting them together could save")
     out.append("")
 
 

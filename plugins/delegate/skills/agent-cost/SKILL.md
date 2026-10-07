@@ -72,10 +72,9 @@ spend is all in their own sessions.
   thing."
 - **Turn shape** — the % of turns carrying exactly one tool call, and their share of spend. A second line
   counts the turns that made one read-only call straight after another such turn (reads, searches, git
-  inspection): an upper bound on what requesting them together would save, since a read may have
-  depended on the one before it. High values
-  here mean calls that could have been requested together were made one at a time, each paying the full
-  context over again. **Action**: batch independent tool calls into one response. In a main session the
+  inspection): the most that requesting them together could save, since a read may have depended on
+  the one before it. High values here mean calls that could have been requested together were made
+  one at a time, each paying the full context over again. **Action**: batch independent tool calls into one response. In a main session the
   person can ask for it ("look these up together"); for subagents it belongs in the handoff or the
   agent definition.
 - **Cold cache** — the turns that arrived after the prompt cache had expired (a gap of 5 minutes or
