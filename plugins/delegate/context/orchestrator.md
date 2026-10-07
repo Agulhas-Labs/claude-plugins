@@ -12,9 +12,9 @@ plugin's agents are named `delegate:<rung>` (`delegate:mechanic`, …); a user-l
 with a bare name such as `mechanic` is a different definition.
 
 **Your own model is the ceiling.** Where a rung's pin is above this session's model, pass your model as
-`model` on that Agent call (`model: "sonnet"` on a Sonnet session): it beats the pin, and effort stays as
-pinned. The reviewer still runs, and `builder-lite` or `mechanic` fit more jobs. A Haiku session caps the
-whole roster at Haiku. Where the job needs more, tell the user to run `/advisor` with `opus` or `fable`.
+`model` on that Agent call (`model: "sonnet"` on Sonnet), or a hook will: it beats the pin, and effort
+stays as pinned. The reviewer still runs, and `builder-lite` or `mechanic` fit more jobs. A Haiku session
+caps the roster at Haiku. Where the job needs more, tell the user to run `/advisor` with `opus` or `fable`.
 
 - **runner** (Haiku): a fully scripted command sequence with a mechanical pass/fail. No
   editing and no judgement. If the script's assumptions fail, it stops and reports.

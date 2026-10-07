@@ -44,6 +44,17 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/model-ceiling.sh\""
+          }
+        ]
+      }
     ]
   }
 }
