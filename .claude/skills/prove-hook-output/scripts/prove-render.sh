@@ -14,10 +14,11 @@ pattern=
 seconds=18
 workdir=$(pwd)
 envs=""
+prompt=""
 
 usage() {
     cat >&2 <<'USAGE'
-usage: prove-render.sh --plugin <dir> --grep <text> [--env K=V]... [--seconds N] [--cwd <dir>]
+usage: prove-render.sh --plugin <dir> --grep <text> [--env K=V]... [--seconds N] [--cwd <dir>] [--prompt <text>]
 
   --plugin   the plugin working copy to load (the directory holding .claude-plugin/plugin.json)
   --grep     a distinctive phrase from the message that should reach the terminal
@@ -25,6 +26,8 @@ usage: prove-render.sh --plugin <dir> --grep <text> [--env K=V]... [--seconds N]
              scratch location rather than moving --cwd, which would trigger the trust dialog.
   --seconds  how long to let the session run before quitting (default 18)
   --cwd      where to run, which must be a directory already trusted (default: the current one)
+  --prompt   a message to send once the session is up, for output that only appears after a turn;
+             it runs on the session's model (haiku), so keep it to one short line
 USAGE
     exit 2
 }
@@ -36,6 +39,7 @@ while [ $# -gt 0 ]; do
         --env)     envs="$envs ${2:?}"; shift 2 ;;
         --seconds) seconds=${2:?}; shift 2 ;;
         --cwd)     workdir=${2:?}; shift 2 ;;
+        --prompt)  prompt=${2:?}; shift 2 ;;
         -h|--help) usage ;;
         *)         echo "prove-render.sh: unknown argument $1" >&2; usage ;;
     esac
@@ -48,8 +52,24 @@ command -v expect >/dev/null 2>&1 || {
     echo "prove-render.sh: expect is not installed, and there is no PTY proof without it" >&2; exit 2; }
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/prove-render.XXXXXX")
-# Everything this script creates lives under $scratch and goes with it, however the run ends.
-trap 'rm -rf "$scratch"' EXIT INT TERM
+# The probe session saves a transcript (see CLAUDE_CODE_CHILD_SESSION below). It gets an id of its
+# own, so the one file it wrote, and the folder of the same name if it made one, can be removed by
+# that exact id when the run ends.
+session=$(python3 -c 'import uuid; print(uuid.uuid4())')
+forget_session() {
+    python3 - "$session" <<'PY'
+import glob, os, shutil, sys
+session = sys.argv[1]
+config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+for path in glob.glob(os.path.join(glob.escape(config), "projects", "*", session + ".jsonl")):
+    os.remove(path)
+    folder = path[: -len(".jsonl")]
+    if os.path.isdir(folder) and not os.path.islink(folder):
+        shutil.rmtree(folder)
+PY
+}
+# Everything else this script creates lives under $scratch and goes with it, however the run ends.
+trap 'forget_session; rm -rf "$scratch"' EXIT INT TERM
 
 name="prove-render-$$"
 cp -R "$plugin" "$scratch/$name"
@@ -63,20 +83,59 @@ with open(path, "w", encoding="utf-8") as f:
     json.dump(manifest, f, indent=2)
 PY
 
+# The copy is renamed, but an installed plugin of the original name still loads beside it and can
+# draw the same output, so the proof would pass on the installed code. Switch every installed
+# <name>@<marketplace> off for this session alone.
+original=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["name"])' \
+    "$plugin/.claude-plugin/plugin.json")
+python3 - "$original" "$scratch/settings.json" <<'PY'
+import json, os, sys
+name, out = sys.argv[1], sys.argv[2]
+config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+try:
+    with open(os.path.join(config, "plugins", "installed_plugins.json"), encoding="utf-8") as f:
+        installed = json.load(f)
+    installed = installed.get("plugins", installed)
+except (OSError, ValueError):
+    installed = {}
+off = {key: False for key in installed if key.split("@")[0] == name}
+with open(out, "w", encoding="utf-8") as f:
+    json.dump({"enabledPlugins": off}, f)
+for key in off:
+    print(f"prove-render.sh: {key} is installed; switched off for this session")
+PY
+
 log="$scratch/session.log"
+debug="$scratch/debug.log"
 cat > "$scratch/drive.exp" <<'EXPECT'
 set timeout [expr {$env(RUN_SECONDS) + 60}]
 cd $env(RUN_CWD)
 # The TUI writes cursor-moves between words, so screen patterns are unreliable: run, quit, read the
 # log afterwards instead of matching on what appears.
 set extra [lsearch -all -inline -not -exact [split [string trim $env(RUN_ENVS)]] ""]
-eval spawn -noecho env $extra claude --model haiku --plugin-dir $env(RUN_PLUGIN)
+# A session started from inside another Claude Code session inherits CLAUDE_CODE_CHILD_SESSION, which
+# turns transcript saving off: anything that reads the transcript then shows nothing, and the proof
+# fails for a reason that has nothing to do with the hook.
+eval spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION $extra claude --model haiku \
+    --plugin-dir $env(RUN_PLUGIN) --settings $env(RUN_SETTINGS) --debug-file $env(RUN_DEBUG) \
+    --session-id $env(RUN_SESSION)
+if {$env(RUN_PROMPT) ne ""} {
+    sleep 8
+    send -- $env(RUN_PROMPT); sleep 1; send "\r"
+}
 sleep $env(RUN_SECONDS)
 send "\x03"; sleep 1; send "\x03"; sleep 2
+set timeout 10
 expect eof
+# Two Ctrl-Cs do not always end the session, so close its terminal (a hangup), then wait for the
+# process itself: it keeps writing its debug log after the terminal closes, and removed before it
+# exits, the scratch folder is made again.
+catch close
+catch wait
 EXPECT
 
 RUN_CWD="$workdir" RUN_PLUGIN="$scratch/$name" RUN_ENVS="$envs" RUN_SECONDS="$seconds" \
+    RUN_PROMPT="$prompt" RUN_SESSION="$session" RUN_SETTINGS="$scratch/settings.json" RUN_DEBUG="$debug" \
     expect -f "$scratch/drive.exp" > "$log" 2>&1 || true
 
 echo "=== rendered to the person (ANSI stripped) ==="
@@ -105,6 +164,11 @@ if LC_ALL=C strings "$log" | grep -i 'rejected by the allowlist'; then
 else
     echo "(none)"
 fi
+
+echo
+echo "=== plugins the session loaded (debug log) ==="
+grep -o 'hooks module [^ ]* loaded' "$debug" 2>/dev/null | sort -u || true
+grep -i 'not loaded\|failed to load\|refused' "$debug" 2>/dev/null | head -10 || true
 
 echo
 [ "$rendered" = yes ] || { echo "prove-render.sh: NOT PROVEN" >&2; exit 1; }

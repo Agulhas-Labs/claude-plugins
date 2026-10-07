@@ -43,8 +43,20 @@ Use the cheapest one that answers the question you actually have.
 If a plugin of the same name is installed, `--plugin-dir` loads yours but the installed one wins —
 silently. Hooks from the working copy never register and the proof passes for the wrong reason.
 
-Always copy the plugin to a scratch directory, rename it in `.claude-plugin/plugin.json`, and load
-that. `scripts/prove-render.sh` does this for you and deletes the copy afterwards.
+Renaming the copy is not enough on its own: the installed plugin still loads beside it and can draw
+the same output, so the proof passes on the installed code. Copy the plugin to a scratch directory,
+rename it in `.claude-plugin/plugin.json`, load that, and switch the installed one off for that
+session (`--settings` with `enabledPlugins: {"<name>@<marketplace>": false}`).
+`scripts/prove-render.sh` does all of this, prints which installed plugin it switched off, and lists
+the hooks modules the session loaded, from its debug log, so you can see whose code drew.
+
+## A session started from inside a session saves no transcript
+
+Claude Code sets `CLAUDE_CODE_CHILD_SESSION` in the environment of everything it runs, and a
+`claude` started with it set saves no transcript. Anything that reads the transcript (a band that
+shows token counts, a handoff) then shows nothing, and the proof fails for a reason that has nothing
+to do with the hook. The script unsets it, gives the probe its own `--session-id`, and removes that
+one transcript when it ends.
 
 ## The PTY proof
 
@@ -52,7 +64,8 @@ that. `scripts/prove-render.sh` does this for you and deletes the copy afterward
 .claude/skills/prove-hook-output/scripts/prove-render.sh \
   --plugin plugins/<name> \
   --grep '<a distinctive phrase from the message>' \
-  --env SOME_PLUGIN_VAR=/tmp/somewhere
+  --env SOME_PLUGIN_VAR=/tmp/somewhere \
+  --prompt 'reply with the single word ok'   # only when the output appears after a turn
 ```
 
 It copies the plugin under a scratch name, starts Claude Code under `expect` in a PTY, waits, quits
