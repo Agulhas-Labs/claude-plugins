@@ -19,6 +19,7 @@ const file = (state: unknown) => `window.BOARD = ${JSON.stringify(state)};\n`
 type Seen = { runs: string[][]; toasts: string[]; opens: unknown[]; closes: unknown[]; fills: unknown[]; files: Record<string, string>; classic: string[] }
 type World = {
   found: Record<string, unknown>; opened?: boolean; panes?: { id: string }[]; below?: boolean; failEdit?: boolean
+  hold?: Promise<void> // the first helper run waits for it, so a test can land the answer late
   id?: string // the engine's session id ($.session.id()); a /clear changes it
   bySession?: Record<string, Record<string, unknown>> // what the helper finds for a given --session, over `found`
 }
@@ -29,7 +30,10 @@ function engine(on, world: World) {
   const seen: Seen = { runs: [], toasts: [], opens: [], closes: [], fills: [], files: {}, classic: [] }
   on('session.id', () => ({ value: world.id ?? SESSION }))
   on('session.cwd', () => ({ value: '/w' }))
-  on('process.run', (_$, e) => {
+  on('process.run', async (_$, e) => {
+    const hold = world.hold
+    world.hold = undefined
+    await hold
     seen.runs.push([...e.argv])
     const session = e.argv[e.argv.indexOf('--session') + 1]
     const found = world.bySession?.[session] ?? world.found
@@ -290,6 +294,23 @@ test('a /clear\'s session.end drops the band at once, and the next prompt reads 
   await submit($)
   expect(seen.runs.at(-1)!.slice(-4)).toEqual(['--project', '/w', '--session', 's2'])
   expect(rowText(await band.drawn())).toBe('Logbook  Logbook')
+})
+
+test('a /clear while a read is in flight: its late answer neither draws the old board nor toasts its questions', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const world: World = { id: SESSION, found: {}, bySession: { [SESSION]: live(board({ questions: [question('Q1')] })) } }
+  const seen = engine(on, world)
+  let release: () => void = () => {}
+  world.hold = new Promise<void>(resolve => { release = resolve }) // the turn's read stays out until after the /clear
+  const band = await mountBand($)
+  const turning = turn($)
+  while (world.hold) await new Promise(resolve => setTimeout(resolve, 0)) // until the helper is running
+  await end($, 'clear')
+  world.id = 's2'
+  release()
+  await turning
+  expect(JSON.stringify(await band.drawn())).not.toContain('Logbook')
+  expect(seen.toasts).toEqual([])
 })
 
 test('the view rules: stuck, verified and the state file', () => {

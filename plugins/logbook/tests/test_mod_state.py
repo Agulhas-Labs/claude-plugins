@@ -201,6 +201,20 @@ class EarlyStart(ModState):
         self.plant_transcript(project="-b")
         self.assertEqual(self.run_helper("--start")["state"]["title"], board.UNTITLED)
 
+    def test_a_directory_named_like_the_transcript_is_not_a_match(self):
+        self.plant_transcript()
+        os.makedirs(os.path.join(self.env["CLAUDE_CONFIG_DIR"], "projects", "-b", SESSION + ".jsonl"))
+        self.assertIsNotNone(mod_state.find_transcript(SESSION, self.env))  # the one file; the directory is not a second
+        shutil.rmtree(os.path.join(self.env["CLAUDE_CONFIG_DIR"], "projects", "-p"))
+        self.assertIsNone(mod_state.find_transcript(SESSION, self.env))  # a directory alone is no transcript
+
+    def test_a_config_folder_named_with_glob_characters_still_finds_the_transcript(self):
+        self.plant_transcript()
+        odd = os.path.join(self.tmp, "cfg[a]*")
+        os.rename(self.env["CLAUDE_CONFIG_DIR"], odd)
+        self.env["CLAUDE_CONFIG_DIR"] = odd
+        self.assertEqual(mod_state.find_transcript(SESSION, self.env), os.path.join(odd, "projects", "-p", SESSION + ".jsonl"))
+
     def test_a_session_id_that_is_not_a_uuid_is_never_looked_up(self):
         self.plant_transcript(session="not-a-uuid")
         found = self.run_helper("--start", session="not-a-uuid")

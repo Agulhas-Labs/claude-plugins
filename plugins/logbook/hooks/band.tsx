@@ -28,6 +28,7 @@ type State = {
   seen: Set<string> | null // the open questions the last read showed; null until a read has set the baseline
   located: boolean
   startTried: boolean
+  epoch: number // bumped by forget(): a read that began before it is another session's and is dropped
   tick: { cancel: () => void } | null
 }
 
@@ -58,6 +59,7 @@ export function toastText(fresh: BoardState['questions']): string {
 }
 
 function forget(s: State) {
+  s.epoch++
   s.board = null
   s.state = null
   s.seen = null
@@ -103,6 +105,7 @@ export async function identify($, s: State) {
 export async function locate($, s: State, opts: { start?: boolean; quiet?: boolean } = {}) {
   await identify($, s)
   if (!s.sessionId || !s.cwd) return
+  const epoch = s.epoch
   const args = ['--project', s.cwd, '--session', s.sessionId]
   if (opts.start) args.push('--start') // with no transcript path, mod_state.py finds the transcript by the id
   if (opts.start && s.transcriptPath) args.push('--transcript', s.transcriptPath)
@@ -110,6 +113,7 @@ export async function locate($, s: State, opts: { start?: boolean; quiet?: boole
     ['sh', `${$.plugin.root}/hooks/run-python.sh`, `${$.plugin.root}/${HELPER}`, ...args],
     { timeoutMs: 20_000 },
   )
+  if (epoch !== s.epoch) return // a /clear or a resume came while the helper ran: this answer is the old session's
   s.located = true
   const found = stdout.trim() ? JSON.parse(stdout) : {}
   s.board = typeof found.board === 'string' ? found.board : null
@@ -118,8 +122,9 @@ export async function locate($, s: State, opts: { start?: boolean; quiet?: boole
 
 export async function reread($, s: State) {
   if (!s.board) return
+  const epoch = s.epoch
   const state = parseState(String(await $.fs.read(`${s.board}/state.js`).catch(() => '')))
-  if (state) take($, s, state, false)
+  if (state && epoch === s.epoch) take($, s, state, false)
 }
 
 // The board's page is the full view: the button hands it to the browser. mod_state.py does the opening, so the
@@ -179,7 +184,7 @@ function stopTick(s: State) {
 export const register: Register = on => {
   const s: State = {
     transcriptPath: '', cwd: '', sessionId: '', board: null, state: null, seen: null,
-    located: false, startTried: false, tick: null,
+    located: false, startTried: false, epoch: 0, tick: null,
   }
 
   on('classic.SessionStart', async ($, e, next) => {

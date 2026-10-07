@@ -58,7 +58,8 @@ def find_transcript(session, env):
     if not UUID.fullmatch(session):
         return None
     config = env.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
-    found = glob.glob(os.path.join(glob.escape(config), "projects", "*", session + ".jsonl"))
+    found = [path for path in glob.glob(os.path.join(glob.escape(config), "projects", "*", session + ".jsonl"))
+             if os.path.isfile(path)]
     return found[0] if len(found) == 1 else None
 
 
