@@ -26,7 +26,7 @@ function engine(on, world: { found: Record<string, unknown>; opened?: boolean; p
     return { value: { exitCode: 0, stdout: JSON.stringify(e.argv.includes('--open') ? { ...world.found, opened: world.opened ?? true } : world.found), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('fs.read', (_$, e) => ({ value: seen.files[e.path] ?? '' }))
-  on('ui.toast', (_$, e) => void seen.toasts.push(e.text))
+  on('ui.toast', (_$, e) => (seen.toasts.push(e.text), { value: {} }))
   on('ui.open', (_$, e) => (seen.opens.push(e), world.panes?.push({ id: e.id }), { value: { isPlaced: true } }))
   on('ui.close', (_$, e) => (seen.closes.push(e), { value: {} }))
   on('ui.panes', () => ({ value: world.panes ?? [] }))

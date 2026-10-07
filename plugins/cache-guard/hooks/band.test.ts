@@ -20,7 +20,7 @@ function engine(on, world: { status: Record<string, unknown>; startedAt?: number
     return { value: { exitCode: 0, stdout: JSON.stringify(out), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.usage', () => ({ value: { startedAt: world.startedAt ?? 1, context: { window: 1, percent: 61 } } }))
-  on('ui.toast', (_$, e) => void (seen.toasts.push(e.text), seen.timeouts.push(e.timeoutMs)))
+  on('ui.toast', (_$, e) => (seen.toasts.push(e.text), seen.timeouts.push(e.timeoutMs), { value: {} }))
   on('fs.read', (_$, e) => ({ value: seen.files[e.path] ?? '' }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   on('tool.call', () => ({ result: {}, text: '' }))
