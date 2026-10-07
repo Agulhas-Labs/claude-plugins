@@ -55,8 +55,10 @@ Around that, a few rules hold:
 
 The plugin includes [`agent-cost`](#measure-it-agent-cost), which reads the transcripts already on your
 disk and shows where your tokens went, by model and agent type. Use `--since` and `--until` to compare
-the days before you installed with the days after. It changes nothing, so you can run it first to see
-whether you have the problem this plugin solves: a few long-running agents taking most of your spend.
+the days before you installed with the days after; its Rule scorecard section gives each rule's measure
+on one line, so the comparison is that section run over each window. It changes nothing, so you can run
+it first to see whether you have the problem this plugin solves: a few long-running agents taking most
+of your spend.
 
 ## How it works
 
@@ -241,6 +243,7 @@ and each one says what to do about what it shows:
 | Cold cache | How much went on messages sent into a large context after its prompt cache expired, and whether your sessions get the five-minute or the one-hour cache lifetime. | [`cache-guard`](../cache-guard/README.md), a sibling plugin, which warns you with the cost before that message is sent. |
 | What fills the context | Which kind of content you keep re-sending, with your sessions' share and subagents' share side by side. | Reading files by range, and a code index in place of `cat` and `grep`. |
 | Fixed start | What every context pays before any work: instruction files, MCP tool listings, the skill listing. | Trimming the instruction files every session loads (and every subagent loads again), and disconnecting servers a coding session never calls. |
+| Rule scorecard | One line per rule this plugin states: the metric that measures it in the window, the baseline measured over the week the rules came from, and whether it holds. | Running it over the windows before and after a change to see which rules your agents keep. |
 | Tools called (`--tools`) | The tools each agent type actually called. | Editing an agent definition's `tools:` or `disallowedTools:` line. |
 
 ### Asking for what you need
