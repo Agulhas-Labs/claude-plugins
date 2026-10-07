@@ -1311,7 +1311,7 @@ def section_rule_scorecard(out, loaded):
     judged, above = above_ceiling(loaded)
     above_ie = sum(t["ie"] for l in above for t in l.window_turns)
     line("the model ceiling", "subagents above their parent session's model",
-         f"{len(above)} of {len(judged)}, {100 * above_ie / sub_ie:.1f}% of subagent spend" if judged else "n/a",
+         f"{len(above)} of {len(judged)}, {100 * above_ie / (sub_ie or 1):.1f}% of subagent spend" if judged else "n/a",
          "0", judgement(len(above) if judged else None, 0))
 
     # the reviewer pays
@@ -1321,8 +1321,8 @@ def section_rule_scorecard(out, loaded):
     line("the reviewer pays", "reviewer verdicts from the hand-back report",
          f"{mix} of {sum(verdicts.values())}" if verdicts else "n/a", None,
          "no baseline" if verdicts else "n/a")
-    out.append("  not scored: two review rounds at most, since the branch names that tie a review to its change"
-               " are not in the transcripts")
+    out.append("  not scored: two review rounds at most, since the branch a transcript records is the one checked"
+               " out where the agent ran, not the change it reviewed")
     out.append("")
 
 
