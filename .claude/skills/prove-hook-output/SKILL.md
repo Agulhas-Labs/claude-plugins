@@ -35,6 +35,11 @@ Use the cheapest one that answers the question you actually have.
    runs, and that its JSON was parsed and accepted — look for a `hook_response` event with
    `"exit_code": 0` and `"outcome": "success"`. It does **not** prove rendering: headless has no UI,
    and `systemMessage` appears only inside the `hook_response` blob, never as its own event.
+   Measured on Claude Code 2.1.293, stream-json carries `hook_response` events for `SessionStart` only.
+   For a `PreToolUse` or any other event, add `--debug-file <path>` and read that log for
+   `Hook <Event>:<matcher> (<Event>) success`, which carries the hook's output (an `updatedInput`, say).
+   And at a first turn's `PreToolUse`, the transcript does not yet hold the message making the call, so
+   a hook that reads "the last assistant turn" finds the turn before it, or nothing.
 3. **A real PTY.** The only thing that proves a person would see it. This is what the rest of this
    skill is for.
 
