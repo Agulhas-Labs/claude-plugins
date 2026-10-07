@@ -108,9 +108,17 @@ class HookWiringTests(unittest.TestCase):
         for command in hook_commands("SessionStart") + hook_commands("SubagentStart"):
             script = read(os.path.join(ROOT, "hooks", command.split("/hooks/", 1)[1].rstrip('"')))
             self.assertNotIn("run-python", script, command)
-        for command in hook_commands("PostToolUse"):
+        for command in hook_commands("PostToolUse") + hook_commands("PostToolUseFailure"):
             script = read(os.path.join(ROOT, "hooks", command.split("/hooks/", 1)[1].rstrip('"')))
             self.assertIn('"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh"', script, command)
+
+    def test_a_failed_call_runs_the_budget_hook_as_a_successful_one_does(self):
+        # A command that exits non-zero or times out fires PostToolUseFailure, not PostToolUse.
+        # Observed on Claude Code 2.1.293: the failure event's additionalContext reaches the subagent.
+        wrapper = 'sh "${CLAUDE_PLUGIN_ROOT}/hooks/subagent-context-budget.sh"'
+        for event in ("PostToolUse", "PostToolUseFailure"):
+            self.assertEqual(hook_commands(event), [wrapper], event)
+            self.assertEqual([entry.get("matcher") for entry in load_hooks()[event]], ["*"], event)
 
     def test_every_injected_file_or_payload_fits_under_the_hook_context_cap(self):
         for command in hook_commands("SessionStart"):

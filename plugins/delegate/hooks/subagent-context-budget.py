@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse: warn a subagent, in three tiers, as its context passes a budget.
+"""PostToolUse and PostToolUseFailure: warn a subagent, in three tiers, as its context passes a budget.
 
 An agent's spend is its context summed over every turn, so it grows with the square of the agent's
 length. A single warning repeated verbatim tells an agent nothing it does not already know: measured
@@ -15,7 +15,10 @@ So the tiers differ in kind, and each says what the next one will ask for:
 
 Separately, a call that outlived the prompt cache gets one more line. A subagent's cache lasted five
 minutes where this was measured, so an agent that waits longer on one command rewrites its whole
-context on its next turn.
+context on its next turn. A command that exits non-zero or times out arrives as PostToolUseFailure,
+with the same `tool_use_id`, and gets the line too: observed on Claude Code 2.1.293, that event's
+additionalContext reaches the subagent. The wait counts from the turn that issued the call, not from
+the call's own start, and the line says so.
 Measured on one machine over eight days: 79 of 84 cold subagent turns followed a single Bash call,
 after a median wait of nine minutes. Cold turns were 2.6% of subagent spend, and agents that went cold
 twice or more held 74% of it, so the first cold wait predicts the next.
@@ -143,9 +146,10 @@ def cold(seconds, size):
     """The line for a call that outlived the prompt cache."""
     minutes = max(1, int(seconds) // 60)
     return (
-        f"Cache expired: this command took {minutes} minute{'' if minutes == 1 else 's'}, longer than the prompt "
-        f"cache lasts, so each further turn here rewrites about {size // 1000}k tokens of context. Land "
-        "what is verified and report, rather than run another long command here."
+        f"Cache expired: this call returned {minutes} minute{'' if minutes == 1 else 's'} after the turn that "
+        "issued it, longer than the prompt cache lasts, so each further turn here rewrites about "
+        f"{size // 1000}k tokens of context. Land what is verified and report, rather than run another "
+        "long command here."
     )
 
 
@@ -175,11 +179,14 @@ def main():
     try:
         # Read stdin as UTF-8 explicitly: on native Windows Python, sys.stdin decodes with the
         # locale code page, which can fail json.load on a non-ASCII UTF-8 payload.
-        message = advice(json.load(io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8")), os.environ)
+        payload = json.load(io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8"))
+        message = advice(payload, os.environ)
     except Exception:
         return
     if message:
-        json.dump({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": message}}, sys.stdout)
+        # The output names the event it answers: a failed call's reply is not a PostToolUse one.
+        event = "PostToolUseFailure" if payload.get("hook_event_name") == "PostToolUseFailure" else "PostToolUse"
+        json.dump({"hookSpecificOutput": {"hookEventName": event, "additionalContext": message}}, sys.stdout)
 
 
 if __name__ == "__main__":
