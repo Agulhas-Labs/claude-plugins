@@ -29,6 +29,13 @@ written for them.
 - **A plugin names one hooks module.** `hooks.json` `modules` takes a single entry: `claude plugin validate`
   refuses a second (observed on Claude Code 2.1.287). Several mods in one plugin register through one
   entry file that calls each one's `register`.
+- **Three mod-engine facts, found on Claude Code 2.1.293.** A `/clear` or a resume ends the session and
+  gives the process a new id with no `session.start` after it: hook `session.end` with a `reason` matcher
+  (`['clear', 'resume']`) and ask `$.session.id()` and `$.session.cwd()` when they are needed, never
+  remember them from the start. `session.end` hooks share one 1.5-second bound that aborts any `$` call
+  still running, so run a process from `$.clock.after(0, …)` and drop a result that lands after the next
+  session change. The engine refuses to load a module that passes `$` to a closure declared inside
+  `register`; `$` goes only to functions declared at the file's top level.
 - **Commit on a branch; never merge to `main` unprompted.** Bump a plugin's `version` in both its
   `plugin.json` and the marketplace entry when its behaviour changes.
 
