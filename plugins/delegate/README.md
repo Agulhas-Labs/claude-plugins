@@ -74,6 +74,13 @@ Two more hooks watch subagents. One warns an agent as its context grows, in thre
 - at 150k, finish the item in hand and hand the rest back;
 - at 200k, stop where it is and report, repeated every further 50k.
 
+Separately, when one tool call outlives a subagent's five-minute prompt cache, it adds a line telling the
+agent that each further turn now rewrites its whole context, so it should land what is verified and
+report rather than wait on another long command: measured on one machine over eight days, 79 of 84 cold
+subagent turns followed a single Bash call, after a median wait of nine minutes; cold turns were 2.6% of
+subagent spend, and agents that went cold twice or more held 74% of it, so the first cold wait predicts
+the next.
+
 The other holds back, once, a subagent that tries to stop with a background run still going, and names
 the run so the agent can wait for its verdict or stop it.
 
@@ -131,6 +138,10 @@ repository's `.claude/settings.json`:
 
 Someone on one project at a time may want 2, and someone juggling several may want 8. Anything that
 isn't a positive integer means the default.
+
+`DELEGATE_SUBAGENT_CACHE_SECONDS` (default 300) is set the same way: how long a subagent's tool call may
+run before the budget hook says the prompt cache has expired. Set it to match your cache lifetime;
+anything that isn't a positive integer means the default.
 
 ## Tailoring
 
