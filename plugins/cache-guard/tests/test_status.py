@@ -83,9 +83,20 @@ class TranscriptLookupTest(unittest.TestCase):
         self.write("x.jsonl")                  # projects/*/../x.jsonl
         self.write("-work-project", ".jsonl")  # projects/*/.jsonl, an empty id
         self.write("-work-project", "*.jsonl")
+        # SESSION + "/../x" would climb out through a <session> directory; make it exist, so only the check stops it
+        os.makedirs(os.path.join(self.projects, "-work-project", SESSION))
         for bad in ("../x", "", "*", None, SESSION + "/../../x"):
             with self.subTest(session_id=bad):
                 self.assertIsNone(self.lookup(bad)["last_turn_at"])
+
+    def test_a_config_dir_with_glob_characters_still_finds_the_transcript(self):
+        odd = os.path.join(self.tmp.name, "cfg[a]*")
+        path = os.path.join(odd, "projects", "-work-project", SESSION + ".jsonl")
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(TURN) + "\n")
+        out = run({"session_id": SESSION}, CLAUDE_CONFIG_DIR=odd)
+        self.assertEqual(out["context_tokens"], 100_000)
 
     def test_the_same_id_in_two_projects_is_no_transcript_rather_than_a_guess(self):
         self.write("-work-one", SESSION + ".jsonl")

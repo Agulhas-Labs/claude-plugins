@@ -34,6 +34,7 @@ type State = {
   tick: { cancel: () => void } | null
   poll: { cancel: () => void } | null
   refreshedAt: number // ms; when a tool call last re-read the transcript
+  epoch: number // bumped when a session ends: an answer that was awaited across it belongs to the old session
   spin: { cancel: () => void } | null
 }
 
@@ -118,11 +119,16 @@ export async function identity($, s: State) {
   return known ? { transcript_path: known, cwd, session_id: sessionId } : { cwd, session_id: sessionId }
 }
 
+// handoff.py's answer when the session has no transcript yet; the toast words it as a notice, not a failure
+const NO_TRANSCRIPT = 'no transcript yet: nothing to hand off'
+
 export async function refresh($, s: State) {
+  const epoch = s.epoch
   const { stdout } = await $.process.run(
     ['sh', `${$.plugin.root}/hooks/run-python.sh`, `${$.plugin.root}/hooks/status.py`],
     { stdin: JSON.stringify(await identity($, s)), timeoutMs: 10_000 },
   )
+  if (epoch !== s.epoch) return // a /clear ended the session this reading was taken for
   s.status = stdout.trim() ? (JSON.parse(stdout) as Status) : null
   const left = msLeft(s.status, await $.clock.now())
   if (left !== null && left > 0 && !s.tick) {
@@ -167,13 +173,15 @@ export function resumeHint(path: string): string {
 export async function startHandoff($, s: State) {
   if (s.watch) return // already writing: the button reads "Writing handoff" and the spinner is turning
   s.saved = null
+  const epoch = s.epoch
   const { stdout } = await $.process.run(
     ['sh', `${$.plugin.root}/hooks/run-python.sh`, `${$.plugin.root}/hooks/handoff.py`, '--write'],
     { stdin: JSON.stringify(await identity($, s)), timeoutMs: 30_000 },
   )
+  if (epoch !== s.epoch) return // a /clear ended the session this handoff was written for
   const result = stdout.trim() ? JSON.parse(stdout) : { error: 'Python 3 was not found' }
   if (result.error) {
-    $.ui.toast(`Handoff failed: ${result.error}`)
+    $.ui.toast(result.error === NO_TRANSCRIPT ? 'No transcript yet: nothing to hand off' : `Handoff failed: ${result.error}`)
     return
   }
   if (!result.summary_model) {
@@ -193,6 +201,7 @@ export async function pollHandoff($, s: State) {
   const text = String(await $.fs.read(watch.path).catch(() => ''))
   const landed = text !== '' && !text.includes(watch.pending)
   const late = (await $.clock.now()) - watch.startedAt > POLL_CAP_MS
+  if (s.watch !== watch) return // a /clear dropped this handoff while the file was read
   if (!landed && !late) return
   s.poll?.cancel()
   s.poll = null
@@ -260,7 +269,7 @@ export async function drawBand($, e, next, s: State) {
 export const register: Register = on => {
   const s: State = {
     classic: { transcriptPath: '', sessionId: '' }, status: null, startedAt: null,
-    watch: null, saved: null, frame: 0, tick: null, poll: null, spin: null, refreshedAt: 0,
+    watch: null, saved: null, frame: 0, tick: null, poll: null, spin: null, refreshedAt: 0, epoch: 0,
   }
 
   const remember = (e: { transcript_path?: string; session_id?: string }) => {
@@ -270,8 +279,13 @@ export const register: Register = on => {
   // A /clear ends the session with no session.start after it: the old figures go at once, not at the next turn.
   on('session.end', async ($, e, next) => {
     const result = await next(e)
+    s.epoch++
     s.status = null
     s.saved = null
+    s.watch = null
+    s.poll?.cancel()
+    s.poll = null
+    stopSpinner(s)
     $.ui.invalidate('ui.render')
     return result
   })

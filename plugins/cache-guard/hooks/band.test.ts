@@ -11,9 +11,11 @@ const status = (over: Record<string, unknown> = {}) => ({
 })
 
 // The engine beneath the plugin: a session whose usage, status script and handoff script the test sets.
-function engine(on, world: { status: Record<string, unknown>; startedAt?: number; sessionId?: string; handoff?: Record<string, unknown>; below?: boolean }) {
+function engine(on, world: { status: Record<string, unknown>; startedAt?: number; sessionId?: string; handoff?: Record<string, unknown>; below?: boolean; hold?: Promise<void>; entered?: () => void }) {
   const seen = { runs: [] as string[][], stdin: [] as string[], toasts: [] as string[], timeouts: [] as unknown[], files: {} as Record<string, string> }
-  on('process.run', (_$, e) => {
+  on('process.run', async (_$, e) => {
+    world.entered?.()
+    if (world.hold) await world.hold // a test holds the script's answer back to land it later
     seen.runs.push([...e.argv])
     seen.stdin.push(e.init?.stdin ?? '')
     const out = e.argv.includes('--write') ? world.handoff : world.status
@@ -318,4 +320,39 @@ test('with no classic hook, a tool call re-reads the transcript and Handoff send
   await $.ui.press({ plugin: 'cache-guard', key: 'cache-guard-handoff' })
   expect(JSON.parse(seen.stdin.at(-1)!)).toEqual({ cwd: '/w', session_id: SID })
   expect(JSON.stringify(await band.drawn())).toContain('Handoff ready')
+})
+
+test('a reading still in flight when /clear ends the session does not bring the old figures back', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const world: { status: Record<string, unknown>; sessionId: string; hold?: Promise<void>; entered?: () => void } = { status: status(), sessionId: SID }
+  engine(on, world)
+  await $.session.start(START)
+  await $.turn.complete(turn(usage(10, 980, 10)))
+  const band = await mountBand($)
+  expect(rowText(await band.drawn())).toContain('Cache-Guard')
+  // the next reading is held back until the test lets it go
+  let release = () => {}
+  world.hold = new Promise<void>(resolve => { release = resolve })
+  world.status = status({ context_tokens: 150_000 })
+  const asked = new Promise<void>(resolve => { world.entered = resolve })
+  const inFlight = $.turn.complete(turn(usage(10, 980, 10)))
+  await asked // the script is running for the old session
+  await $.session.end({ reason: 'clear', sessionId: SID, resume: { id: SID } } as never)
+  expect(rowText(await band.drawn())).not.toContain('Cache-Guard')
+  release()
+  await inFlight
+  const after = rowText(await band.drawn())
+  expect(after).not.toContain('Cache-Guard')
+  expect(after).not.toContain('Tokens')
+})
+
+test('a handoff with no transcript yet is a notice, and a real error keeps the failed form', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const world = { status: status(), sessionId: SID, handoff: { error: 'no transcript yet: nothing to hand off' } }
+  const seen = engine(on, world)
+  await $.session.start(START)
+  await $.turn.complete(turn(usage(10, 980, 10)))
+  await mountBand($)
+  await $.ui.press({ plugin: 'cache-guard', key: 'cache-guard-handoff' })
+  expect(seen.toasts).toEqual(['No transcript yet: nothing to hand off'])
 })
