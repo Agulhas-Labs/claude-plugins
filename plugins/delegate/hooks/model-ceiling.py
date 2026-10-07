@@ -7,7 +7,9 @@ measured not to hold: on one machine over eight days, 386 of 824 subagents ran o
 parent session's, 48% of all input-equivalent spend. So this hook applies it: where the rung's pin
 ranks above the session's model and the call names no model, it adds `model` set to the session's.
 
-The session's model is the last assistant entry's `message.model` in the transcript; families rank
+The session's model is the transcript's latest `message.model` of an assistant entry, or `modelId` of a
+`model` attachment: on a session's first turn the message making this call is not yet in the transcript
+when the hook runs, but the attachment naming the session's model is. Families rank
 haiku < sonnet < opus < fable, by substring of the id. A call that already names a model, a subagent
 type that isn't one of this plugin's rungs, an unknown model on either side, or
 DELEGATE_MODEL_CEILING=0 in the environment all leave the call alone. Anything unexpected exits
@@ -30,21 +32,25 @@ def family(model):
 
 
 def session_model(path):
-    """`message.model` of the transcript's last assistant entry from the session itself."""
+    """The model named last in the transcript's tail, by the session's own assistant entry or attachment."""
     with open(path, "rb") as f:
         f.seek(0, os.SEEK_END)
         f.seek(max(0, f.tell() - TAIL))
         lines = f.read().splitlines()
     for raw in reversed(lines):
-        if b'"assistant"' not in raw:
+        if b'"assistant"' not in raw and b'"model"' not in raw:
             continue
         try:
             entry = json.loads(raw)
         except ValueError:
             continue  # the tail's first line may be cut mid-record
-        if entry.get("type") != "assistant" or entry.get("isSidechain"):
+        if not isinstance(entry, dict) or entry.get("isSidechain"):
             continue
-        model = (entry.get("message") or {}).get("model")
+        if entry.get("type") == "assistant":
+            model = (entry.get("message") or {}).get("model")
+        else:
+            attachment = entry.get("attachment") or {}
+            model = (attachment.get("identity") or {}).get("modelId") if attachment.get("type") == "model" else None
         if model and model != "<synthetic>":  # a locally made message names no model it ran on
             return model
     return None
@@ -95,7 +101,9 @@ def decision(payload, env):
         return None
     # The hooks reference, PreToolUse decision control, on `updatedInput`: "Replaces the entire input
     # object, so include unchanged fields alongside modified ones." and "Combine with "allow" to
-    # auto-approve, or "ask" to show the modified input to the user."
+    # auto-approve, or "ask" to show the modified input to the user." Neither is set, so the call keeps
+    # whatever permission it would have had: measured on Claude Code 2.1.293, updatedInput alone was
+    # applied in both the auto and default permission modes.
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",

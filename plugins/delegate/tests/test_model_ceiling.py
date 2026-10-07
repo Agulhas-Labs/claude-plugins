@@ -90,6 +90,14 @@ class ModelCeilingTests(unittest.TestCase):
             f.write(json.dumps(assistant(OPUS, sidechain=True)) + "\n")
         self.assertEqual(self.call()["hookSpecificOutput"]["updatedInput"]["model"], "sonnet")
 
+    def test_on_the_first_turn_the_model_attachment_names_the_session_model(self):
+        with open(self.transcript, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "attachment", "attachment": {"type": "model", "identity": {"modelId": SONNET}}}) + "\n")
+        self.assertEqual(self.call()["hookSpecificOutput"]["updatedInput"]["model"], "sonnet")
+        with open(self.transcript, "a", encoding="utf-8") as f:
+            f.write(json.dumps(assistant(OPUS)) + "\n")  # a later turn on another model wins
+        self.assertIsNone(self.call())
+
     def test_a_malformed_payload_prints_nothing_and_exits_zero(self):
         env = dict(os.environ, CLAUDE_PLUGIN_ROOT=ROOT)
         env.pop("DELEGATE_MODEL_CEILING", None)
