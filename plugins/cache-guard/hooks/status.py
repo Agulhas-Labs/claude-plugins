@@ -4,8 +4,9 @@
 stdin: {"transcript_path": str, "session_id": str, "agents": [usage, ...]}: the transcript is found
 from the session id when its path is not given (cache_guard.transcript_of), and each usage is a
 subagent turn's token counts with its `model`. stdout: when the last main-session turn was answered,
-the cache lifetime it bought, the context size, what resending that context costs cold and warm, and
-the subagents' usage priced at list rates. Nothing here is computed twice: the band only counts down
+the cache lifetime it bought, the context size, the smallest context the guard holds back
+(CACHE_GUARD_MIN_TOKENS, read the way the guard reads it), what resending that context costs cold and
+warm, and the subagents' usage priced at list rates. Nothing here is computed twice: the band only counts down
 from these figures between turns.
 """
 import json
@@ -36,6 +37,7 @@ def usage_cost(usage, env):
 def status(request, env):
     out = {"disabled": str(env.get("CACHE_GUARD_DISABLE") or "").strip() == "1",
            "show_cost": str(env.get("CACHE_GUARD_SHOW_COST") or "").strip() != "0",
+           "min_tokens": cache_guard.positive_int(env, "CACHE_GUARD_MIN_TOKENS", cache_guard.DEFAULT_MIN_TOKENS),
            "last_turn_at": None, "lifetime_s": None, "context_tokens": None,
            "cold_usd": None, "warm_usd": None, "agents_usd": None, "agents_unpriced": 0}
     agents = request.get("agents") or []

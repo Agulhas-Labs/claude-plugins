@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { SPINNER, cacheHue, contextHue, resumeHint, tokens } from './band.tsx'
+import { SPINNER, bandSegments, cacheHue, contextHue, resumeHint, tokens } from './band.tsx'
 
 const NOW = 1_800_000_000_000
 const usage = (input: number, read: number, write: number, output = 100, model = 'claude-opus-5') =>
@@ -7,7 +7,7 @@ const usage = (input: number, read: number, write: number, output = 100, model =
 
 const status = (over: Record<string, unknown> = {}) => ({
   disabled: false, show_cost: true, last_turn_at: NOW, lifetime_s: 3600, context_tokens: 109_000,
-  cold_usd: 3.34, warm_usd: 0.1, ...over,
+  min_tokens: 100_000, cold_usd: 3.34, warm_usd: 0.1, ...over,
 })
 
 // The engine beneath the plugin: a session whose usage, status script and handoff script the test sets.
@@ -131,6 +131,28 @@ test('an expired cache reads Cache expired in red, with the miss cost the next m
   expect((await textOf(band, 'Cache expired'))?.props.color).toBe('red')
   expect((await textOf(band, '$3.34'))?.props.color).toBe('yellow')
   expect(rowText(await band.drawn())).toBe('Cache-Guard  Cache expired · Tokens 109K (61%) · Miss cost $3.34   Handoff')
+})
+
+test('an expired cache under the floor reads not held in yellow, with the floor status.py reported', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  // the floor is whatever status.py read from CACHE_GUARD_MIN_TOKENS, never a number of the band's own
+  engine(on, { status: status({ last_turn_at: NOW - 30 * 60_000, context_tokens: 62_000, min_tokens: 75_000 }) })
+  await started($)
+  await $.classic.SessionStart({ source: 'resume', transcript_path: '/t/s.jsonl', cwd: '/w', session_id: 's' } as never)
+  const band = await mountBand($)
+  await clock.advance(31 * 60_000)
+  expect((await textOf(band, 'Cache expired'))?.props.color).toBe('yellow')
+  expect((await textOf(band, ' (under 75K, not held)'))?.props.color).toBe('yellow')
+  expect((await textOf(band, '$3.34'))?.props.color).toBe('yellow')
+  expect(rowText(await band.drawn())).toBe('Cache-Guard  Cache expired (under 75K, not held) · Tokens 62K (61%) · Miss cost $3.34   Handoff')
+})
+
+test('a context at the floor is held, so its expired cache stays red; with no floor reported it stays red too', () => {
+  const expired = (over: Record<string, unknown>) =>
+    bandSegments({ status: status({ last_turn_at: NOW - 3600_000, ...over }) } as never, {}, NOW).find(seg => seg.key === 'cache')
+  expect(expired({ context_tokens: 100_000, min_tokens: 100_000 })).toEqual({ key: 'cache', value: 'Cache expired', hue: 'red' })
+  expect(expired({ context_tokens: 99_999, min_tokens: 100_000 })?.after).toBe(' (under 100K, not held)')
+  expect(expired({ context_tokens: 62_000, min_tokens: null })?.hue).toBe('red')
 })
 
 test('there is no Compact button and no [?] legend', async ($, on) => {

@@ -1,7 +1,9 @@
 import type { Register } from 'claude-code'
 
 // The band above the prompt: what is left of the prompt cache, how big the context is, and what a miss
-// would cost.
+// would cost. An expired cache is red only when the guard will hold the next message: under the floor it
+// reads (CACHE_GUARD_MIN_TOKENS, reported by status.py), the guard lets a cold message through, and the
+// band says so in yellow with that floor, so red always means the next message will be held.
 // Every figure about the cache comes from status.py, which reads the transcript with the guard's own
 // functions; it runs when a turn completes or a session starts, never while drawing. Between turns the
 // band only counts down from the last reading, on a 30-second tick.
@@ -15,6 +17,7 @@ type Status = {
   last_turn_at: number | null
   lifetime_s: number | null
   context_tokens: number | null
+  min_tokens: number | null // the guard's floor: a smaller cold context is let through
   cold_usd: number | null
   warm_usd: number | null
 }
@@ -95,7 +98,11 @@ export function bandSegments(s: State, usage: Usage5, now: number): Segment[] {
         hue: cacheHue(left, s.status.lifetime_s * 1000),
       })
     } else {
-      out.push({ key: 'cache', value: 'Cache expired', hue: 'red' })
+      const floor = s.status.min_tokens
+      const under = floor != null && s.status.context_tokens != null && s.status.context_tokens < floor
+      out.push(under
+        ? { key: 'cache', value: 'Cache expired', after: ` (under ${tokens(floor)}, not held)`, hue: 'yellow' }
+        : { key: 'cache', value: 'Cache expired', hue: 'red' })
     }
   }
   if (s.status?.context_tokens) {

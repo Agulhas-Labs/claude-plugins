@@ -39,6 +39,7 @@ class StatusTest(unittest.TestCase):
         self.assertAlmostEqual(out["warm_usd"], 0.1)   # 200k at $0.50 cache read
         self.assertAlmostEqual(out["agents_usd"], 1.0)  # 1M Haiku input at $1
         self.assertEqual(out["agents_unpriced"], 1)
+        self.assertEqual(out["min_tokens"], 100_000)  # the guard's default floor, with no setting
         self.assertFalse(out["disabled"])
 
     def test_no_transcript_is_no_reading(self):
@@ -46,6 +47,11 @@ class StatusTest(unittest.TestCase):
         self.assertIsNone(out["last_turn_at"])
         self.assertIsNone(out["agents_usd"])
         self.assertTrue(out["disabled"])
+
+    def test_the_floor_is_the_setting_the_guard_reads(self):
+        # the band shows the floor that decides a hold, so it is read the way the guard reads it
+        self.assertEqual(run({}, CACHE_GUARD_MIN_TOKENS="75000")["min_tokens"], 75_000)
+        self.assertEqual(run({}, CACHE_GUARD_MIN_TOKENS="banana")["min_tokens"], 100_000)  # a bad value is the default
 
 
 SESSION = "0b6f2c1e-4a7d-4c3b-9e21-5f8a7d6c4b3a"

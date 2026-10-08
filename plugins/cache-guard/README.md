@@ -140,7 +140,7 @@ Cache-Guard  Cache 25 mins left · Tokens 109K (7%) · Miss cost $3.34   [ Hando
 
 | Figure | Means | Colour |
 | --- | --- | --- |
-| `Cache 25 mins left` | Minutes before the prompt cache expires, counted down from the last answer and the lifetime the session is buying. `Cache expired` once it has gone. | Green with half the lifetime or more left, yellow down to a tenth, red below that or expired. |
+| `Cache 25 mins left` | Minutes before the prompt cache expires, counted down from the last answer and the lifetime the session is buying. `Cache expired` once it has gone, and `Cache expired (under 100K, not held)` when the context is smaller than `CACHE_GUARD_MIN_TOKENS`: the next message pays the miss, but the guard lets it through. | Green with half the lifetime or more left, yellow down to a tenth, red below that. Expired is red when the next message will be held and yellow when it will not. |
 | `Tokens 109K (7%)` | The size of the context the next message re-sends, and the share of the model's window it fills when Claude Code has a reading. | The share is green below 60%, yellow below 80%, red at 80% or more. |
 | `Miss cost $3.34` | What the next message costs if the cache has expired: the whole context written back at list price. Left out when `CACHE_GUARD_SHOW_COST=0`. | Yellow once the cache has expired, plain before. |
 
