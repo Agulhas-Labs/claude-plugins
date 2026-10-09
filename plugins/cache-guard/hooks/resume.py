@@ -12,6 +12,7 @@ same functions.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -24,7 +25,10 @@ import session_start  # noqa: E402
 GIT_TIMEOUT_SECONDS = 3
 SUMMARY_CAP = 140
 REQUESTS_HEADING = "## What was asked"
-GOAL_HEADING = "## Goal"
+# "## Goal" at any heading level, with an optional number ("## 1. Goal"), or a bold label ("**Goal**", "**Goal:**").
+HEADING_LINE = re.compile(r"^#{1,6}[ \t]")  # "#21 fix" is an issue reference, not a heading
+GOAL_HEADING = re.compile(r"^(?:#{1,6}[ \t]+(?:\d+[.)][ \t]*)?Goal[ \t]*:?|\*\*Goal:?\*\*:?)[ \t]*$", re.IGNORECASE)
+BULLET = re.compile(r"^\s*[-*+][ \t]+")
 
 
 def clip(text):
@@ -33,13 +37,20 @@ def clip(text):
 
 
 def first_line_under(lines, heading):
-    """The first non-empty line of the section `heading` opens, or None."""
-    if heading in lines:
-        for line in lines[lines.index(heading) + 1:]:
-            if line.startswith("## "):
-                break
-            if line.strip():
-                return line
+    """The first non-empty line of the section `heading` opens, or None.
+
+    `heading` is the exact heading line, or a compiled pattern a heading line matches. A section ends at the next
+    heading of any level.
+    """
+    opens = heading.match if isinstance(heading, re.Pattern) else heading.__eq__
+    for index, line in enumerate(lines):
+        if opens(line):
+            for following in lines[index + 1:]:
+                if HEADING_LINE.match(following):
+                    break
+                if following.strip():
+                    return following
+            return None
     return None
 
 
@@ -54,7 +65,7 @@ def summary_line(document):
             break
     goal = first_line_under(lines, GOAL_HEADING)
     if goal:
-        return clip(goal)
+        return clip(BULLET.sub("", goal))
     request = first_line_under(lines, REQUESTS_HEADING)
     if request:
         return clip(request.split(". ", 1)[1] if request[:1].isdigit() and ". " in request else request)

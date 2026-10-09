@@ -73,6 +73,23 @@ class ModelCeilingTests(unittest.TestCase):
                        "tool_input": {"prompt": "p", "subagent_type": other}}
             self.assertIsNone(ceiling.decision(payload, ENV), other)
 
+    def test_a_rung_naming_a_subdirectory_of_agents_is_refused_by_the_basename_guard(self):
+        # A rung that escapes the leading-dot check, such as x/../builder, passes through a directory that
+        # does not exist, so the lookup fails without the guard. Here the subdirectory exists and holds a
+        # rung definition: only the guard stands between the call and that file's pin.
+        root = os.path.join(self.root, "plugin")
+        os.makedirs(os.path.join(root, ".claude-plugin"))
+        os.makedirs(os.path.join(root, "agents", "sub"))
+        with open(os.path.join(root, ".claude-plugin", "plugin.json"), "w", encoding="utf-8") as f:
+            json.dump({"name": NAME}, f)
+        for rung in ("builder", os.path.join("sub", "builder")):
+            with open(os.path.join(root, "agents", f"{rung}.md"), "w", encoding="utf-8") as f:
+                f.write("---\nname: builder\nmodel: opus\n---\nBuild it.\n")
+        self.session(SONNET)
+        env = {"CLAUDE_PLUGIN_ROOT": root}
+        self.assertEqual(self.call("builder", env=env)["hookSpecificOutput"]["updatedInput"]["model"], "sonnet")
+        self.assertIsNone(self.call("sub/builder", env=env))
+
     def test_the_off_switch_leaves_every_call_alone(self):
         self.session(SONNET)
         self.assertIsNone(self.call(env=dict(ENV, DELEGATE_MODEL_CEILING="0")))

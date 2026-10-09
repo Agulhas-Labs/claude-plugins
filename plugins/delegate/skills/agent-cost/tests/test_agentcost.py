@@ -139,6 +139,15 @@ class PricingTests(unittest.TestCase):
         spend = sorted(t["ie"] for l in loaded for t in l.window_turns)
         self.assertEqual([round(x) for x in spend], [25_000, 100_000])
 
+    def test_a_loaded_turn_on_opus_5_5_is_priced_with_a_twentieth_read_weight(self):
+        fx = FixtureRoot(self)
+        u = usage(input_tokens=0, cache_read=1_000_000, cache_creation=0)
+        fx.main_session(session="o55", entries=[assistant("m1", ts_str(BASE), u, model="claude-opus-5-5")])
+        fx.main_session(session="o5", entries=[assistant("m2", ts_str(BASE), u, model="claude-opus-5")])
+        loaded = ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
+        spend = sorted(t["ie"] for l in loaded for t in l.window_turns)
+        self.assertEqual([round(x) for x in spend], [50_000, 100_000])
+
     def test_a_cold_rewrite_on_fable_5_1_is_measured_against_its_cheaper_warm_read(self):
         u = usage(input_tokens=0, cache_read=0, cache_creation=100_000,
                   split={"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 100_000})
@@ -220,6 +229,25 @@ class SinceParsingTests(unittest.TestCase):
 
     def test_n_days(self):
         self.assertEqual(ac.parse_when("3d", self.now), self.now - timedelta(days=3))
+
+    def test_n_hours_and_minutes(self):
+        self.assertEqual(ac.parse_when("4h", self.now), self.now - timedelta(hours=4))
+        self.assertEqual(ac.parse_when("30m", self.now), self.now - timedelta(minutes=30))
+
+    def test_a_bad_unit_is_one_argparse_error_line_not_a_traceback(self):
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit) as cm:
+            ac.main(["--since", "4x"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertEqual(len([l for l in err.getvalue().splitlines() if "error:" in l]), 1)
+        self.assertNotIn("Traceback", err.getvalue())
+
+    def test_a_count_past_the_calendar_is_one_argparse_error_line_too(self):
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit) as cm:
+            ac.main(["--since", "1000000d"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertNotIn("Traceback", err.getvalue())
 
     def test_date_is_local_midnight(self):
         self.assertEqual(ac.parse_when("2026-09-10", self.now), datetime(2026, 9, 10, 0, 0, 0, tzinfo=self.tz))
@@ -1558,13 +1586,37 @@ class SpendByTypeTests(unittest.TestCase):
         rows, order = self._rows(loaded)
         # builder 659,999 input-eq, main 500,000, reviewer 50,000: sorted by input-eq, then the total
         self.assertEqual(order, ["builder", "main", "reviewer", "total"])
-        # columns: contexts, median turns, median peak, input-eq, share, output, >=150k, >=200k
-        self.assertEqual(rows["builder"], ["3", "1", "200k", "660k", "54.5%", "4", "3", "1"])
-        self.assertEqual(rows["main"], ["1", "3", "200k", "500k", "41.3%", "3", "1", "1"])
-        self.assertEqual(rows["reviewer"], ["1", "1", "50k", "50k", "4.1%", "1", "0", "0"])
-        self.assertEqual(rows["total"], ["5", "1", "200k", "1.2M", "100.0%", "8", "4", "2"])
+        # columns: contexts, median turns, median peak, input-eq, share, avg/ctx, output, >=150k, >=200k
+        self.assertEqual(rows["builder"], ["3", "1", "200k", "660k", "54.5%", "220k", "4", "3", "1"])
+        self.assertEqual(rows["main"], ["1", "3", "200k", "500k", "41.3%", "500k", "3", "1", "1"])
+        self.assertEqual(rows["reviewer"], ["1", "1", "50k", "50k", "4.1%", "50k", "1", "0", "0"])
+        self.assertEqual(rows["total"], ["5", "1", "200k", "1.2M", "100.0%", "242k", "8", "4", "2"])
         shares = sum(float(rows[name][4].rstrip("%")) for name in ("builder", "main", "reviewer"))
         self.assertAlmostEqual(shares, 100.0, delta=0.15)
+
+    def test_header_names_the_avg_per_context_column(self):
+        out = []
+        ac.section_spend_by_type(out, [typed_loaded("subagent", "builder", [100_000], "b1")])
+        self.assertIn("avg/ctx", out[1].split())
+
+    def test_a_subagent_typed_main_or_total_gets_its_own_row(self):
+        loaded = [
+            typed_loaded("subagent", "x:main", [70_000], "s1"),
+            typed_loaded("subagent", "total", [30_000], "s2"),
+            typed_loaded("main", "main", [100_000, 100_000], "m1"),
+        ]
+        rows, order = self._rows(loaded)
+        self.assertEqual(order, ["main", "subagent:main", "subagent:total", "total"])
+        self.assertEqual(rows["main"][0], "1")           # one context: the orchestrator's own
+        self.assertEqual(rows["main"][3], "200k")
+        self.assertEqual(rows["subagent:main"][0], "1")
+        self.assertEqual(rows["subagent:main"][3], "70k")
+        self.assertEqual(rows["total"][0], "3")
+
+    def test_equal_input_equivalent_rows_sort_by_name(self):
+        loaded = [typed_loaded("subagent", name, [40_000], name) for name in ("zeta", "alpha", "mid")]
+        _, order = self._rows(loaded)
+        self.assertEqual(order, ["alpha", "mid", "zeta", "total"])
 
     def _fixture(self):
         fx = FixtureRoot(self)
@@ -1679,12 +1731,12 @@ def rule_tree(case):
 SECTIONS_BEFORE_SCORECARD = {
     'spend-by-type': (
         '=== Spend by agent type ===\n'
-        '  type                 contexts med turns  med peak  input-eq  share    output  >=150k  >=200k\n'
-        '  builder                     1         5      205k      486k  75.6%        50       1       1\n'
-        '  reviewer                    2         2       20k       80k  12.4%        40       0       0\n'
-        '  mechanic                   10         1        6k       67k  10.4%       100       0       0\n'
-        '  main                        1         3        7k       10k   1.5%        30       0       0\n'
-        '  total                      14         1        8k      642k 100.0%       220       1       1\n'
+        '  type                 contexts med turns  med peak  input-eq  share  avg/ctx    output  >=150k  >=200k\n'
+        '  builder                     1         5      205k      486k  75.6%     486k        50       1       1\n'
+        '  reviewer                    2         2       20k       80k  12.4%      40k        40       0       0\n'
+        '  mechanic                   10         1        6k       67k  10.4%       7k       100       0       0\n'
+        '  main                        1         3        7k       10k   1.5%      10k        30       0       0\n'
+        '  total                      14         1        8k      642k 100.0%      46k       220       1       1\n'
         '\n'
         'harness versions in this window: 2.1.272\n'
         'note: input-eq is a price comparison against the uncached input rate, not a token count.'
@@ -1829,6 +1881,26 @@ class RuleScorecardTests(unittest.TestCase):
                 ("It should fail before the fix.", "unclassified")):
             with self.subTest(report=report[-60:]):
                 self.assertEqual(ac.reviewer_verdict(report), verdict)
+
+    def test_a_verdict_label_with_a_parenthetical_or_a_leading_word_is_classified_from_its_line(self):
+        # the rest of the report reads as a different verdict, so the whole-report fallback gets it wrong
+        draft = "\nAn earlier draft said merge-ready after the named fix."
+        for text in ("Verdict (A): fail" + draft, "Final verdict: fail" + draft,
+                     "**Final verdict** - fail" + draft):
+            with self.subTest(text=text):
+                self.assertEqual(ac.reviewer_verdict(text), "fail")
+        self.assertEqual(ac.reviewer_verdict("Final verdict: pass\nThe other path is not ready to merge."), "pass")
+
+    def test_a_parent_that_switched_model_before_the_first_turn_is_read_at_the_later_model(self):
+        parent = typed_loaded("main", "main", [1000, 1000, 1000], "m")
+        sub = typed_loaded("subagent", "builder", [1000], "s")
+        for i, (model, secs) in enumerate((("claude-sonnet-5", 0), ("claude-opus-5", 5), ("claude-sonnet-5", 30))):
+            parent.ctx.turns[i]["model"] = model
+            parent.ctx.turns[i]["ts"] = BASE + timedelta(seconds=secs)
+        sub.ctx.turns[0]["ts"] = BASE + timedelta(seconds=10)
+        sub.ctx.turns[0]["model"] = "claude-opus-5"   # above the parent's first model, not its model at this turn
+        judged, above = ac.above_ceiling([parent, sub])
+        self.assertEqual((len(judged), len(above)), (1, 0))
 
     def test_a_subagent_is_judged_against_the_model_its_parent_used_at_its_first_turn(self):
         # (parent model before, after the subagent's first turn; the subagent's model; above?)

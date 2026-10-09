@@ -34,7 +34,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 FREEZE = 120_000
 HAND_BACK = 150_000
@@ -137,9 +137,12 @@ def waited(stamp, now):
     """Seconds since an ISO transcript timestamp, or None if it is missing or unreadable."""
     try:
         # Python before 3.11 reads no trailing "Z", which is how transcripts write UTC.
-        return now - datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+        issued = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
     except (AttributeError, TypeError, ValueError):
         return None
+    if issued.tzinfo is None:  # a stamp with no zone is UTC, as transcripts write it, not local time
+        issued = issued.replace(tzinfo=timezone.utc)
+    return now - issued.timestamp()
 
 
 def cold(seconds, size):

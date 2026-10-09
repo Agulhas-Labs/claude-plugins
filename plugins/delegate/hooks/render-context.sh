@@ -5,6 +5,8 @@
 #
 # With no argument it renders ${CLAUDE_PLUGIN_ROOT}/context/orchestrator.md: the hook command names
 # this script alone, as the plugin directory's validator requires.
+# render-context-continued.sh runs it on context/orchestrator-continued.md, the conventions' second
+# part: one hook command's stdout is capped at 10,000 characters.
 #
 # One setting so far. DELEGATE_MAX_CONCURRENT_AGENTS, the number of subagents the main session
 # runs at a time, replaces {{MAX_AGENTS}}. It is read from the environment (set it under "env" in

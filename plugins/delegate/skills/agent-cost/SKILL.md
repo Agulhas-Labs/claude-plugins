@@ -1,11 +1,12 @@
 ---
 name: agent-cost
 description: >-
-  Report where Claude Code token spend goes, for main sessions and subagents separately — totals,
-  spend by agent type, per-day trend, the costliest projects and sessions, concentration, turn shape, cold cache, what fills
-  the context, the fixed start every context pays, and whether the plugin's rules are holding. Use when asked where tokens/usage went, why
-  Claude Code usage or cost is high, which session or project cost the most, how much a subagent or
-  agent type is spending, what a session or subagent starts with (instructions, deferred tools, skill listing), or to compare spend before/after a change.
+  Report where Claude Code token spend goes, for main sessions and subagents separately — totals, spend by
+  agent type, per-day trend, the costliest projects and sessions, concentration, turn shape, cold cache,
+  what fills the context, the fixed start every context pays, and whether the plugin's rules are holding.
+  Use when asked where tokens/usage went, why Claude Code usage or cost is high, which session or project
+  cost the most, how much a subagent or agent type is spending, what a session or subagent starts with
+  (instructions, deferred tools, skill listing), or to compare spend before/after a change.
 ---
 
 # agent-cost
@@ -23,7 +24,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/agent_cost.py" [--since X] [--until X] [--p
 - The script needs Python 3 and the standard library only; without `python3` the shell fails with exit 127.
   Where `python3` is missing or a placeholder (often on Windows), run the same line with `py` or `python`.
 
-- `--since`/`--until` accept `today`, `yesterday`, `<N>d`, `YYYY-MM-DD`, or an ISO datetime
+- `--since`/`--until` accept `today`, `yesterday`, `<N>d`, `<N>h`, `<N>m`, `YYYY-MM-DD`, or an ISO datetime
   (`2026-09-15T16:06`, local unless it carries `Z`/an offset). Default: last 7 days.
 - To compare spend **before/after a change**, run it twice with `--since`/`--until` datetimes that
   bracket each side of the change (e.g. the commit time), not two separate loose windows.
@@ -58,10 +59,11 @@ spend is all in their own sessions.
 
 - **Totals** (`/ by model`) — the top-line number, main and subagent each on its own row.
 - **Spend by agent type** — one row per agent type (plugin prefix dropped, so a renamed plugin's types
-  line up) and `main`: contexts, median turns and peak context, input-eq and its share, output, and how
-  many contexts peaked at 150k or 200k and over. **Action**: a rung whose average cost per context is
-  close to the rung above it is not a cheaper rung; a rung with a handful of uses is one the
-  orchestrator does not reach for.
+  line up) and `main`: contexts, median turns and peak context, input-eq, its share and the average per
+  context (`avg/ctx`), output, and how many contexts peaked at 150k or 200k and over. **Action**: a rung
+  whose average cost per context (`avg/ctx`) is close to the rung above it is not a cheaper rung; a rung
+  with a handful of uses is one the orchestrator does not reach for.
+  A subagent typed `main` or `total` gets its own `subagent:` row.
 - **Per day** — trend, with each day's main and subagent spend. A rising top-10% share or rising median
   turns over days means contexts are running longer, not that more work is happening. A day with under
   ten contexts shows `-` for the top-10% share: there is no decile to take.
@@ -110,7 +112,9 @@ spend is all in their own sessions.
   say which MCP servers/connectors to disconnect for coding sessions; the skill listing likewise if it's
   large relative to what a session actually uses. All of it applies to a main session as much as to a
   subagent: the difference is that a subagent pays it again for every agent started.
-- **Rule scorecard** — one line per rule the `delegate` plugin states, with the metric that measures it in the window, the measured baseline where there is one (a target for the model ceiling), and `holds` or `not holding`.
+- **Rule scorecard** — one line per rule the `delegate` plugin states, with the metric that measures it in
+  the window, the measured baseline where there is one (a target for the model ceiling), and `holds` or
+  `not holding`.
 - **Largest contexts** — the worst individual offenders, for a closer look with `--transcript`.
 
 ## Caveats (the report states these too)

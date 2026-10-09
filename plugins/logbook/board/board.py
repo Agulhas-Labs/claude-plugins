@@ -128,6 +128,16 @@ RUNNER = (
     r")(?![\w.-])"
 )
 TEST_RUNNERS = re.compile(r"(?:^|[;&|(\n])\s*" + RUNNER)
+# A quoted string or an escaped character, where white space and `;`, `&`, `|`, `(` stop separating
+# words and commands: a runner named inside one (`echo "swift test; done"`) is text, not a command.
+QUOTED = re.compile(r"""'[^']*'|"(?:\\.|[^"\\])*"|\\.""", re.S)
+SEPARATING = re.compile(r"[\s;&|()]")
+# A quoted string handed to a shell (`sh -c "..."`) or to ssh (`ssh host "..."`) is itself a command.
+SHELL_STRING = re.compile(
+    r"""(?:^|[\s;&|(])(?:\S*/)?(?:(?:sh|bash|zsh|dash)(?:\s+-[A-Za-z]+)*\s+-[A-Za-z]*c"""
+    r"""|ssh(?:\s+-[A-Za-z]\S*(?:\s+\d+)?)*\s+[^\s'"-]\S*)\s+('[^']*'|"(?:\\.|[^"\\])*")""",
+    re.S,
+)
 # A `--` standing alone begins a command too: it is how a wrapper is told that the rest is the
 # command to run. Not after `git`, `echo` or `printf`, where what follows `--` is a path or text.
 WRAPPED_RUNNERS = re.compile(r"(?<=\s)--(?=\s)\s*" + RUNNER)
@@ -341,10 +351,20 @@ def test_pattern(env=None):
 
 
 def is_test(command, pattern=None):
-    """Whether a command is a test run: a common test runner, or a match for `pattern`."""
-    if TEST_RUNNERS.search(command) or (pattern is not None and pattern.search(command)):
+    """Whether a command is a test run: a common test runner, or a match for `pattern`.
+
+    The runners are looked for in the command with its quoted strings made single words; a quote left
+    open is read as written. `pattern` is literal text, so it is looked for in the command as written.
+    """
+    if pattern is not None and pattern.search(command):
         return True
-    return bool(WRAPPED_RUNNERS.search(command)) and not TAKES_NO_COMMAND.search(command)
+    for shell in SHELL_STRING.finditer(command):
+        if is_test(shell.group(1)[1:-1]):
+            return True
+    words = QUOTED.sub(lambda found: SEPARATING.sub("_", found.group(0)), command)
+    if TEST_RUNNERS.search(words):
+        return True
+    return bool(WRAPPED_RUNNERS.search(words)) and not TAKES_NO_COMMAND.search(words)
 
 
 def stuck_minutes(value):
@@ -676,7 +696,11 @@ class Derivation:
         return None
 
     def command_rows(self):
-        """One row per command in order of first run, the COMMAND_ROWS most recently run of them."""
+        """One row per command in order of first run, the COMMAND_ROWS most recently run of them.
+
+        `latestRun` numbers the row's latest run among every command run, from 1, in the order they
+        were applied: it orders two runs that were recorded in the same second.
+        """
         rows = list(self.commands.values())
         kept = {id(row) for row in sorted(rows, key=lambda row: row["latest"])[-COMMAND_ROWS:]}
         return [
@@ -684,6 +708,7 @@ class Derivation:
                 "command": row["command"], "description": row["description"], "result": row["result"],
                 "exit": row["exit"], "runs": row["runs"], "fails": row["fails"], "time": row["time"],
                 "ms": row["ms"], "test": is_test(row["command"], self.tests), "agents": row["agents"],
+                "latestRun": row["latest"],
             }
             for row in rows
             if id(row) in kept

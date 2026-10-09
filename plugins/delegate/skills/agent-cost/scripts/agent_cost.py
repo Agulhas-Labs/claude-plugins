@@ -41,7 +41,7 @@ COLD_LARGE_CONTEXT = 100_000    # the size bucket a prompt guard would warn abou
 # ---------------------------------------------------------------------------
 
 def parse_when(value, now):
-    """Parse --since/--until: today, yesterday, <N>d, YYYY-MM-DD (local midnight), or an ISO datetime
+    """Parse --since/--until: today, yesterday, <N>d, <N>h, <N>m, YYYY-MM-DD (local midnight), or an ISO datetime
     (local unless it carries Z/an offset). `now` is an aware local datetime used as the reference point
     and the fallback timezone for naive ISO datetimes."""
     v = value.strip()
@@ -51,9 +51,10 @@ def parse_when(value, now):
     if v == "yesterday":
         d = (now - timedelta(days=1)).date()
         return datetime(d.year, d.month, d.day).astimezone()
-    m = re.fullmatch(r"(\d+)d", v)
+    m = re.fullmatch(r"(\d+)([dhm])", v)
     if m:
-        return now - timedelta(days=int(m.group(1)))
+        unit = {"d": "days", "h": "hours", "m": "minutes"}[m.group(2)]
+        return now - timedelta(**{unit: int(m.group(1))})
     iso = v[:-1] + "+00:00" if v.endswith("Z") else v
     dt = datetime.fromisoformat(iso)
     if dt.tzinfo is None:
@@ -184,8 +185,10 @@ def classify(name, inp):
 
 CACHE_READ_WEIGHT = 0.1
 # Published cache-read price over published input price, where it is not a tenth. Matched against the
-# model id reduced to lowercase letters and digits, so a dated id still matches.
-CACHE_READ_WEIGHTS = (("fable51", 0.025),)
+# model id reduced to lowercase letters and digits, so a dated id still matches. Keep in step with
+# CACHE_READ_PRICES and INPUT_PRICES in the cache-guard plugin's hooks/cache_guard.py (Sonnet 5.5 and
+# Haiku 5.5 read at a tenth there too, so they take the default).
+CACHE_READ_WEIGHTS = (("fable51", 0.025), ("opus55", 0.05))
 
 
 def cache_read_weight(model):
@@ -635,8 +638,13 @@ def section_totals(out, loaded):
 
 def folded_type(l):
     """The row a context lands in: `main` for a main session, otherwise its agent type without the
-    plugin prefix, so `some-plugin:builder` and a renamed plugin's `builder` share one row."""
-    return "main" if l.ctx.kind == "main" else l.ctx.agent_type.rsplit(":", 1)[-1]
+    plugin prefix, so `some-plugin:builder` and a renamed plugin's `builder` share one row. A subagent
+    whose type folds to `main` or `total` is labelled `subagent:<type>`, so it never joins the orchestrator's
+    row or the total line."""
+    if l.ctx.kind == "main":
+        return "main"
+    name = l.ctx.agent_type.rsplit(":", 1)[-1]
+    return f"subagent:{name}" if name in ("main", "total") else name
 
 
 def window_peak(l):
@@ -655,7 +663,7 @@ def section_spend_by_type(out, loaded):
         return
     out.append("=== Spend by agent type ===")
     out.append(f"  {'type':20} {'contexts':>8} {'med turns':>9} {'med peak':>9} {'input-eq':>9} {'share':>6}"
-               f" {'output':>9} {'>=150k':>7} {'>=200k':>7}")
+               f" {'avg/ctx':>8} {'output':>9} {'>=150k':>7} {'>=200k':>7}")
 
     def row(name, group, total_ie):
         peaks = [window_peak(l) for l in group]
@@ -664,7 +672,7 @@ def section_spend_by_type(out, loaded):
         share = 100 * ie / total_ie if total_ie else 0
         med_turns = median(len(l.window_turns) for l in group)
         return ie, (f"  {name_tail(name, 20):20} {len(group):8} {med_turns:9.0f} {fmt_tok(median(peaks)):>9}"
-                    f" {fmt_tok(ie):>9} {share:5.1f}% {fmt_tok(outp):>9}"
+                    f" {fmt_tok(ie):>9} {share:5.1f}% {fmt_tok(ie / len(group)):>8} {fmt_tok(outp):>9}"
                     f" {sum(p >= 150_000 for p in peaks):7} {sum(p >= 200_000 for p in peaks):7}")
 
     every = [l for group in by_type.values() for l in group]
@@ -1204,11 +1212,13 @@ VERDICT_RULES = (
     ("pass after fixes", re.compile(r"pass(ed)? after|merge-ready after|mergeable after"
                                     r"|after (the|one|two|\d) (named )?fix"
                                     r"|(merge|publish|ship|ready) after (the |those |these )?(named )?fix")),
-    ("fail", re.compile(r"verdict\**\s*[:—–-]?\**\s*\**fail|not merge-ready|not mergeable|do not merge"
+    ("fail", re.compile(r"verdict\**(?:\s*\([^)\n]{0,20}\))?\s*[:—–-]?\**\s*\**fail|not merge-ready|not mergeable|do not merge"
                         r"|fix first|fix(es)? (is |are )?needed before|not ready (to|for) merge|blocks? (the )?merge")),
-    ("pass", re.compile(r"verdict\**\s*[:—–-]?\**\s*\**pass|merge-ready|mergeable|ready to merge")),
+    ("pass", re.compile(r"verdict\**(?:\s*\([^)\n]{0,20}\))?\s*[:—–-]?\**\s*\**pass|merge-ready|mergeable|ready to merge")),
 )
-VERDICT_LINE = re.compile(r"(?im)^(\W*verdict\W*[:\u2014\u2013-]\s*.+)$")  # the whole line, label included
+# the whole line, label included; a word or two before the label ("Final verdict") and a short
+# parenthetical after it ("Verdict (A)") are still the label
+VERDICT_LINE = re.compile(r"(?im)^(\W*(?:\w+\W+){0,2}?verdict\**(?:\s*\([^)\n]{0,20}\))?\W*[:\u2014\u2013-]\s*.+)$")
 VERDICTS = tuple(name for name, _ in VERDICT_RULES) + ("unclassified",)
 
 
@@ -1455,8 +1465,9 @@ def main(argv=None):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")  # an ASCII-only terminal shows ? for the report's glyphs, not a crash
     p = argparse.ArgumentParser(prog="agent-cost", description=__doc__)
-    p.add_argument("--since", default="7d")
-    p.add_argument("--until", default=None)
+    when_help = "today, yesterday, <N>d, <N>h, <N>m, YYYY-MM-DD, or an ISO datetime"
+    p.add_argument("--since", default="7d", help=when_help + " (default: 7d)")
+    p.add_argument("--until", default=None, help=when_help)
     p.add_argument("--projects", default=default_projects_dir())
     p.add_argument("--project", default=None,
                    help="report on one project only: its path or the path's trailing part (e.g. App)")
@@ -1475,8 +1486,12 @@ def main(argv=None):
         p.error(str(e))
 
     now = datetime.now().astimezone()
-    since = parse_when(args.since, now)
-    until = parse_when(args.until, now) if args.until else now
+    try:
+        since = parse_when(args.since, now)
+        until = parse_when(args.until, now) if args.until else now
+    except (ValueError, OverflowError):  # OverflowError: a count of days past the calendar's range
+        p.error("--since/--until: not a time I can read; "
+                "use today, yesterday, <N>d, <N>h, <N>m, YYYY-MM-DD, or an ISO datetime")
 
     try:
         loaded = load_all(args.projects, args.transcript, since, until, project=args.project)

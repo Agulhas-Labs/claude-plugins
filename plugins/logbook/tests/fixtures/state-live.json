@@ -222,7 +222,8 @@
       "time": "2026-01-05T09:31:12Z",
       "ms": 38,
       "test": false,
-      "agents": []
+      "agents": [],
+      "latestRun": 3
     },
     {
       "command": "python3 -m pytest tests/test_export.py",
@@ -236,7 +237,8 @@
       "test": true,
       "agents": [
         "a7f3c2e19b04d5a86"
-      ]
+      ],
+      "latestRun": 5
     },
     {
       "command": "ruff check src",
@@ -248,7 +250,8 @@
       "time": "2026-01-05T09:40:02Z",
       "ms": 610,
       "test": false,
-      "agents": []
+      "agents": [],
+      "latestRun": 6
     },
     {
       "command": "python3 -m http.server 8000",
@@ -260,7 +263,8 @@
       "time": "2026-01-05T09:41:30Z",
       "ms": 12,
       "test": false,
-      "agents": []
+      "agents": [],
+      "latestRun": 7
     }
   ],
   "commandsTotal": 7,

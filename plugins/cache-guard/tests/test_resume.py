@@ -113,6 +113,26 @@ class ResumeTestCase(unittest.TestCase):
 
         self.assertEqual(self.run_script()["summary"], "Ship the resume band after a clear")
 
+    def goal_summary(self, goal_block):
+        self.make_repo()
+        self.write_handoff("h.md", "# Handoff\n\n" + goal_block + "\n\n## What was asked\n\n1. A request\n")
+        return self.run_script()["summary"]
+
+    def test_a_goal_heading_is_matched_at_any_level(self):
+        self.assertEqual(self.goal_summary("# Goal\n\nShip the band"), "Ship the band")
+
+    def test_a_numbered_goal_heading_is_matched(self):
+        self.assertEqual(self.goal_summary("## 1. Goal\n\nShip the band"), "Ship the band")
+
+    def test_a_bold_goal_label_is_matched(self):
+        self.assertEqual(self.goal_summary("**Goal**\n\nShip the band"), "Ship the band")
+
+    def test_a_bulleted_goal_loses_its_bullet(self):
+        self.assertEqual(self.goal_summary("## Goal\n\n- Ship the band"), "Ship the band")
+
+    def test_a_goal_starting_with_an_issue_reference_is_not_a_heading(self):
+        self.assertEqual(self.goal_summary("## Goal\n\n#21 make the band read any goal"), "#21 make the band read any goal")
+
     def test_prints_an_empty_object_without_a_handoff(self):
         self.make_repo()
 

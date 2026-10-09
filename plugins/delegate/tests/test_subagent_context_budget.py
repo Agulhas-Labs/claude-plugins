@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HOOK = os.path.join(os.path.dirname(__file__), "..", "hooks", "subagent-context-budget.py")
@@ -177,6 +178,19 @@ class BudgetTests(unittest.TestCase):
         self.assertNotIn("Cache expired", said)
         self.write(assistant("m1", 90_000, "t1"), assistant("m2", 114_000, "t2", timestamp="yesterday"))
         self.assertIsNone(self.advise("t2", now=ISSUED_AT + 60 * 60))
+
+    @unittest.skipUnless(hasattr(time, "tzset"), "the test moves the local zone with time.tzset, which Windows lacks")
+    def test_a_timestamp_with_no_zone_is_read_as_utc_not_local_time(self):
+        # A local zone ten hours ahead of UTC: read as local time, the stamp would be ten hours older.
+        saved = os.environ.get("TZ")
+        self.addCleanup(time.tzset)
+        self.addCleanup(lambda: os.environ.pop("TZ") if saved is None else os.environ.update(TZ=saved))
+        os.environ["TZ"] = "Etc/GMT-10"
+        time.tzset()
+        self.assertAlmostEqual(budget.waited(ISSUED[:-1], ISSUED_AT + 299), 299, places=3)
+        self.write(assistant("m1", 90_000, "t1"), assistant("m2", 114_000, "t2", timestamp=ISSUED[:-1]))
+        self.assertIsNone(self.advise("t2", now=ISSUED_AT + 299))
+        self.assertIn("returned 9 minutes after", self.advise("t2", now=ISSUED_AT + 9 * 60 + 30))
 
     def test_the_hook_reads_the_override_from_its_environment(self):
         self.write(assistant("m1", 90_000, "t1"), assistant("m2", 114_000, "t2", timestamp=ISSUED))

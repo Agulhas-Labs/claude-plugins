@@ -15,10 +15,11 @@ const handoffWritten = (daysAgo: number) => ({
 const props = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 80, scroll: {}, view: {} } as never
 const start = { cwd: '/work', surface: 'terminal', isInteractive: true } as never
 
-const world: { stdout?: string } = {}
+const world: { stdout?: string; gates?: Promise<void>[] } = {}
 
 const setup = (on: any, facts: unknown, stdout = JSON.stringify(facts), withBase = true) => {
   world.stdout = undefined
+  world.gates = undefined
   const clock = mock.clock(on, { now: NOW })
   const kept = new Map<string, unknown>() // the plugin's store, which outlives a session
   on('store.get', (_$: unknown, e: { key: string }) => ({ value: kept.get(e.key) }))
@@ -36,9 +37,12 @@ const setup = (on: any, facts: unknown, stdout = JSON.stringify(facts), withBase
   on('session.start', (_$: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('session.end', (_$: unknown, e: { sessionId: string }) => ({ sessionId: e.sessionId }))
   on('session.cwd', () => ({ value: '/work' }))
-  on('process.run', (_$: unknown, e: { argv: string[] }) => {
+  on('process.run', async (_$: unknown, e: { argv: string[] }) => {
     calls.push([...e.argv])
-    return { value: { exitCode: 0, stdout: world.stdout ?? stdout, stderr: '' } }
+    const answer = world.stdout ?? stdout // taken before the gate: a held run answers with what was current when it started
+    const gate = world.gates?.shift() // a test may hold a run open until it releases it
+    if (gate) await gate
+    return { value: { exitCode: 0, stdout: answer, stderr: '' } }
   })
   const fills: { text: string; mode?: string }[] = []
   on('prompt.fill', (_$: unknown, e: { text: string; mode?: string }) => {
@@ -230,5 +234,34 @@ test('a session.end for another reason neither runs the script nor brings the ba
   await end($, clock, 'prompt_input_exit')
 
   expect(calls).toHaveLength(1)
+  expect(await ui.find({ type: 'Text', text: /Previous session/ })).toBeUndefined()
+})
+
+test('the script does not run straight after session.end, only once the clock settles', async ($, on) => {
+  const { calls, clock } = setup(on, handoffWritten(1))
+  await $.session.start(start)
+  expect(calls).toHaveLength(1)
+
+  await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } } as never)
+  expect(calls).toHaveLength(1)
+
+  await clock.settle()
+  expect(calls).toHaveLength(2)
+})
+
+test('an answer taken before a /clear is dropped: the old handoff is not offered', async ($, on) => {
+  const { clock } = setup(on, handoffWritten(1))
+  let release: () => void = () => {}
+  world.gates = [new Promise<void>(resolve => { release = resolve })]
+  const starting = $.session.start(start) // the first run is held open
+  await clock.settle()
+
+  world.stdout = JSON.stringify({}) // the run after the /clear finds nothing
+  await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } } as never)
+  await clock.settle() // the new run completes first
+  release() // the old run now answers with the old handoff, after the new one is done
+  await starting
+
+  const ui = await mountBand($, 'terminal')
   expect(await ui.find({ type: 'Text', text: /Previous session/ })).toBeUndefined()
 })

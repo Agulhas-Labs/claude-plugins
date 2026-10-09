@@ -81,8 +81,9 @@ HANDOFF_REPLY = (
 class FakeClaude:
     """A `claude` that never starts: it records the stdin it was given and answers what a test chose."""
 
-    def __init__(self, stdout="", returncode=0, timeouts=0, on_reap=None):
+    def __init__(self, stdout="", returncode=0, timeouts=0, on_reap=None, stderr=""):
         self.stdout = stdout
+        self.stderr = stderr
         self.returncode = returncode
         self.timeouts = timeouts
         self.on_reap = on_reap  # what the call that reaps a killed process does, when it does not return
@@ -97,7 +98,7 @@ class FakeClaude:
         if self.timeouts:
             self.timeouts -= 1
             raise subprocess.TimeoutExpired(cmd="claude", timeout=timeout)
-        return self.stdout, ""
+        return self.stdout, self.stderr
 
     def kill(self):
         self.killed = True
@@ -747,6 +748,10 @@ class SummariseTests(HandoffTestCase):
         self.summarise_with(FakeClaude(stdout="## Goal\n\nx\n\n## NEXT STEP\n\ny\n\n# Current state\n\nz\n"))
         self.assertIn("Summary written by haiku.", self.read(self.out_path))
 
+    def test_a_failed_run_puts_the_last_stderr_line_in_the_failure(self):
+        self.summarise_with(FakeClaude(returncode=1, stderr="warming up\nError: Input must be provided\n\n"))
+        self.assertIn("Summary failed (claude exited 1: Error: Input must be provided);", self.read(self.out_path))
+
     def test_a_summariser_that_fails_leaves_the_extracted_handoff_saying_so(self):
         self.summarise_with(FakeClaude(returncode=1))
         document = self.read(self.out_path)
@@ -1285,6 +1290,12 @@ class StateDirectoryTests(unittest.TestCase):
                                              {"CACHE_GUARD_STATE_DIR": link})
             launch.assert_not_called()
             self.assertEqual(os.listdir(victim), [])
+
+    def test_the_summariser_pipes_are_utf8_not_the_locale(self):
+        with mock.patch.object(handoff.subprocess, "Popen") as popen:
+            handoff.open_claude(["claude", "-p"])
+        self.assertEqual(popen.call_args.kwargs["encoding"], "utf-8")
+        self.assertEqual(popen.call_args.kwargs["errors"], "replace")
 
     def test_the_summariser_runs_from_the_temporary_directory_not_the_project(self):
         with mock.patch.object(handoff.subprocess, "Popen") as popen:

@@ -10,6 +10,10 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/render-context.sh\""
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/render-context-continued.sh\""
           }
         ]
       }

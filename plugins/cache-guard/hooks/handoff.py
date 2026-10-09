@@ -116,6 +116,8 @@ def open_claude(argv):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",  # not the locale's: Windows' cp1252 cannot encode an emoji in the transcript
+        errors="replace",
         **extra,
     )
 
@@ -135,10 +137,10 @@ def kill_tree(process):
 
 
 def run_claude(argv, text, timeout):
-    """(exit status, stdout). Raises TimeoutExpired, with nothing of the run left behind."""
+    """(exit status, stdout, last line of stderr). Raises TimeoutExpired, with nothing of the run left behind."""
     process = open_claude(argv)
     try:
-        out, _ = process.communicate(text, timeout=timeout)
+        out, err = process.communicate(text, timeout=timeout)
     except subprocess.TimeoutExpired:
         kill_tree(process)
         try:  # reaping a killed process still waits on its pipes, and a grandchild may hold them
@@ -146,7 +148,8 @@ def run_claude(argv, text, timeout):
         except Exception:
             pass
         raise
-    return process.returncode, out
+    lines = [line.strip() for line in (err or "").splitlines() if line.strip()]
+    return process.returncode, out, lines[-1][:200] if lines else ""
 
 
 # --- reading the transcript -------------------------------------------------------------------------
@@ -568,10 +571,10 @@ def summarise(out_path, model):
         document = f.read()
     summary, failure = "", None
     try:
-        returncode, stdout = run_claude(summariser_argv(model), framed(condensed), SUMMARY_TIMEOUT)
+        returncode, stdout, stderr_line = run_claude(summariser_argv(model), framed(condensed), SUMMARY_TIMEOUT)
         summary = (stdout or "").strip()
         if returncode != 0:
-            failure = f"claude exited {returncode}"
+            failure = f"claude exited {returncode}" + (f": {stderr_line}" if stderr_line else "")
         elif not summary:
             failure = "the summariser returned nothing"
         elif not is_a_handoff(summary):

@@ -447,13 +447,23 @@ class Derived(unittest.TestCase):
         )
         self.assertEqual(state["commands"], [
             {"command": "make build", "description": "Build again", "result": "fail", "exit": 1, "runs": 3,
-             "fails": 2, "time": at(4), "ms": 30, "test": False, "agents": ["agent-1"]},
+             "fails": 2, "time": at(4), "ms": 30, "test": False, "agents": ["agent-1"], "latestRun": 4},
             {"command": "ls", "description": None, "result": "pass", "exit": None, "runs": 1, "fails": 0,
-             "time": at(2), "ms": None, "test": False, "agents": []},
+             "time": at(2), "ms": None, "test": False, "agents": [], "latestRun": 2},
             {"command": "sleep 9", "description": None, "result": "background", "exit": None, "runs": 1,
-             "fails": 0, "time": at(5), "ms": None, "test": False, "agents": []},
+             "fails": 0, "time": at(5), "ms": None, "test": False, "agents": [], "latestRun": 5},
         ])
         self.assertEqual(state["commandsTotal"], 5)
+
+    def test_runs_in_the_same_second_are_ordered_by_when_they_were_applied(self):
+        state = self.derive(
+            self.command(1, "pytest", "pass"),
+            self.command(1, "pytest -k quoting", "fail", exit=1),
+            self.command(1, "pytest"),
+            self.command(0, "swift test", "fail", early=True),
+        )
+        order = {row["command"]: row["latestRun"] for row in state["commands"]}
+        self.assertEqual(order, {"swift test": 1, "pytest -k quoting": 3, "pytest": 4})
 
     def test_the_rows_are_capped_at_the_most_recently_run_and_the_total_is_not(self):
         texts = [f"echo {n}" for n in range(board.COMMAND_ROWS + 5)]
@@ -484,6 +494,15 @@ class Derived(unittest.TestCase):
         state = self.derive(*(self.command(1, text) for text in near))
         self.assertEqual([row["command"] for row in state["commands"] if row["test"]], [])
 
+    def test_git_is_found_after_the_common_command_prefixes(self):
+        for command in ("if git commit -q; then", "command git commit", "nohup git commit", "timeout 30 git commit",
+                        "sudo -u x git commit", "env -i git commit", "while git commit; do"):
+            with self.subTest(command=command):
+                self.assertTrue(board_hook.NAMES_GIT.search(command))
+        for command in ("cat .git/HEAD", "git-lfs pull"):
+            with self.subTest(command=command):
+                self.assertFalse(board_hook.NAMES_GIT.search(command))
+
     def test_a_runner_named_as_an_argument_is_not_a_test(self):
         named = [
             "pip install pytest", "brew install tox", "which jest", "grep -r pytest .", "echo swift test",
@@ -491,6 +510,31 @@ class Derived(unittest.TestCase):
         ]
         state = self.derive(*(self.command(1, text) for text in named))
         self.assertEqual([row["command"] for row in state["commands"] if row["test"]], [])
+
+    def test_a_runner_inside_a_quoted_string_is_not_a_test(self):
+        quoted = [
+            'echo "swift test; done"', "echo 'x | pytest -q'", 'git commit -m "fix (make test)"',
+            "printf '%s\\n' 'a && go test'", 'echo "a \\" ; cargo test"', "echo a\\;\\ pytest",
+            "wrap run '-- swift test'",
+        ]
+        state = self.derive(*(self.command(1, text) for text in quoted))
+        self.assertEqual([row["command"] for row in state["commands"] if row["test"]], [])
+        real = ['echo "done" && swift test', "echo 'x' | pytest -q", "make build; npm test",
+                "xcodebuild -scheme App -destination 'platform=iOS Simulator,name=Phone' test",
+                'echo "unbalanced && swift test']
+        state = self.derive(*(self.command(1, text) for text in real))
+        self.assertEqual([row["command"] for row in state["commands"] if not row["test"]], [])
+
+    def test_a_runner_in_the_string_handed_to_a_shell_or_ssh_is_a_test(self):
+        wrapped = ['bash -c "cd pkg && swift test"', "ssh host 'cd repo && make test'",
+                   'docker run img sh -c "npm test"', "ssh -p 22 host 'pytest -q'"]
+        for command in wrapped:
+            with self.subTest(command=command):
+                self.assertTrue(board.is_test(command))
+        for command in ('echo "swift test; done"', 'git commit -m "swift test fixed"',
+                        'sh -c "echo swift test"', "ssh host 'cat notes'"):
+            with self.subTest(command=command):
+                self.assertFalse(board.is_test(command))
 
     def test_a_runner_a_wrapper_is_handed_after_two_dashes_is_a_test(self):
         wrapped = [

@@ -103,7 +103,14 @@ COMMIT_LINE = re.compile(
     r"^\[(?:detached HEAD|(?P<branch>[^\s\[\]]+))(?: \(root-commit\))? (?P<hash>[0-9a-f]{7,40})\](?:[ \r]|$)",
     re.MULTILINE,
 )
-NAMES_GIT = re.compile(r"\bgit\b")
+# A command that runs git: `git` as the command word, where a command can begin (the start, or after
+# `;`, `&`, `|`, `(` or a new line), past variable assignments, `sudo` and the like, and a path to it.
+# Text that only contains the word (`cat .git/HEAD`, `git-lfs pull`) does not run git.
+NAMES_GIT = re.compile(
+    r"(?:^|[;&|(\n])\s*(?:(?:[A-Za-z_][A-Za-z0-9_]*=\S*|sudo(?:\s+-u\s+\S+)?|time|env(?:\s+-i)?|exec|nice|then|do|else|if|while|"
+    r"command|nohup|timeout(?:\s+[0-9.]+[smhd]?)?|!)\s+)*"
+    r"(?:[\w.~/-]*/)?git(?![\w.-])"
+)
 
 CONTEXT = (
     "A logbook is recording this task at {page}. Record what only you know, one shell call each, "
@@ -433,7 +440,7 @@ def transcript_events(call, entry, block, env):
 
 def commit_events(command, result, failed=False):
     """A `commit` for each line in a command's output in the form git prints after it makes a commit,
-    when the command names `git` as a word: its hash, and its branch unless the HEAD was detached.
+    when the command runs `git` (`NAMES_GIT`): its hash, and its branch unless the HEAD was detached.
 
     `result` is what the command left: the response of one that passed, whose `stdout` is read, or
     the error text of one that failed. A command can make its commit and fail afterwards (the push
