@@ -39,9 +39,10 @@ const setup = (on: any, facts: unknown, stdout = JSON.stringify(facts), withBase
   on('session.cwd', () => ({ value: '/work' }))
   on('process.run', async (_$: unknown, e: { argv: string[] }) => {
     calls.push([...e.argv])
+    const answer = world.stdout ?? stdout // taken before the gate: a held run answers with what was current when it started
     const gate = world.gates?.shift() // a test may hold a run open until it releases it
     if (gate) await gate
-    return { value: { exitCode: 0, stdout: world.stdout ?? stdout, stderr: '' } }
+    return { value: { exitCode: 0, stdout: answer, stderr: '' } }
   })
   const fills: { text: string; mode?: string }[] = []
   on('prompt.fill', (_$: unknown, e: { text: string; mode?: string }) => {
@@ -257,9 +258,9 @@ test('an answer taken before a /clear is dropped: the old handoff is not offered
 
   world.stdout = JSON.stringify({}) // the run after the /clear finds nothing
   await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } } as never)
-  release() // the old run now answers with the old handoff
+  await clock.settle() // the new run completes first
+  release() // the old run now answers with the old handoff, after the new one is done
   await starting
-  await clock.settle()
 
   const ui = await mountBand($, 'terminal')
   expect(await ui.find({ type: 'Text', text: /Previous session/ })).toBeUndefined()

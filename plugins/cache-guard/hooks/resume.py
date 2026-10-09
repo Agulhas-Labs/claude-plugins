@@ -26,6 +26,7 @@ GIT_TIMEOUT_SECONDS = 3
 SUMMARY_CAP = 140
 REQUESTS_HEADING = "## What was asked"
 # "## Goal" at any heading level, with an optional number ("## 1. Goal"), or a bold label ("**Goal**", "**Goal:**").
+HEADING_LINE = re.compile(r"^#{1,6}[ \t]")  # "#21 fix" is an issue reference, not a heading
 GOAL_HEADING = re.compile(r"^(?:#{1,6}[ \t]+(?:\d+[.)][ \t]*)?Goal[ \t]*:?|\*\*Goal:?\*\*:?)[ \t]*$", re.IGNORECASE)
 BULLET = re.compile(r"^\s*[-*+][ \t]+")
 
@@ -45,7 +46,7 @@ def first_line_under(lines, heading):
     for index, line in enumerate(lines):
         if opens(line):
             for following in lines[index + 1:]:
-                if following.startswith("#"):
+                if HEADING_LINE.match(following):
                     break
                 if following.strip():
                     return following
