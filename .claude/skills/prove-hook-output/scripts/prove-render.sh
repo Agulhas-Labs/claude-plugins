@@ -12,13 +12,19 @@ set -eu
 plugin=
 pattern=
 seconds=18
+settle=8
 workdir=$(pwd)
 envs=""
 prompt=""
+# One input per line, sent in order after --prompt.
+sends=""
+newline='
+'
 
 usage() {
     cat >&2 <<'USAGE'
-usage: prove-render.sh --plugin <dir> --grep <text> [--env K=V]... [--seconds N] [--cwd <dir>] [--prompt <text>]
+usage: prove-render.sh --plugin <dir> --grep <text> [--env K=V]... [--seconds N] [--settle N] [--cwd <dir>]
+                       [--prompt <text>] [--send <text>]...
 
   --plugin   the plugin working copy to load (the directory holding .claude-plugin/plugin.json)
   --grep     a distinctive phrase from the message that should reach the terminal
@@ -28,6 +34,10 @@ usage: prove-render.sh --plugin <dir> --grep <text> [--env K=V]... [--seconds N]
   --cwd      where to run, which must be a directory already trusted (default: the current one)
   --prompt   a message to send once the session is up, for output that only appears after a turn;
              it runs on the session's model (haiku), so keep it to one short line
+  --send     a further input, typed and entered after --prompt and any earlier --send; repeatable.
+             A slash command works (--send /clear), and so does a second prompt.
+  --settle   seconds to wait before each input: for the session to start, before the first, and for
+             the previous one to finish, before each after it (default 8)
 USAGE
     exit 2
 }
@@ -40,6 +50,10 @@ while [ $# -gt 0 ]; do
         --seconds) seconds=${2:?}; shift 2 ;;
         --cwd)     workdir=${2:?}; shift 2 ;;
         --prompt)  prompt=${2:?}; shift 2 ;;
+        --send)    case ${2:?} in *"$newline"*)
+                       echo "prove-render.sh: --send takes one line" >&2; exit 2 ;; esac
+                   sends="$sends$2$newline"; shift 2 ;;
+        --settle)  settle=${2:?}; shift 2 ;;
         -h|--help) usage ;;
         *)         echo "prove-render.sh: unknown argument $1" >&2; usage ;;
     esac
@@ -52,24 +66,70 @@ command -v expect >/dev/null 2>&1 || {
     echo "prove-render.sh: expect is not installed, and there is no PTY proof without it" >&2; exit 2; }
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/prove-render.XXXXXX")
-# The probe session saves a transcript (see CLAUDE_CODE_CHILD_SESSION below). It gets an id of its
-# own, so the one file it wrote, and the folder of the same name if it made one, can be removed by
-# that exact id when the run ends.
+# The probe session saves a transcript (see CLAUDE_CODE_CHILD_SESSION below) under an id of its own.
+# A /clear inside it starts a second session under a new id, which nothing outside the process is
+# told: the debug log does not name it. So every transcript folder is listed before the run, and
+# afterwards each .jsonl that is new and is the probe's is removed by exact path, with the folder of
+# the same name. A new transcript is the probe's if it is named by the probe's id or names that id
+# inside: measured on Claude Code 2.1.295, a session started by /clear records the process's first
+# id on its entries. Any other new transcript in the probe's folder may be a session running beside
+# it in the same directory, so it is reported and left alone. The project folder goes only if the
+# run made it and it is now empty. Nothing is matched by pattern, and nothing older is touched.
 session=$(python3 -c 'import uuid; print(uuid.uuid4())')
-forget_session() {
-    python3 - "$session" <<'PY'
-import glob, os, shutil, sys
-session = sys.argv[1]
+transcripts() {
+    python3 - "$1" "$session" "$scratch/before.json" <<'PY'
+import json, os, shutil, sys
+step, session, saved = sys.argv[1:]
 config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
-for path in glob.glob(os.path.join(glob.escape(config), "projects", "*", session + ".jsonl")):
-    os.remove(path)
-    folder = path[: -len(".jsonl")]
-    if os.path.isdir(folder) and not os.path.islink(folder):
-        shutil.rmtree(folder)
+projects = os.path.join(config, "projects")
+
+def listing():
+    found = {}
+    if os.path.isdir(projects):
+        for entry in os.scandir(projects):
+            if entry.is_dir(follow_symlinks=False):
+                found[entry.name] = sorted(f for f in os.listdir(entry.path) if f.endswith(".jsonl"))
+    return found
+
+if step == "before":
+    with open(saved, "w", encoding="utf-8") as f:
+        json.dump(listing(), f)
+    sys.exit(0)
+try:
+    with open(saved, encoding="utf-8") as f:
+        before = json.load(f)
+except OSError:
+    sys.exit(0)  # the probe never started
+marker = session.encode()
+for folder, names in listing().items():
+    path = os.path.join(projects, folder)
+    new = [n for n in names if n not in before.get(folder, [])]
+    ours = []
+    for name in new:
+        if name == session + ".jsonl":
+            ours.append(name)
+        else:
+            with open(os.path.join(path, name), "rb") as f:
+                if marker in f.read():
+                    ours.append(name)
+    for name in ours:
+        transcript = os.path.join(path, name)
+        os.remove(transcript)
+        print(f"prove-render.sh: removed the probe's transcript {transcript}")
+        alongside = transcript[: -len(".jsonl")]
+        if os.path.isdir(alongside) and not os.path.islink(alongside):
+            shutil.rmtree(alongside)
+    if ours:
+        for name in new:
+            if name not in ours:
+                print(f"prove-render.sh: left {os.path.join(path, name)}: new during the run, but it "
+                      "does not name the probe's session, so it may be another session's", file=sys.stderr)
+    if folder not in before and not os.listdir(path):
+        os.rmdir(path)
 PY
 }
 # Everything else this script creates lives under $scratch and goes with it, however the run ends.
-trap 'forget_session; rm -rf "$scratch"' EXIT INT TERM
+trap 'transcripts after; rm -rf "$scratch"' EXIT INT TERM
 
 name="prove-render-$$"
 cp -R "$plugin" "$scratch/$name"
@@ -112,6 +172,12 @@ set timeout [expr {$env(RUN_SECONDS) + 60}]
 cd $env(RUN_CWD)
 # The TUI writes cursor-moves between words, so screen patterns are unreliable: run, quit, read the
 # log afterwards instead of matching on what appears.
+# Wait by reading, never by sleeping: the session blocks writing to a terminal nobody reads, so
+# behind a plain sleep it froze until the quit and took no input in the meantime.
+proc settle {seconds} {
+    set timeout $seconds
+    expect eof {} timeout {}
+}
 set extra [lsearch -all -inline -not -exact [split [string trim $env(RUN_ENVS)]] ""]
 # A session started from inside another Claude Code session inherits CLAUDE_CODE_CHILD_SESSION, which
 # turns transcript saving off: anything that reads the transcript then shows nothing, and the proof
@@ -119,14 +185,21 @@ set extra [lsearch -all -inline -not -exact [split [string trim $env(RUN_ENVS)]]
 eval spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION $extra claude --model haiku \
     --plugin-dir $env(RUN_PLUGIN) --settings $env(RUN_SETTINGS) --debug-file $env(RUN_DEBUG) \
     --session-id $env(RUN_SESSION)
-if {$env(RUN_PROMPT) ne ""} {
-    sleep 8
-    send -- $env(RUN_PROMPT); sleep 1; send "\r"
+# The prompt, then each --send, in order: wait for the session to settle, type it, press Enter.
+# A session that ends early makes the next send fail; the catch moves on to the cleanup below.
+set inputs [split $env(RUN_SENDS) "\n"]
+if {$env(RUN_PROMPT) ne ""} { set inputs [linsert $inputs 0 $env(RUN_PROMPT)] }
+catch {
+    foreach input $inputs {
+        if {$input eq ""} continue
+        settle $env(RUN_SETTLE)
+        send -- $input; settle 1; send "\r"
+    }
+    settle $env(RUN_SECONDS)
+    send "\x03"; settle 1; send "\x03"; settle 2
+    set timeout 10
+    expect eof
 }
-sleep $env(RUN_SECONDS)
-send "\x03"; sleep 1; send "\x03"; sleep 2
-set timeout 10
-expect eof
 # Two Ctrl-Cs do not always end the session, so close its terminal (a hangup), then wait for the
 # process itself: it keeps writing its debug log after the terminal closes, and removed before it
 # exits, the scratch folder is made again.
@@ -134,8 +207,9 @@ catch close
 catch wait
 EXPECT
 
+transcripts before
 RUN_CWD="$workdir" RUN_PLUGIN="$scratch/$name" RUN_ENVS="$envs" RUN_SECONDS="$seconds" \
-    RUN_PROMPT="$prompt" RUN_SESSION="$session" RUN_SETTINGS="$scratch/settings.json" RUN_DEBUG="$debug" \
+    RUN_PROMPT="$prompt" RUN_SENDS="$sends" RUN_SETTLE="$settle" RUN_SESSION="$session" RUN_SETTINGS="$scratch/settings.json" RUN_DEBUG="$debug" \
     expect -f "$scratch/drive.exp" > "$log" 2>&1 || true
 
 echo "=== rendered to the person (ANSI stripped) ==="

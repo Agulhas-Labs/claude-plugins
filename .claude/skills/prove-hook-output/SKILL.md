@@ -64,8 +64,16 @@ the hooks modules the session loaded, from its debug log, so you can see whose c
 Claude Code sets `CLAUDE_CODE_CHILD_SESSION` in the environment of everything it runs, and a
 `claude` started with it set saves no transcript. Anything that reads the transcript (a band that
 shows token counts, a handoff) then shows nothing, and the proof fails for a reason that has nothing
-to do with the hook. The script unsets it, gives the probe its own `--session-id`, and removes that
-one transcript when it ends.
+to do with the hook. The script unsets it and gives the probe its own `--session-id`.
+
+A `/clear` inside the probe starts a second session under a new id, and the debug log does not name
+it. So the script lists the transcript folders before the run and, when it ends, removes by exact
+path every new transcript that is the probe's: the one named by its id, and any other that names
+that id inside (measured on Claude Code 2.1.295, a session started by `/clear` records the process's
+first id on its entries). It removes the project folder too if the run made it and it is now empty.
+A new transcript in the same folder that does not name the probe's id may belong to a session
+running beside it in the same directory, so the script reports it and leaves it; nothing older than
+the run is touched.
 
 ## The PTY proof
 
@@ -74,11 +82,19 @@ one transcript when it ends.
   --plugin plugins/<name> \
   --grep '<a distinctive phrase from the message>' \
   --env SOME_PLUGIN_VAR=/tmp/somewhere \
-  --prompt 'reply with the single word ok'   # only when the output appears after a turn
+  --prompt 'reply with the single word ok' \
+  --send /clear
 ```
 
-It copies the plugin under a scratch name, starts Claude Code under `expect` in a PTY, waits, quits
-with Ctrl-C, and then reports three things from the captured session:
+Give `--prompt` only when the output appears after a turn, and `--send` only when it appears after a
+further input. `--send` is repeatable and applied in order after `--prompt`, each typed and entered after a settle
+wait (`--settle`, default 8 seconds, which is also the wait for the session to start before the
+first input). A slash command works, so does a second prompt: `--send /clear --send 'reply with
+the single word yes'` proves what shows in the session that `/clear` starts.
+
+It copies the plugin under a scratch name, starts Claude Code under `expect` in a PTY, sends the
+inputs, waits, quits with Ctrl-C, removes the transcripts the run wrote, and then reports three
+things from the captured session:
 
 - whether the phrase appears in the ANSI-stripped output — the message was **rendered**;
 - every OSC escape sequence the terminal received — a `terminalSequence` was **emitted**;
@@ -87,10 +103,11 @@ with Ctrl-C, and then reports three things from the captured session:
 Read what it prints. A missing phrase with a clean exit means the hook ran and the person saw
 nothing, which is exactly the bug this skill exists to catch.
 
-### Three things that will waste your time
+### Four things that will waste your time
 
-These cost three failed attempts the first time round. All three are avoided by the script, but you
-need to know them when you drive `expect` yourself.
+The first three cost three failed attempts the first time round; the fourth froze a probe until it
+was told to quit. All four are avoided by the script, but you need to know them when you drive
+`expect` yourself.
 
 - **A fresh directory triggers the trust dialog**, and the session stops there forever. Don't run
   from a temp directory. Run from a directory already trusted, and point the plugin's *output* 
@@ -100,6 +117,11 @@ need to know them when you drive `expect` yourself.
   matches — `"trust this folder"` matches nothing while `"trust"` matches. Don't pattern-match the
   screen at all: sleep, quit, and grep the captured log afterwards.
 - **`timeout(1)` is not on every machine.** Use the harness's own timeout, or `expect`'s.
+- **A session nobody reads from stops.** Claude Code blocks writing to a terminal whose output is not
+  being read, so an `expect` script that `sleep`s while it waits leaves the session frozen: measured
+  on Claude Code 2.1.295, its debug log went silent for the whole 40 seconds of sleeps and the
+  inputs typed meanwhile were never submitted. Wait with `expect` and a timeout, which reads as it
+  waits, never with `sleep`.
 
 ### Reading the log by hand
 
