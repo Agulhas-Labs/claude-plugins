@@ -19,8 +19,16 @@ prints `{}`. This never changes what the hooks do; it only reads, or starts a bo
 Without `--transcript` (the mod is told the session's id, not its transcript's path), the transcript is the one
 file named for the id under `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/*/`; an id that is not UUID-shaped, or
 no single match, starts the board untitled.
+
+In a project with next-session mode on, the line also carries `"briefNotUpdated": true` when a commit has landed
+since the session started and the brief has not been written since (`brief_not_updated`), board or no board.
+The session started at the first entry in its transcript that carries a time: the same file for the whole
+session, through a compaction or a resume, and a new one after a `/clear`, which is a new session. With the mode
+off, no transcript, or no repository, the key is left out; it costs one call to git, and only while the mode is
+on and the brief is older than the session.
 """
 import argparse
+from datetime import datetime
 import glob
 import json
 import os
@@ -74,6 +82,45 @@ def start_board(project, session, transcript, env):
     return board.start(project, session, board.clock(), board_hook.title_from(prompt), env, early=earlier) is not None
 
 
+# How far into a transcript to look for its first timed entry: the few untimed ones a host writes come first.
+TIMED_ENTRY_LINES = 50
+
+
+def session_started(transcript):
+    """When the session started, in seconds since the epoch: the first transcript entry with a `timestamp`, or None."""
+    if transcript is None:
+        return None
+    try:
+        with open(transcript, encoding="utf-8", errors="replace") as f:
+            for _, line in zip(range(TIMED_ENTRY_LINES), f):
+                try:
+                    stamp = json.loads(line).get("timestamp")
+                    return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+                except (ValueError, AttributeError, TypeError):
+                    continue
+    except OSError:
+        return None
+    return None
+
+
+def brief_not_updated(project, session, transcript, env):
+    """Whether next-session mode is on, HEAD's commit is newer than the session, and the brief is not."""
+    project = board.contained(os.path.abspath(env.get("CLAUDE_PROJECT_DIR") or project), env)
+    brief = board.next_session(project) if project is not None else None
+    if brief is None:
+        return False
+    started = session_started(transcript or find_transcript(session, env))
+    if started is None:
+        return False
+    try:
+        if os.stat(brief["path"]).st_mtime >= started:
+            return False
+    except OSError:
+        pass  # no brief yet
+    committed = (board.git(project, "log", "-1", "--format=%ct", "HEAD") or "").strip()
+    return committed.isdigit() and int(committed) > started
+
+
 def open_board(folder):
     """Open the board's page in the default browser. Returns whether the browser took it."""
     page = os.path.join(folder, board.BOARD_FILE)
@@ -96,6 +143,12 @@ def main(argv=None):
             found = dict(found, opened=bool(found) and open_board(found["board"]))
     except Exception:
         found = {}
+    if not args.open:
+        try:
+            if brief_not_updated(args.project, args.session, args.transcript, os.environ):
+                found = dict(found, briefNotUpdated=True)
+        except Exception:
+            pass
     print(json.dumps(found, separators=(",", ":")))
     return 0
 

@@ -122,6 +122,48 @@ test('parts with nothing to say are left out, and a finished board draws nothing
   expect(JSON.stringify(await (await mountBand($)).drawn())).not.toContain('Logbook')
 })
 
+test('a brief older than the latest commit is a yellow cue on the board\'s row, gone once the helper stops reporting it', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const world = { found: { ...live(board()), briefNotUpdated: true } as Record<string, unknown> }
+  engine(on, world)
+  await start($)
+  const band = await mountBand($)
+  expect(rowText(await band.drawn())).toBe('Logbook  next-session brief not updated   Logbook')
+  expect((await textOf(band, 'next-session brief not updated'))?.props.color).toBe('yellow')
+  expect((await textOf(band, 'next-session brief not updated'))?.props.bold).toBeFalsy()
+  world.found = live(board())
+  await turn($)
+  expect(rowText(await band.drawn())).toBe('Logbook  Logbook')
+})
+
+test('with no board running, the cue is a row of its own with no button, and a finished board still shows it', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const world = { found: { briefNotUpdated: true } as Record<string, unknown> }
+  engine(on, world)
+  await start($)
+  const band = await mountBand($)
+  expect(rowText(await band.drawn())).toBe('Logbook  next-session brief not updated')
+  expect(await band.find({ key: 'logbook-open' })).toBeUndefined()
+  world.found = { ...live(board({ state: 'finished' })), briefNotUpdated: true }
+  await turn($)
+  expect(rowText(await band.drawn())).toBe('Logbook  next-session brief not updated')
+  world.found = {}
+  await turn($)
+  expect(JSON.stringify(await band.drawn())).not.toContain('Logbook')
+})
+
+test('a /clear drops the old session\'s cue at once', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  const world: World = { id: SESSION, found: {}, bySession: { [SESSION]: { briefNotUpdated: true } } }
+  engine(on, world)
+  await submit($)
+  const band = await mountBand($)
+  expect(rowText(await band.drawn())).toBe('Logbook  next-session brief not updated')
+  await end($, 'clear')
+  world.id = 's2'
+  expect(JSON.stringify(await band.drawn())).not.toContain('Logbook')
+})
+
 test('drawing runs no process', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const seen = engine(on, { found: live(board({ questions: [question('Q1')] })) })

@@ -121,7 +121,9 @@ is, never what it says: Claude reads it only when you ask it to pick up or carry
 work is done, or you run `/logbook:logbook next`, Claude rewrites the brief whole for the session after:
 finished work and history are dropped, open questions from the board are carried forward, and it is never
 appended to. The setting lives in `.logbook/`, so it stays out of `git status`; the brief is an ordinary
-file you can commit or ignore.
+file you can commit or ignore. Once a commit has landed since the session started and the brief has not
+been written since, the band says "next-session brief not updated" at the end of each turn, with or
+without a logbook page, until the brief is written.
 
 ## How it works
 

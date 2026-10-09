@@ -8,6 +8,7 @@ captured work transcript and the real `gate.sh`: the board it starts must read t
 hooks' own start does, and must leave the model's context to the next hook.
 """
 import contextlib
+from datetime import datetime, timezone
 import io
 import json
 import os
@@ -261,6 +262,109 @@ class Opening(ModState):
         with mock.patch.object(mod_state.webbrowser, "open") as browser:
             self.run_in_process()
         browser.assert_not_called()
+
+
+class BriefCue(ModState):
+    """`briefNotUpdated`: next-session mode on, a commit since the session started, the brief not written since.
+
+    The project is a repository made here with every `GIT_*` variable gone; the session started at the first
+    timed entry of a transcript planted in the test's own config folder; commit times and the brief's mtime are
+    set either side of that start.
+    """
+
+    STARTED = 1_800_000_000  # the session's first timed entry, seconds since the epoch
+
+    def setUp(self):
+        super().setUp()
+        self.git("init", "-q")
+        git_dir = self.git("rev-parse", "--absolute-git-dir").strip()
+        self.assertTrue(os.path.realpath(git_dir).startswith(self.tmp + os.sep), git_dir)
+        self.env["CLAUDE_CONFIG_DIR"] = os.path.join(self.tmp, "config")
+        folder = os.path.join(self.env["CLAUDE_CONFIG_DIR"], "projects", "-p")
+        os.makedirs(folder)
+        started = datetime.fromtimestamp(self.STARTED, timezone.utc).isoformat(timespec="milliseconds")
+        with open(os.path.join(folder, SESSION + ".jsonl"), "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "mode", "sessionId": SESSION}) + "\n")  # a host's untimed first lines
+            f.write(json.dumps({"type": "user", "timestamp": started.replace("+00:00", "Z")}) + "\n")
+        self.brief = os.path.join(self.project, "NEXT_SESSION.md")
+
+    def git(self, *argv, env=None):
+        done = subprocess.run(["git", *argv], cwd=self.project, env=env or self.env, capture_output=True, check=True)
+        return done.stdout.decode("utf-8")
+
+    def mode_on(self):
+        env = dict(self.env, CLAUDE_CODE_SESSION_ID=SESSION)
+        subprocess.run([sys.executable, BOARD_PY, "next", "on", "--project", self.project], env=env, check=True, capture_output=True)
+
+    def commit(self, at):
+        with open(os.path.join(self.project, "work.txt"), "a", encoding="utf-8") as f:
+            f.write(f"{at}\n")
+        stamp = f"@{at} +0000"
+        env = dict(self.env, GIT_AUTHOR_DATE=stamp, GIT_COMMITTER_DATE=stamp, GIT_AUTHOR_NAME="t",
+                   GIT_AUTHOR_EMAIL="t@example.com", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+        self.git("add", "work.txt", env=env)
+        self.git("commit", "-q", "-m", "work", env=env)
+
+    def write_brief(self, at):
+        with open(self.brief, "w", encoding="utf-8") as f:
+            f.write("# Next\n")
+        os.utime(self.brief, (at, at))
+
+    def test_a_commit_since_the_start_and_no_brief_is_the_cue_with_no_board(self):
+        self.mode_on()
+        self.commit(self.STARTED + 60)
+        self.assertEqual(self.run_helper(), {"briefNotUpdated": True})
+
+    def test_a_brief_written_before_the_start_is_not_updated(self):
+        self.mode_on()
+        self.write_brief(self.STARTED - 60)
+        self.commit(self.STARTED + 60)
+        self.assertEqual(self.run_helper(), {"briefNotUpdated": True})
+
+    def test_the_cue_comes_with_a_running_boards_state(self):
+        self.mode_on()
+        self.commit(self.STARTED + 60)
+        self.start_by_hand()
+        found = self.run_helper()
+        self.assertEqual(found["board"], self.folder)
+        self.assertEqual(found["state"]["session"], SESSION)
+        self.assertIs(found["briefNotUpdated"], True)
+
+    def test_mode_off_is_silent(self):
+        self.commit(self.STARTED + 60)
+        self.assertEqual(self.run_helper(), {})
+
+    def test_no_commit_since_the_start_is_silent(self):
+        self.mode_on()
+        self.commit(self.STARTED - 60)
+        self.assertEqual(self.run_helper(), {})
+
+    def test_a_brief_written_since_the_start_is_silent(self):
+        self.mode_on()
+        self.commit(self.STARTED + 60)
+        self.write_brief(self.STARTED + 120)
+        self.assertEqual(self.run_helper(), {})
+
+    def test_no_transcript_for_the_session_is_silent(self):
+        self.mode_on()
+        self.commit(self.STARTED + 60)
+        self.assertEqual(self.run_helper(session="99999999-2222-4333-8444-555555555555"), {})
+
+    def test_a_project_with_no_commit_is_silent(self):
+        self.mode_on()
+        self.assertEqual(self.run_helper(), {})
+
+    def test_open_never_asks_git(self):
+        self.mode_on()
+        self.commit(self.STARTED + 60)
+        with mock.patch.object(mod_state.webbrowser, "open") as browser, \
+                mock.patch.object(board, "git", side_effect=AssertionError("git asked")) as asked:
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, self.env, clear=True), contextlib.redirect_stdout(out):
+                mod_state.main(["--project", self.project, "--session", SESSION, "--open"])
+        browser.assert_not_called()
+        asked.assert_not_called()
+        self.assertEqual(json.loads(out.getvalue()), {"opened": False})
 
 
 if __name__ == "__main__":
