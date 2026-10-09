@@ -47,6 +47,8 @@ const TICK_MS = 30_000
 const POLL_MS = 5_000
 const REFRESH_MIN_MS = 10_000 // a tool call re-reads the transcript at most this often
 const SPIN_MS = 120
+const SPIN_SLOW_AFTER_MS = 60_000
+const SPIN_SLOW_MS = 1_000
 export const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 const POLL_CAP_MS = 6 * 60_000 // the summariser is killed at five minutes; a minute's margin
 
@@ -161,10 +163,15 @@ export async function resetOnClear($, s: State) {
   }
 }
 
-function startSpinner($, s: State) {
-  s.spin ??= $.clock.every(SPIN_MS, () => {
+// Turns every SPIN_MS for the first minute, then once a second: a long summary still shows a turning glyph,
+// with a fraction of the redraws.
+function startSpinner($, s: State, ms = SPIN_MS) {
+  let seen = 0
+  s.spin?.cancel()
+  s.spin = $.clock.every(ms, () => {
     s.frame = (s.frame + 1) % SPINNER.length
     $.ui.invalidate('ui.render')
+    if (ms === SPIN_MS && ++seen >= SPIN_SLOW_AFTER_MS / SPIN_MS) startSpinner($, s, SPIN_SLOW_MS)
   })
 }
 
