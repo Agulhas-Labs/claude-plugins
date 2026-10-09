@@ -1,7 +1,7 @@
 {
   "name": "logbook",
   "displayName": "Logbook",
-  "version": "2.2.1",
+  "version": "2.3.0",
   "description": "Keeps a live local page for a long Claude Code task: what needs you, what was built, what was verified, and what was decided without you. Hooks record it without spending model tokens, the page follows light, dark or your system's setting, and when the task ends the same page is the report.",
   "author": {
     "name": "Agulhas Labs"
