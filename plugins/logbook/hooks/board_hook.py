@@ -107,7 +107,8 @@ COMMIT_LINE = re.compile(
 # `;`, `&`, `|`, `(` or a new line), past variable assignments, `sudo` and the like, and a path to it.
 # Text that only contains the word (`cat .git/HEAD`, `git-lfs pull`) does not run git.
 NAMES_GIT = re.compile(
-    r"(?:^|[;&|(\n])\s*(?:(?:[A-Za-z_][A-Za-z0-9_]*=\S*|sudo|time|env|exec|nice|then|do|else|!)\s+)*"
+    r"(?:^|[;&|(\n])\s*(?:(?:[A-Za-z_][A-Za-z0-9_]*=\S*|sudo(?:\s+-u\s+\S+)?|time|env(?:\s+-i)?|exec|nice|then|do|else|if|while|"
+    r"command|nohup|timeout(?:\s+[0-9.]+[smhd]?)?|!)\s+)*"
     r"(?:[\w.~/-]*/)?git(?![\w.-])"
 )
 

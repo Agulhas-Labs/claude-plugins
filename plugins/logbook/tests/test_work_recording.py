@@ -494,6 +494,15 @@ class Derived(unittest.TestCase):
         state = self.derive(*(self.command(1, text) for text in near))
         self.assertEqual([row["command"] for row in state["commands"] if row["test"]], [])
 
+    def test_git_is_found_after_the_common_command_prefixes(self):
+        for command in ("if git commit -q; then", "command git commit", "nohup git commit", "timeout 30 git commit",
+                        "sudo -u x git commit", "env -i git commit", "while git commit; do"):
+            with self.subTest(command=command):
+                self.assertTrue(board_hook.NAMES_GIT.search(command))
+        for command in ("cat .git/HEAD", "git-lfs pull"):
+            with self.subTest(command=command):
+                self.assertFalse(board_hook.NAMES_GIT.search(command))
+
     def test_a_runner_named_as_an_argument_is_not_a_test(self):
         named = [
             "pip install pytest", "brew install tox", "which jest", "grep -r pytest .", "echo swift test",
@@ -515,6 +524,17 @@ class Derived(unittest.TestCase):
                 'echo "unbalanced && swift test']
         state = self.derive(*(self.command(1, text) for text in real))
         self.assertEqual([row["command"] for row in state["commands"] if not row["test"]], [])
+
+    def test_a_runner_in_the_string_handed_to_a_shell_or_ssh_is_a_test(self):
+        wrapped = ['bash -c "cd pkg && swift test"', "ssh host 'cd repo && make test'",
+                   'docker run img sh -c "npm test"', "ssh -p 22 host 'pytest -q'"]
+        for command in wrapped:
+            with self.subTest(command=command):
+                self.assertTrue(board.is_test(command))
+        for command in ('echo "swift test; done"', 'git commit -m "swift test fixed"',
+                        'sh -c "echo swift test"', "ssh host 'cat notes'"):
+            with self.subTest(command=command):
+                self.assertFalse(board.is_test(command))
 
     def test_a_runner_a_wrapper_is_handed_after_two_dashes_is_a_test(self):
         wrapped = [
