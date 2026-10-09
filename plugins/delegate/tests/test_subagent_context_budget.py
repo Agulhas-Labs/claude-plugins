@@ -179,6 +179,7 @@ class BudgetTests(unittest.TestCase):
         self.write(assistant("m1", 90_000, "t1"), assistant("m2", 114_000, "t2", timestamp="yesterday"))
         self.assertIsNone(self.advise("t2", now=ISSUED_AT + 60 * 60))
 
+    @unittest.skipUnless(hasattr(time, "tzset"), "the test moves the local zone with time.tzset, which Windows lacks")
     def test_a_timestamp_with_no_zone_is_read_as_utc_not_local_time(self):
         # A local zone ten hours ahead of UTC: read as local time, the stamp would be ten hours older.
         saved = os.environ.get("TZ")
