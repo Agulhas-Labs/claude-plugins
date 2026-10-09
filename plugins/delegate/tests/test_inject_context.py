@@ -12,6 +12,9 @@ HOOK = os.path.join(ROOT, "hooks", "inject-context.sh")
 CONTEXT = os.path.join(ROOT, "context")
 SH = "/bin/sh"
 LIMIT = 10_000  # Claude Code's cap on one hook's additionalContext / a SessionStart cat's stdout
+# Every injected output stays this far under LIMIT: the room a new rule needs. A file that grows into it
+# is split at a section boundary into another file printed by its own SessionStart command.
+HEADROOM = 1_500
 RENDER = os.path.join(ROOT, "hooks", "render-context.sh")
 # The plugin directory's validator blocks a hook command that names more than one path or computes one:
 # each command is `sh` and one literal script under ${CLAUDE_PLUGIN_ROOT}/hooks/, nothing else.
@@ -76,16 +79,22 @@ class HookWiringTests(unittest.TestCase):
 
     def test_session_start_prints_the_engineering_conventions_and_renders_the_orchestrator_ones(self):
         commands = hook_commands("SessionStart")
-        self.assertEqual(len(commands), 2)
-        engineering, orchestrator = (run_hook(c) for c in commands)
+        self.assertEqual(len(commands), 3)
+        engineering, orchestrator, continued = (run_hook(c) for c in commands)
         self.assertEqual(engineering, read(os.path.join(CONTEXT, "engineering.md")))
-        self.assertIn("# Orchestrator conventions", orchestrator)
-        self.assertIn("At most 4 agents at a time", orchestrator)
+        self.assertTrue(orchestrator.startswith("# Orchestrator conventions\n"))
         self.assertIn("Your own model is the ceiling", orchestrator)
-        self.assertNotIn("{{", orchestrator)
+        self.assertTrue(continued.startswith("# Orchestrator conventions, continued\n"))
+        self.assertIn("At most 4 agents at a time", continued)
+        for part in (orchestrator, continued):
+            self.assertNotIn("{{", part)
+        # The two parts are cut at a section boundary: each section is printed once, by one of them.
+        sections = re.findall(r"^## .*$", orchestrator + continued, re.MULTILINE)
+        self.assertEqual(len(sections), len(set(sections)), sections)
+        self.assertGreaterEqual(len(sections), 6)
 
     def test_max_agents_setting_defaults_to_4_and_is_read_from_the_environment(self):
-        path = os.path.join(CONTEXT, "orchestrator.md")
+        path = os.path.join(CONTEXT, "orchestrator-continued.md")
         self.assertIn("At most 4 agents at a time", rendered(path))
         self.assertIn("At most 8 agents at a time", rendered(path, "8"))
         self.assertIn("At most 12 agents at a time", rendered(path, "12"))
@@ -120,11 +129,12 @@ class HookWiringTests(unittest.TestCase):
             self.assertEqual(hook_commands(event), [wrapper], event)
             self.assertEqual([entry.get("matcher") for entry in load_hooks()[event]], ["*"], event)
 
-    def test_every_injected_file_or_payload_fits_under_the_hook_context_cap(self):
+    def test_every_injected_file_or_payload_leaves_room_for_a_new_rule_under_the_hook_context_cap(self):
         for command in hook_commands("SessionStart"):
-            self.assertLess(len(run_hook(command)), LIMIT, command)
+            self.assertLessEqual(len(run_hook(command)), LIMIT - HEADROOM, command)
         for command in hook_commands("SubagentStart"):
-            self.assertLess(len(json.loads(run_hook(command))["hookSpecificOutput"]["additionalContext"]), LIMIT)
+            context = json.loads(run_hook(command))["hookSpecificOutput"]["additionalContext"]
+            self.assertLessEqual(len(context), LIMIT - HEADROOM, command)
 
 
 class JsonEscapingTests(unittest.TestCase):
