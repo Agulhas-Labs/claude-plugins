@@ -147,7 +147,7 @@ Cache-Guard  Cache 25 mins left · Tokens 109K (7%) · Miss cost $3.34   [ Hando
 The colour cut-offs are display choices, not measured values.
 
 `Handoff` (or `h` while the band has the focus) writes the same handoff as the word `handoff` and starts its
-background summary. The button reads `Writing handoff` with a turning spinner until the summary is in; then
+background summary. The button reads `Writing handoff` in yellow with a turning spinner until the summary is in; then
 a box above the band says the handoff is ready and `/clear` is safe, gives the file's path, and says how to
 pick it up: `/clear`, then press Resume above the prompt, or send `Read <path> and continue from it.`
 Dismiss closes the box, and so does `/clear`. It sends nothing to the session's model.
