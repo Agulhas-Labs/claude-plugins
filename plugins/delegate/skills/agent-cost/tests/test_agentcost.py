@@ -242,6 +242,13 @@ class SinceParsingTests(unittest.TestCase):
         self.assertEqual(len([l for l in err.getvalue().splitlines() if "error:" in l]), 1)
         self.assertNotIn("Traceback", err.getvalue())
 
+    def test_a_count_past_the_calendar_is_one_argparse_error_line_too(self):
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit) as cm:
+            ac.main(["--since", "1000000d"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertNotIn("Traceback", err.getvalue())
+
     def test_date_is_local_midnight(self):
         self.assertEqual(ac.parse_when("2026-09-10", self.now), datetime(2026, 9, 10, 0, 0, 0, tzinfo=self.tz))
 

@@ -1489,7 +1489,7 @@ def main(argv=None):
     try:
         since = parse_when(args.since, now)
         until = parse_when(args.until, now) if args.until else now
-    except ValueError:
+    except (ValueError, OverflowError):  # OverflowError: a count of days past the calendar's range
         p.error("--since/--until: not a time I can read; "
                 "use today, yesterday, <N>d, <N>h, <N>m, YYYY-MM-DD, or an ISO datetime")
 
