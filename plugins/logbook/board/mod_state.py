@@ -20,12 +20,13 @@ Without `--transcript` (the mod is told the session's id, not its transcript's p
 file named for the id under `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/*/`; an id that is not UUID-shaped, or
 no single match, starts the board untitled.
 
-In a project with next-session mode on, the line also carries `"briefNotUpdated": true` when a commit has landed
-since the session started and the brief has not been written since (`brief_not_updated`), board or no board.
-The session started at the first entry in its transcript that carries a time: the same file for the whole
-session, through a compaction or a resume, and a new one after a `/clear`, which is a new session. With the mode
-off, no transcript, or no repository, the key is left out; it costs one call to git, and only while the mode is
-on and the brief is older than the session.
+In a project with next-session mode on, the line also carries `"briefNotUpdated": true` when the newest commit
+landed after both the session's start and the brief's last write (`brief_not_updated`), board or no board; a
+brief not written yet is older than any commit. The session started at the first entry in its transcript that
+carries a time: the same file for the whole session, through a compaction or a resume, and a new one after a
+`/clear`, which is a new session. The newest commit is read from the end of the checkout's own reflog
+(`newest_commit`), so it starts no process. With the mode off, no transcript, no repository or no reflog, the key
+is left out.
 """
 import argparse
 from datetime import datetime
@@ -34,6 +35,7 @@ import json
 import os
 import pathlib
 import re
+import stat
 import sys
 import webbrowser
 
@@ -103,22 +105,97 @@ def session_started(transcript):
     return None
 
 
+# How much of a reflog's end is read: a few hundred entries, never the whole file.
+REFLOG_TAIL_BYTES = 32 * 1024
+# The reflog messages git writes when HEAD moves to a commit made or merged here: `commit: …` and `commit (amend|
+# initial|merge|cherry-pick): …`, `merge <name>: …` (a fast-forward too), `cherry-pick: …`, `revert: …`, `am: …`,
+# and a rebase finishing, `rebase (finish): …` (`rebase -i (finish): …` from older gits). A checkout, a reset, a
+# rebase's own start and steps, and a pull are not commits landing here.
+LANDED = re.compile(r"(?:commit(?: \([^)]*\))?|merge [^:]*|cherry-pick|revert|am|rebase(?: -i)? \(finish\)):")
+
+
+def read_regular(path, limit):
+    """The last `limit` bytes of `path` when it is a regular file, else None. Never blocks on a FIFO."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        end = os.lseek(fd, 0, os.SEEK_END)
+        os.lseek(fd, max(0, end - limit), os.SEEK_SET)
+        chunks, wanted = [], min(end, limit)
+        while wanted > 0:
+            chunk = os.read(fd, wanted)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            wanted -= len(chunk)
+        return b"".join(chunks)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def git_dir(project):
+    """The project's own git directory, found as git finds it from inside: the nearest `.git` above, a folder, or
+    a file naming one (a linked worktree's, a submodule's). None outside a repository."""
+    directory = os.path.realpath(project)
+    while True:
+        dot = os.path.join(directory, ".git")
+        if os.path.isdir(dot):
+            return dot
+        if os.path.isfile(dot):
+            pointer = (read_regular(dot, 4096) or b"").decode("utf-8", errors="replace").strip()
+            if not pointer.startswith("gitdir:"):
+                return None
+            return os.path.join(directory, pointer[len("gitdir:"):].strip())
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            return None
+        directory = parent
+
+
+def newest_commit(project):
+    """When HEAD last moved to a commit made or merged in this checkout, in seconds since the epoch, or None.
+
+    Read from the last entries of `<git dir>/logs/HEAD` whose message `LANDED` matches; none, or no reflog, is None.
+    """
+    found = git_dir(project)
+    tail = read_regular(os.path.join(found, "logs", "HEAD"), REFLOG_TAIL_BYTES) if found else None
+    if not tail:
+        return None
+    lines = tail.split(b"\n")
+    if len(tail) == REFLOG_TAIL_BYTES:
+        lines = lines[1:]  # the first may be cut
+    for line in reversed(lines):
+        head, tab, message = line.partition(b"\t")
+        if not tab or not LANDED.match(message.decode("utf-8", errors="replace")):
+            continue
+        stamp = head.rsplit(b" ", 2)  # `<old> <new> <name> <email> <seconds> <zone>`
+        if len(stamp) == 3 and stamp[1].isdigit():
+            return int(stamp[1])
+    return None
+
+
 def brief_not_updated(project, session, transcript, env):
-    """Whether next-session mode is on, HEAD's commit is newer than the session, and the brief is not."""
+    """Whether next-session mode is on and the newest commit is newer than both the session's start and the brief."""
     project = board.contained(os.path.abspath(env.get("CLAUDE_PROJECT_DIR") or project), env)
-    brief = board.next_session(project) if project is not None else None
+    brief = board.next_session(project, count_lines=False) if project is not None else None
     if brief is None:
         return False
     started = session_started(transcript or find_transcript(session, env))
     if started is None:
         return False
+    committed = newest_commit(project)
+    if committed is None or committed <= started:
+        return False
     try:
-        if os.stat(brief["path"]).st_mtime >= started:
-            return False
+        return committed > os.stat(brief["path"]).st_mtime
     except OSError:
-        pass  # no brief yet
-    committed = (board.git(project, "log", "-1", "--format=%ct", "HEAD") or "").strip()
-    return committed.isdigit() and int(committed) > started
+        return True  # no brief yet
 
 
 def open_board(folder):

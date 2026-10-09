@@ -201,6 +201,26 @@ class NextSession(Hooks):
             "deliverable: Export (out/export.json)\n"
         ), ""))
 
+    def test_facts_drop_a_failure_a_later_pass_fixed_and_keep_one_none_did(self):
+        self.assertEqual(self.cli("start", "Facts")[0], 0)
+        for argv in (
+            ("check", "the docs build", "--command", "make docs", "--result", "pass"),
+            ("check", "the export round-trips", "--command", "make test", "--result", "fail"),
+            ("check", "the lint is clean", "--command", "make lint", "--result", "fail"),
+            ("check", "the docs build", "--command", "make docs", "--result", "fail"),
+            ("check", "the schema migrates", "--command", "make migrate", "--result", "fail"),
+            ("check", "the export round-trips after the fix", "--command", "make  test", "--result", "pass"),
+            ("check", "the  schema migrates", "--command", "make migrate --dry-run", "--result", "pass"),
+            ("check", "the lint is clean", "--command", "make lint", "--result", "fail"),
+        ):
+            with self.subTest(argv=argv):
+                self.assertEqual(self.cli(*argv)[0], 0)
+        self.assertEqual(self.cli("next", "facts"), (0, (
+            "C3 failed: the lint is clean (command: make lint)\n"
+            "C4 failed: the docs build (command: make docs)\n"
+            "C8 failed: the lint is clean (command: make lint)\n"
+        ), ""))
+
     def test_facts_list_an_unanswered_question_with_its_default(self):
         self.cli("start", "Facts")
         self.cli("question", "Keep the old file?", "--default", "keep it")
