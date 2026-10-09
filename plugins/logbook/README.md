@@ -120,8 +120,9 @@ While it's on, each session start tells Claude where the brief is, when it was w
 is, never what it says: Claude reads it only when you ask it to pick up or carry on the work. When the
 work is done, or you run `/logbook:logbook next`, Claude rewrites the brief whole for the session after:
 finished work and history are dropped, open questions from the board are carried forward, and it is never
-appended to. The setting lives in `.logbook/`, so it stays out of `git status`; the brief is an ordinary
-file you can commit or ignore. Once a commit has landed since the session started and the brief has not
+appended to. The setting lives in `.logbook/` at the top of the repository (the main checkout, when you
+work in a git worktree), so every folder and worktree of the project sees the same one, and it stays out of
+`git status`; the brief is an ordinary file you can commit or ignore. Once a commit has landed since the session started and the brief has not
 been written since, the band says "next-session brief not updated" at the end of each turn, with or
 without a logbook page, until the brief is written.
 

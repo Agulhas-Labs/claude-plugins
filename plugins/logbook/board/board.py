@@ -35,9 +35,11 @@ recorded`. Without `--board`, the command finds the session's board from `CLAUDE
 walking up from the current directory.
 
 Next-session mode keeps one standing brief per project for whichever session picks the work up next:
-`next on [PATH]` writes the setting, `<project>/.logbook/next-session.json`, naming the brief relative
-to the project (`NEXT_SESSION.md` by default); `next off` removes it and leaves the brief alone. Each
-session that finishes work rewrites the brief whole; a session start names it and when it was written
+`next on [PATH]` writes the setting, `.logbook/next-session.json` in the repository's top (the main
+checkout's, from a linked worktree), naming the brief relative to that folder (`NEXT_SESSION.md` by
+default); `next off` removes it and leaves the brief alone. Every reader finds the same setting from the
+project's top, a folder under it or a linked worktree (`next_session_folders`). Each session that
+finishes work rewrites the brief whole; a session start names it and when it was written
 (`next_session_context`), never what it holds. `next_session(project)` is the setting as Python reads it.
 
 `<project>/.logbook/index.html` lists the boards, newest first. It is rebuilt from each board
@@ -1668,36 +1670,122 @@ def prune(project, now, env=None, keep=None):
 
 
 def brief_path(project, path):
-    """The real path of `path` (relative to `project`, or absolute) when it is a file path inside the project, else None."""
+    """The real path of `path` (relative to `project`, or absolute) when it is a file path inside the project
+    and outside its boards folder, else None."""
     project = os.path.realpath(project)
     resolved = os.path.realpath(os.path.join(project, path))
+    boards = os.path.join(project, BOARDS_DIR)
     try:
         inside = os.path.commonpath([resolved, project]) == project
+        in_boards = os.path.commonpath([resolved, boards]) == boards
     except ValueError:
         return None
-    if not inside or resolved == project or os.path.isdir(resolved):
+    if not inside or in_boards or resolved == project or os.path.isdir(resolved):
         return None
     return resolved
 
 
-def next_session(project):
-    """The project's next-session setting, or None when the mode is off or its setting cannot be used.
+def next_session_walk(start, env):
+    """(the folder holding a setting, the repository's top, the nearest folder with a boards folder, the
+    top of a linked worktree crossed), each None when the walk up from `start` found none.
+
+    The walk goes up one folder at a time while the folder is `contained`, and stops at the first folder
+    holding a setting or a `.git` folder (a repository's top, which is checked too). A `.git` file (a
+    linked worktree, or a submodule) does not stop it. Only stats: no process.
+    """
+    folder, boards, linked = contained(start, env), None, None
+    while folder is not None:
+        if os.path.lexists(os.path.join(folder, BOARDS_DIR, NEXT_SESSION_FILE)):
+            return folder, None, boards, linked
+        if boards is None and os.path.isdir(os.path.join(folder, BOARDS_DIR)):
+            boards = folder
+        dot_git = os.path.join(folder, ".git")
+        if os.path.isdir(dot_git):
+            return None, folder, boards, linked
+        if linked is None and os.path.isfile(dot_git):
+            linked = folder
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            break
+        folder = contained(parent, env)
+    return None, None, boards, linked
+
+
+def main_checkout(folder, env):
+    """The main checkout's top for a linked worktree at `folder`, from git (its variables cleared), or None."""
+    common = (git(folder, "rev-parse", "--path-format=absolute", "--git-common-dir") or "").strip()
+    if os.path.basename(common) != ".git":
+        return None  # a submodule, or a worktree of a bare repository: no main checkout
+    return contained(os.path.dirname(common), env)
+
+
+def next_session_folders(start, env=None):
+    """(the folder whose `.logbook/next-session.json` applies to `start`, or None; the folder `next on` writes to).
+
+    Every reader and `next on` resolve the setting this way, so they agree from the project's top, any
+    folder under it, and any linked worktree of its repository. The setting that applies is the nearest
+    one walking up from `start` (`next_session_walk`); failing that, when the walk crossed a linked
+    worktree and reached no repository's top, the one at the main checkout's top, from one call to git.
+    With none found, `next on` writes to the repository's top (the main checkout's, from a linked
+    worktree), else to the nearest folder up from `start` that has a boards folder, else to `start`.
+    """
+    env = os.environ if env is None else env
+    found, repository, boards, linked = next_session_walk(start, env)
+    if found is not None:
+        return found, found
+    if repository is None and linked is not None:
+        main = main_checkout(linked, env)
+        if main is not None:
+            found, repository, _, _ = next_session_walk(main, env)
+            if found is not None:
+                return found, found
+            repository = main
+        else:
+            repository = linked
+    return None, repository or boards or contained(start, env)
+
+
+def next_session_setting(start, env=None):
+    """(the setting file that applies to `start` or None, the brief's real path or None, why it cannot be used or None).
+
+    The setting is `{"path": "<relative to its folder>"}`. One in a linked boards folder, one that cannot
+    be read or does not parse, and one naming no file path inside its folder outside the boards folder
+    cannot be used.
+    """
+    folder, _ = next_session_folders(start, env)
+    if folder is None:
+        return None, None, None
+    boards = os.path.join(folder, BOARDS_DIR)
+    setting = os.path.join(boards, NEXT_SESSION_FILE)
+    if os.path.islink(boards):
+        return setting, None, "the boards folder is a link"
+    try:
+        value = json.loads(read_text(setting))
+    except OSError:
+        return setting, None, "it cannot be read"
+    except ValueError:
+        return setting, None, "it is not JSON"
+    relative = value.get("path") if isinstance(value, dict) else None
+    path = brief_path(folder, relative) if isinstance(relative, str) and relative else None
+    if path is None:
+        return setting, None, f"it names no file path inside {folder} outside its {BOARDS_DIR} folder"
+    return setting, path, None
+
+
+def next_session(project, env=None):
+    """The next-session setting that applies to `project`, or None when the mode is off or its setting cannot be used.
 
     On: `{"path": the brief's real path, "exists": bool, "written": utc time or None, "lines": int or None}`.
-    The setting is `<project>/.logbook/next-session.json`, `{"path": "<relative to the project>"}`; one in a
-    linked boards folder, one that does not parse, or one naming a path outside the project is no setting.
+    Which setting applies, and when one cannot be used: `next_session_setting`.
     """
-    boards = os.path.join(project, BOARDS_DIR)
-    if os.path.islink(boards):
-        return None
-    try:
-        setting = json.loads(read_text(os.path.join(boards, NEXT_SESSION_FILE)))
-    except (OSError, ValueError):
-        return None
-    relative = setting.get("path") if isinstance(setting, dict) else None
-    path = brief_path(project, relative) if isinstance(relative, str) and relative else None
+    _, path, _ = next_session_setting(project, env)
     if path is None:
         return None
+    return brief_facts(path)
+
+
+def brief_facts(path):
+    """What `next_session` says about the brief at `path`: whether it exists, when it was written, its length."""
     found = {"path": path, "exists": False, "written": None, "lines": None}
     try:
         written = os.stat(path).st_mtime
@@ -1934,40 +2022,58 @@ def brief_line(brief):
 
 
 def command_next_on(args, board, now):
-    """Turn next-session mode on for the project: the setting names the brief, relative to the project."""
-    project = project_of(args)
-    path = brief_path(project, args.path)
+    """Turn next-session mode on: the setting names the brief, relative to the folder that holds it.
+
+    That folder is where an existing setting is, else the repository's top (`next_session_folders`).
+    """
+    _, folder = next_session_folders(project_of(args))
+    path = brief_path(folder, args.path)
     if path is None:
-        raise Refused(f"{args.path} is not a file path inside the project {project}")
-    boards = os.path.join(project, BOARDS_DIR)
+        raise Refused(f"{args.path} is not a file path inside the project {folder}, outside its {BOARDS_DIR} folder")
+    boards = os.path.join(folder, BOARDS_DIR)
     if os.path.islink(boards):
         raise Refused(LINKED_BOARDS)
     if refused_boards(boards):
         raise Refused("the boards folder is not a folder, so nothing was recorded")
     os.makedirs(boards, exist_ok=True)
     ensure_ignored(boards)
-    write_atomic(os.path.join(boards, NEXT_SESSION_FILE), json.dumps({"path": os.path.relpath(path, project)}) + "\n")
-    return f"next-session mode on\n{brief_line(next_session(project))}"
+    write_atomic(os.path.join(boards, NEXT_SESSION_FILE), json.dumps({"path": os.path.relpath(path, folder)}) + "\n")
+    return f"next-session mode on\n{brief_line(brief_facts(path))}"
 
 
 def command_next_off(args, board, now):
-    """Turn next-session mode off: the setting goes, the brief is never touched."""
-    project = project_of(args)
-    boards = os.path.join(project, BOARDS_DIR)
+    """Turn next-session mode off: the setting goes, the brief is never touched.
+
+    A boards folder left holding only the `.gitignore` that `ensure_ignored` wrote goes too, file by file,
+    so a project that never had a board is left as it was before `next on`.
+    """
+    folder, _ = next_session_folders(project_of(args))
+    if folder is None:
+        return "next-session mode was already off"
+    boards = os.path.join(folder, BOARDS_DIR)
     if os.path.islink(boards):
         raise Refused(LINKED_BOARDS)
     try:
         os.unlink(os.path.join(boards, NEXT_SESSION_FILE))
     except FileNotFoundError:
         return "next-session mode was already off"
+    ignore = os.path.join(boards, ".gitignore")
+    try:
+        if os.listdir(boards) == [".gitignore"] and is_regular(ignore) and read_text(ignore) == "*\n":
+            os.unlink(ignore)
+            os.rmdir(boards)
+    except (OSError, ValueError):
+        pass  # a boards folder that changed meanwhile is left as it is
     return "next-session mode off; the brief was left as it is"
 
 
 def command_next_status(args, board, now):
-    brief = next_session(project_of(args))
-    if brief is None:
+    setting, path, problem = next_session_setting(project_of(args))
+    if problem is not None:
+        return f"next-session setting unreadable: {setting} ({problem})"
+    if path is None:
         return "next-session mode off"
-    return f"next-session mode on\n{brief_line(brief)}"
+    return f"next-session mode on\n{brief_line(brief_facts(path))}"
 
 
 def command_next_facts(args, board, now):
@@ -1985,7 +2091,8 @@ def parser():
     """The command line. Each sub-command sets `run` to its function, and `needs_board` when it works on one.
 
     `start`, `prune` and `next on|off|status` work on a project: `--project DIR`, else `CLAUDE_PROJECT_DIR`,
-    else the current directory. `render` is the hooks' and needs `--board`. The rest take `--board DIR`, and
+    else the current directory; `next` then finds its setting from there (`next_session_folders`). `render`
+    is the hooks' and needs `--board`. The rest take `--board DIR`, and
     without it find the session's board from the current directory; `next facts` prints nothing without one.
     """
     top = argparse.ArgumentParser(prog="board.py", description="Record and render a logbook.")
@@ -2042,7 +2149,7 @@ def parser():
     sub = commands.add_parser("next", help="next-session mode: one standing brief for the session that picks the work up")
     modes = sub.add_subparsers(dest="mode", metavar="MODE")
     modes.required = True
-    sub = modes.add_parser("on", help="turn the mode on; the brief's path is relative to the project")
+    sub = modes.add_parser("on", help="turn the mode on; the brief's path is relative to the folder holding the setting")
     sub.add_argument("path", nargs="?", default=DEFAULT_BRIEF, type=entry_text, help=f"default: {DEFAULT_BRIEF}")
     sub.add_argument("--project", help=project_help)
     sub.set_defaults(run=command_next_on, needs_board=False)
