@@ -251,6 +251,31 @@ def write_atomic(path, text, unless=None):
     return True
 
 
+def read_regular(path, limit):
+    """The last `limit` bytes of `path` when it is a regular file, else None. Never blocks on a FIFO."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        end = os.lseek(fd, 0, os.SEEK_END)
+        os.lseek(fd, max(0, end - limit), os.SEEK_SET)
+        chunks, wanted = [], min(end, limit)
+        while wanted > 0:
+            chunk = os.read(fd, wanted)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            wanted -= len(chunk)
+        return b"".join(chunks)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
 def read_text(path):
     with open(path, encoding="utf-8") as f:
         return f.read()
@@ -1685,13 +1710,36 @@ def brief_path(project, path):
     return resolved
 
 
+def git_pointer(dot_git):
+    """The git directory a `.git` file names (`gitdir: <path>`, relative to the file's folder), or None."""
+    pointer = (read_regular(dot_git, 4096) or b"").decode("utf-8", errors="replace").strip()
+    if not pointer.startswith("gitdir:"):
+        return None
+    return os.path.join(os.path.dirname(dot_git), pointer[len("gitdir:"):].strip())
+
+
+def worktree_common_dir(folder):
+    """The real path of the repository's own git directory for the linked worktree at `folder`, or None.
+
+    Read from the `.git` file's `gitdir:` line, then the `commondir` file in that git directory (a path
+    relative to it, usually `../..`). A submodule's git directory has no `commondir`. Only reads: no process.
+    """
+    found = git_pointer(os.path.join(folder, ".git"))
+    named = read_regular(os.path.join(found, "commondir"), 4096) if found else None
+    common = (named or b"").decode("utf-8", errors="replace").strip()
+    if not common:
+        return None
+    return os.path.realpath(os.path.join(found, common))
+
+
 def next_session_walk(start, env):
     """(the folder holding a setting, the repository's top, the nearest folder with a boards folder, the
     top of a linked worktree crossed), each None when the walk up from `start` found none.
 
     The walk goes up one folder at a time while the folder is `contained`, and stops at the first folder
     holding a setting or a `.git` folder (a repository's top, which is checked too). A `.git` file (a
-    linked worktree, or a submodule) does not stop it. Only stats: no process.
+    linked worktree, or a submodule) does not stop it, and a `.git` folder above one counts as the
+    repository's top only when it is that worktree's common git directory. Only stats and reads: no process.
     """
     folder, boards, linked = contained(start, env), None, None
     while folder is not None:
@@ -1701,7 +1749,9 @@ def next_session_walk(start, env):
             boards = folder
         dot_git = os.path.join(folder, ".git")
         if os.path.isdir(dot_git):
-            return None, folder, boards, linked
+            if linked is None or os.path.realpath(dot_git) == worktree_common_dir(linked):
+                return None, folder, boards, linked
+            return None, None, boards, linked  # a repository the crossed worktree does not belong to
         if linked is None and os.path.isfile(dot_git):
             linked = folder
         parent = os.path.dirname(folder)
@@ -1712,9 +1762,9 @@ def next_session_walk(start, env):
 
 
 def main_checkout(folder, env):
-    """The main checkout's top for a linked worktree at `folder`, from git (its variables cleared), or None."""
-    common = (git(folder, "rev-parse", "--path-format=absolute", "--git-common-dir") or "").strip()
-    if os.path.basename(common) != ".git":
+    """The main checkout's top for a linked worktree at `folder`, from its `.git` file (no process), or None."""
+    common = worktree_common_dir(folder)
+    if common is None or os.path.basename(common) != ".git":
         return None  # a submodule, or a worktree of a bare repository: no main checkout
     return contained(os.path.dirname(common), env)
 
@@ -1725,7 +1775,7 @@ def next_session_folders(start, env=None):
     Every reader and `next on` resolve the setting this way, so they agree from the project's top, any
     folder under it, and any linked worktree of its repository. The setting that applies is the nearest
     one walking up from `start` (`next_session_walk`); failing that, when the walk crossed a linked
-    worktree and reached no repository's top, the one at the main checkout's top, from one call to git.
+    worktree and reached no repository's top, the one at the main checkout's top, read from the worktree's `.git` file.
     With none found, `next on` writes to the repository's top (the main checkout's, from a linked
     worktree), else to the nearest folder up from `start` that has a boards folder, else to `start`.
     """

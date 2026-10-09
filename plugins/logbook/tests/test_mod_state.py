@@ -414,6 +414,26 @@ class BriefCue(ModState):
         self.assertEqual(self.run_helper(project=linked), {"briefNotUpdated": True})
         self.assertEqual(self.run_helper(), {}, "the main checkout's HEAD has not moved since the start")
 
+    def test_a_worktree_beside_the_project_starts_no_process_for_the_cue(self):
+        self.commit(self.STARTED - 60)
+        linked = os.path.join(self.tmp, "linked")
+        self.git("worktree", "add", "-q", "-b", "linked", linked, env=self.at(self.STARTED - 30))
+        self.assertTrue(os.path.isfile(os.path.join(linked, ".git")), "a linked worktree's .git is a file")
+        refused = OSError("no process may start")
+
+        def cue():
+            with mock.patch.object(board, "git", side_effect=refused), \
+                    mock.patch.object(subprocess, "run", side_effect=refused), \
+                    mock.patch.object(subprocess, "Popen", side_effect=refused), \
+                    mock.patch.object(os, "system", side_effect=refused):
+                return mod_state.brief_not_updated(linked, SESSION, None, dict(self.env, CLAUDE_PROJECT_DIR=linked))
+
+        self.assertIs(cue(), False)  # the mode is off
+        self.mode_on()
+        self.assertIs(cue(), False)  # on, and no commit since the start
+        self.commit(self.STARTED + 60, project=linked)
+        self.assertIs(cue(), True)
+
     def test_no_reflog_is_silent(self):
         self.mode_on()
         self.commit(self.STARTED + 60)

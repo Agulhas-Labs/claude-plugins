@@ -119,6 +119,21 @@ class NextSession(Hooks):
                 self.assertEqual(board.next_session(cwd)["path"], path)
         self.assertIn(path, self.session_start()["hookSpecificOutput"]["additionalContext"])
 
+    def test_a_worktree_inside_an_unrelated_repository_writes_to_its_own_main_checkout(self):
+        _, beside = self.make_repository()
+        outer = os.path.join(self.tmp, "outer")
+        os.mkdir(outer)
+        self.git(outer, "init", "-q")
+        self.assertTrue(os.path.realpath(self.git(outer, "rev-parse", "--absolute-git-dir")).startswith(self.tmp + os.sep))
+        inside = os.path.join(outer, "trees", "w")
+        self.git(self.project, "worktree", "add", "-q", "-b", "w", inside)
+        self.assertTrue(os.path.isfile(os.path.join(inside, ".git")))
+        self.assertEqual(self.cli("next", "on", cwd=inside, project_variable=False), (0, self.status_line(), ""))
+        self.assertTrue(os.path.isfile(self.setting()))
+        self.assertFalse(os.path.exists(os.path.join(outer, ".logbook")))
+        self.assertFalse(os.path.exists(os.path.join(inside, ".logbook")))
+        self.assertEqual(self.cli("next", "status", cwd=self.project, project_variable=False), (0, self.status_line(), ""))
+
     def test_from_a_linked_worktree_the_setting_goes_in_the_main_checkout_and_every_entry_point_reads_it(self):
         nested, beside = self.make_repository()
         inner = os.path.join(nested, "sub")

@@ -35,7 +35,6 @@ import json
 import os
 import pathlib
 import re
-import stat
 import sys
 import webbrowser
 
@@ -114,31 +113,6 @@ REFLOG_TAIL_BYTES = 32 * 1024
 LANDED = re.compile(r"(?:commit(?: \([^)]*\))?|merge [^:]*|cherry-pick|revert|am|rebase(?: -i)? \(finish\)):")
 
 
-def read_regular(path, limit):
-    """The last `limit` bytes of `path` when it is a regular file, else None. Never blocks on a FIFO."""
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-    except OSError:
-        return None
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            return None
-        end = os.lseek(fd, 0, os.SEEK_END)
-        os.lseek(fd, max(0, end - limit), os.SEEK_SET)
-        chunks, wanted = [], min(end, limit)
-        while wanted > 0:
-            chunk = os.read(fd, wanted)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            wanted -= len(chunk)
-        return b"".join(chunks)
-    except OSError:
-        return None
-    finally:
-        os.close(fd)
-
-
 def git_dir(project):
     """The project's own git directory, found as git finds it from inside: the nearest `.git` above, a folder, or
     a file naming one (a linked worktree's, a submodule's). None outside a repository."""
@@ -148,10 +122,7 @@ def git_dir(project):
         if os.path.isdir(dot):
             return dot
         if os.path.isfile(dot):
-            pointer = (read_regular(dot, 4096) or b"").decode("utf-8", errors="replace").strip()
-            if not pointer.startswith("gitdir:"):
-                return None
-            return os.path.join(directory, pointer[len("gitdir:"):].strip())
+            return board.git_pointer(dot)
         parent = os.path.dirname(directory)
         if parent == directory:
             return None
@@ -164,7 +135,7 @@ def newest_commit(project):
     Read from the last entries of `<git dir>/logs/HEAD` whose message `LANDED` matches; none, or no reflog, is None.
     """
     found = git_dir(project)
-    tail = read_regular(os.path.join(found, "logs", "HEAD"), REFLOG_TAIL_BYTES) if found else None
+    tail = board.read_regular(os.path.join(found, "logs", "HEAD"), REFLOG_TAIL_BYTES) if found else None
     if not tail:
         return None
     lines = tail.split(b"\n")
