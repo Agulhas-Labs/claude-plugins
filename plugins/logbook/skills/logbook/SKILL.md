@@ -1,8 +1,9 @@
 ---
 name: logbook
 description: >-
-  Use when the user types /logbook, or asks for a logbook, a live status page, or to
-  retitle or close the one that is running.
+  Use when the user types /logbook (including /logbook next, on, off or status), or asks
+  for a logbook, a live status page, to retitle or close the one that is running, or to
+  turn on, check or rewrite a next-session brief.
 ---
 
 # logbook
@@ -47,3 +48,29 @@ them. A line from the user like `Q3: …` is an answer: apply it and record it w
 - `decision "TEXT" --why "W" --reverse "R"`
 - `deliverable "LABEL" --path P`
 - `check "WHAT IT PROVED" --command "C" --result pass|fail`
+
+## Next-session mode
+
+One standing brief per project for whichever session picks the work up next. Each session that
+finishes work overwrites it whole; it is never appended to.
+
+```text
+python3 "${CLAUDE_SKILL_DIR}/../../board/board.py" next on|off|status|facts
+```
+
+- `/logbook next on [PATH]`: `next on [PATH]` (relative to the project; default `NEXT_SESSION.md`)
+- `/logbook next off`: `next off` (the brief is left as it is)
+- `/logbook next status`: `next status`
+
+`/logbook next` with no arguments means rewrite the brief now:
+
+1. Run `next status` and `next facts` together.
+2. Overwrite the file whole from what this session knows. Don't re-read files to pad it out.
+3. First line: it is rewritten by each session, never appended to. Then these sections, in order,
+   each left out when empty: **Where things stand** (branch, commit, date written); **Read first**
+   (one batch of files to request together); **Ask the user first** (open questions, carried from
+   `next facts`); **The work** (ordered); **Rules that bite** (only those the next session needs);
+   **Stop when**.
+4. Carry an entry forward only if it still applies. Drop finished work and history. Keep it under
+   about 150 lines.
+5. Give the user the path.

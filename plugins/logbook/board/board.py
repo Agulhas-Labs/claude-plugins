@@ -34,6 +34,12 @@ entry, which prints one short line back: `board.py question "TEXT" --default "D"
 recorded`. Without `--board`, the command finds the session's board from `CLAUDE_CODE_SESSION_ID` by
 walking up from the current directory.
 
+Next-session mode keeps one standing brief per project for whichever session picks the work up next:
+`next on [PATH]` writes the setting, `<project>/.logbook/next-session.json`, naming the brief relative
+to the project (`NEXT_SESSION.md` by default); `next off` removes it and leaves the brief alone. Each
+session that finishes work rewrites the brief whole; a session start names it and when it was written
+(`next_session_context`), never what it holds. `next_session(project)` is the setting as Python reads it.
+
 `<project>/.logbook/index.html` lists the boards, newest first. It is rebuilt from each board
 folder's own `state.js` whenever a board starts, changes title or state, or closes, and by a render
 that finds the index does not list its board.
@@ -60,6 +66,9 @@ REPORT_FILE = "report.html"
 INDEX_FILE = "index.html"
 ANNOUNCED_FILE = "announced"
 CATCH_UP_FILE = "catch-up"
+# The next-session setting, in the boards folder, and the brief's path when the setting names none.
+NEXT_SESSION_FILE = "next-session.json"
+DEFAULT_BRIEF = "NEXT_SESSION.md"
 # Every file a board folder holds, by exact name: all that pruning ever deletes, the marker last.
 BOARD_FILES = (ANNOUNCED_FILE, CATCH_UP_FILE, EVENTS_FILE, STATE_FILE, BOARD_FILE, REPORT_FILE, MARKER_FILE)
 # The temporary file `write_atomic` makes beside a board file: `tempfile.mkstemp` puts eight characters
@@ -1655,6 +1664,106 @@ def prune(project, now, env=None, keep=None):
 
 
 # ---------------------------------------------------------------------------------------------------
+# Next-session mode
+
+
+def brief_path(project, path):
+    """The real path of `path` (relative to `project`, or absolute) when it is a file path inside the project, else None."""
+    project = os.path.realpath(project)
+    resolved = os.path.realpath(os.path.join(project, path))
+    try:
+        inside = os.path.commonpath([resolved, project]) == project
+    except ValueError:
+        return None
+    if not inside or resolved == project or os.path.isdir(resolved):
+        return None
+    return resolved
+
+
+def next_session(project):
+    """The project's next-session setting, or None when the mode is off or its setting cannot be used.
+
+    On: `{"path": the brief's real path, "exists": bool, "written": utc time or None, "lines": int or None}`.
+    The setting is `<project>/.logbook/next-session.json`, `{"path": "<relative to the project>"}`; one in a
+    linked boards folder, one that does not parse, or one naming a path outside the project is no setting.
+    """
+    boards = os.path.join(project, BOARDS_DIR)
+    if os.path.islink(boards):
+        return None
+    try:
+        setting = json.loads(read_text(os.path.join(boards, NEXT_SESSION_FILE)))
+    except (OSError, ValueError):
+        return None
+    relative = setting.get("path") if isinstance(setting, dict) else None
+    path = brief_path(project, relative) if isinstance(relative, str) and relative else None
+    if path is None:
+        return None
+    found = {"path": path, "exists": False, "written": None, "lines": None}
+    try:
+        written = os.stat(path).st_mtime
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = len(f.read().splitlines())
+    except OSError:
+        return found
+    found.update(exists=True, written=utc(datetime.fromtimestamp(written, timezone.utc)), lines=lines)
+    return found
+
+
+def next_session_context(project):
+    """What a session start tells the model about the brief, at most three short lines, or None when off.
+
+    It names the brief and when it was written, never what it holds.
+    """
+    brief = next_session(project)
+    if brief is None:
+        return None
+    if not brief["exists"]:
+        return (
+            f"Next-session brief: {brief['path']} does not exist yet.\n"
+            "When the work is done, write it for the session after, using /logbook next."
+        )
+    return (
+        f"Next-session brief: {brief['path']} (written {brief['written']}, {brief['lines']} lines).\n"
+        "Read it when the user asks you to pick up or carry on the work, not otherwise.\n"
+        "When the work it describes is done, or the user asks, rewrite it whole for the session after, "
+        "using /logbook next."
+    )
+
+
+def one_line(value):
+    return " ".join(str(value).split())
+
+
+def next_facts(state):
+    """What a board holds that a next-session brief should carry forward, one line each.
+
+    Unanswered questions with their defaults, hard stops still open, decisions, checks that failed and
+    deliverables, in that order.
+    """
+    lines = []
+    for question in state.get("questions") or []:
+        if question.get("status") == "answered":
+            continue
+        if question.get("hardStop"):
+            lines.append(f"{question['id']} stop: {one_line(question['text'])}")
+        else:
+            default = f" (default: {one_line(question['default'])})" if question.get("default") else ""
+            lines.append(f"{question['id']} open: {one_line(question['text'])}{default}")
+    for decision in state.get("decisions") or []:
+        why = f" (why: {one_line(decision['why'])})" if decision.get("why") else ""
+        lines.append(f"{decision['id']} decision: {one_line(decision['text'])}{why}")
+    for check in state.get("checks") or []:
+        if check.get("result") == "fail":
+            command = f" (command: {one_line(check['command'])})" if check.get("command") else ""
+            lines.append(f"{check['id']} failed: {one_line(check.get('proves') or '')}{command}")
+    for deliverable in state.get("deliverables") or []:
+        where = deliverable.get("path") or deliverable.get("url")
+        where = f" ({one_line(where)})" if where else ""
+        lines.append(f"deliverable: {one_line(deliverable['label'])}{where}")
+    return lines
+
+
+# ---------------------------------------------------------------------------------------------------
 # Command line
 
 
@@ -1818,12 +1927,66 @@ def command_check(args, board, now):
     return f"{found} recorded: {args.result}"
 
 
+def brief_line(brief):
+    if not brief["exists"]:
+        return f"brief: {brief['path']} (not written yet)"
+    return f"brief: {brief['path']} (written {brief['written']}, {brief['lines']} lines)"
+
+
+def command_next_on(args, board, now):
+    """Turn next-session mode on for the project: the setting names the brief, relative to the project."""
+    project = project_of(args)
+    path = brief_path(project, args.path)
+    if path is None:
+        raise Refused(f"{args.path} is not a file path inside the project {project}")
+    boards = os.path.join(project, BOARDS_DIR)
+    if os.path.islink(boards):
+        raise Refused(LINKED_BOARDS)
+    if refused_boards(boards):
+        raise Refused("the boards folder is not a folder, so nothing was recorded")
+    os.makedirs(boards, exist_ok=True)
+    ensure_ignored(boards)
+    write_atomic(os.path.join(boards, NEXT_SESSION_FILE), json.dumps({"path": os.path.relpath(path, project)}) + "\n")
+    return f"next-session mode on\n{brief_line(next_session(project))}"
+
+
+def command_next_off(args, board, now):
+    """Turn next-session mode off: the setting goes, the brief is never touched."""
+    project = project_of(args)
+    boards = os.path.join(project, BOARDS_DIR)
+    if os.path.islink(boards):
+        raise Refused(LINKED_BOARDS)
+    try:
+        os.unlink(os.path.join(boards, NEXT_SESSION_FILE))
+    except FileNotFoundError:
+        return "next-session mode was already off"
+    return "next-session mode off; the brief was left as it is"
+
+
+def command_next_status(args, board, now):
+    brief = next_session(project_of(args))
+    if brief is None:
+        return "next-session mode off"
+    return f"next-session mode on\n{brief_line(brief)}"
+
+
+def command_next_facts(args, board, now):
+    """This session's board's entries that a brief should carry forward; nothing when there is no board."""
+    board = args.board
+    if board is None:
+        board, _ = find_board(os.getcwd(), os.environ)
+    elif os.path.islink(boards_of(board)) or not is_board(board):
+        board = None
+    state = read_state(board) if board else None
+    return "\n".join(next_facts(state)) if state else ""
+
+
 def parser():
     """The command line. Each sub-command sets `run` to its function, and `needs_board` when it works on one.
 
-    `start` and `prune` work on a project: `--project DIR`, else `CLAUDE_PROJECT_DIR`, else the current
-    directory. `render` is the hooks' and needs `--board`. The rest take `--board DIR`, and without it
-    find the session's board from the current directory.
+    `start`, `prune` and `next on|off|status` work on a project: `--project DIR`, else `CLAUDE_PROJECT_DIR`,
+    else the current directory. `render` is the hooks' and needs `--board`. The rest take `--board DIR`, and
+    without it find the session's board from the current directory; `next facts` prints nothing without one.
     """
     top = argparse.ArgumentParser(prog="board.py", description="Record and render a logbook.")
     commands = top.add_subparsers(dest="subcommand", metavar="COMMAND")
@@ -1875,6 +2038,23 @@ def parser():
     sub.add_argument("text", type=entry_text)
     sub.add_argument("--command", required=True, type=entry_text)
     sub.add_argument("--result", required=True, choices=CHECK_RESULTS)
+
+    sub = commands.add_parser("next", help="next-session mode: one standing brief for the session that picks the work up")
+    modes = sub.add_subparsers(dest="mode", metavar="MODE")
+    modes.required = True
+    sub = modes.add_parser("on", help="turn the mode on; the brief's path is relative to the project")
+    sub.add_argument("path", nargs="?", default=DEFAULT_BRIEF, type=entry_text, help=f"default: {DEFAULT_BRIEF}")
+    sub.add_argument("--project", help=project_help)
+    sub.set_defaults(run=command_next_on, needs_board=False)
+    sub = modes.add_parser("off", help="turn the mode off; the brief is left as it is")
+    sub.add_argument("--project", help=project_help)
+    sub.set_defaults(run=command_next_off, needs_board=False)
+    sub = modes.add_parser("status", help="on or off, the brief's path, when it was written and its length")
+    sub.add_argument("--project", help=project_help)
+    sub.set_defaults(run=command_next_status, needs_board=False)
+    sub = modes.add_parser("facts", help="what this session's board holds that the brief should carry forward")
+    sub.add_argument("--board", help="the board folder (default: this session's board)")
+    sub.set_defaults(run=command_next_facts, needs_board=False)
     return top
 
 

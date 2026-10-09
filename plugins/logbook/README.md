@@ -110,6 +110,19 @@ The folder carries its own ignore file, so it stays out of `git status` and your
 touched. If you resume a session, its board opens again and `report.html` is rewritten when it ends. A
 board you closed with the close command stays closed unless the session is resumed.
 
+## Next-session mode
+
+A project can keep one standing brief for whichever session picks the work up next. Turn it on with
+`/logbook:logbook next on` (the brief is `NEXT_SESSION.md` in the project unless you name another path
+inside it), check it with `next status`, and turn it off with `next off`, which leaves the file alone.
+
+While it's on, each session start tells Claude where the brief is, when it was written and how long it
+is, never what it says: Claude reads it only when you ask it to pick up or carry on the work. When the
+work is done, or you run `/logbook:logbook next`, Claude rewrites the brief whole for the session after:
+finished work and history are dropped, open questions from the board are carried forward, and it is never
+appended to. The setting lives in `.logbook/`, so it stays out of `git status`; the brief is an ordinary
+file you can commit or ignore.
+
 ## How it works
 
 Hooks record file changes, commands and how each ended, the task list, subagents starting and stopping,
