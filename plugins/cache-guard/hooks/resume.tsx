@@ -90,7 +90,7 @@ export const register: Register = (on, options) => {
     o.found = null
     $.ui.invalidate('ui.render')
     const cwd = await $.session.cwd()
-    $.clock.after(0, () => evaluate($, o, cwd))
+    $.clock.after(0, () => evaluate($, o, cwd).catch(() => {}))
 
     return result
   })
