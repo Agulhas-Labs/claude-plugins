@@ -132,6 +132,12 @@ TEST_RUNNERS = re.compile(r"(?:^|[;&|(\n])\s*" + RUNNER)
 # words and commands: a runner named inside one (`echo "swift test; done"`) is text, not a command.
 QUOTED = re.compile(r"""'[^']*'|"(?:\\.|[^"\\])*"|\\.""", re.S)
 SEPARATING = re.compile(r"[\s;&|()]")
+# A quoted string handed to a shell (`sh -c "..."`) or to ssh (`ssh host "..."`) is itself a command.
+SHELL_STRING = re.compile(
+    r"""(?:^|[\s;&|(])(?:\S*/)?(?:(?:sh|bash|zsh|dash)(?:\s+-[A-Za-z]+)*\s+-[A-Za-z]*c"""
+    r"""|ssh(?:\s+-[A-Za-z]\S*(?:\s+\d+)?)*\s+[^\s'"-]\S*)\s+('[^']*'|"(?:\\.|[^"\\])*")""",
+    re.S,
+)
 # A `--` standing alone begins a command too: it is how a wrapper is told that the rest is the
 # command to run. Not after `git`, `echo` or `printf`, where what follows `--` is a path or text.
 WRAPPED_RUNNERS = re.compile(r"(?<=\s)--(?=\s)\s*" + RUNNER)
@@ -352,6 +358,9 @@ def is_test(command, pattern=None):
     """
     if pattern is not None and pattern.search(command):
         return True
+    for shell in SHELL_STRING.finditer(command):
+        if is_test(shell.group(1)[1:-1]):
+            return True
     words = QUOTED.sub(lambda found: SEPARATING.sub("_", found.group(0)), command)
     if TEST_RUNNERS.search(words):
         return True
