@@ -66,14 +66,17 @@ Claude Code sets `CLAUDE_CODE_CHILD_SESSION` in the environment of everything it
 shows token counts, a handoff) then shows nothing, and the proof fails for a reason that has nothing
 to do with the hook. The script unsets it and gives the probe its own `--session-id`.
 
-A `/clear` inside the probe starts a second session under a new id, and the debug log does not name
-it. So the script lists the transcript folders before the run and, when it ends, removes by exact
-path every new transcript that is the probe's: the one named by its id, and any other that names
-that id inside (measured on Claude Code 2.1.295, a session started by `/clear` records the process's
-first id on its entries). It removes the project folder too if the run made it and it is now empty.
-A new transcript in the same folder that does not name the probe's id may belong to a session
-running beside it in the same directory, so the script reports it and leaves it; nothing older than
-the run is touched.
+A `/clear` inside the probe starts a second session under a new id. The debug log does not name it,
+and measured on Claude Code 2.1.295 its transcript does not name the first id either. So the script
+gives the probe a `SessionStart` hook, through its `--settings`, that records each session's id and
+transcript path, and lists the probe's own project folder (the one the transcript store names after
+the working directory) before the run. When it ends, it removes by exact path every new transcript
+there that is the probe's: the one named by its id and each one the hook recorded. It removes the
+project folder too if the run made it and it is now empty. Any other new transcript in that folder
+may belong to a session running beside it in the same directory, so the script reports it and
+leaves it; nothing older than the run is touched, and no other project folder is read. A file that
+vanishes or refuses during the cleanup (a parallel run removing its own) is reported and skipped,
+the rest still goes, and the exit status stays the proof's verdict.
 
 ## The PTY proof
 
@@ -89,8 +92,9 @@ the run is touched.
 Give `--prompt` only when the output appears after a turn, and `--send` only when it appears after a
 further input. `--send` is repeatable and applied in order after `--prompt`, each typed and entered after a settle
 wait (`--settle`, default 8 seconds, which is also the wait for the session to start before the
-first input). A slash command works, so does a second prompt: `--send /clear --send 'reply with
-the single word yes'` proves what shows in the session that `/clear` starts.
+first input; `--settle` and `--seconds` take whole seconds). A slash command works, so does a second
+prompt: `--send /clear --send 'reply with the single word yes'` proves what shows in the session that
+`/clear` starts.
 
 It copies the plugin under a scratch name, starts Claude Code under `expect` in a PTY, sends the
 inputs, waits, quits with Ctrl-C, removes the transcripts the run wrote, and then reports three
