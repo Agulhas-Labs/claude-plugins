@@ -23,7 +23,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/agent_cost.py" [--since X] [--until X] [--p
 - The script needs Python 3 and the standard library only; without `python3` the shell fails with exit 127.
   Where `python3` is missing or a placeholder (often on Windows), run the same line with `py` or `python`.
 
-- `--since`/`--until` accept `today`, `yesterday`, `<N>d`, `YYYY-MM-DD`, or an ISO datetime
+- `--since`/`--until` accept `today`, `yesterday`, `<N>d`, `<N>h`, `<N>m`, `YYYY-MM-DD`, or an ISO datetime
   (`2026-09-15T16:06`, local unless it carries `Z`/an offset). Default: last 7 days.
 - To compare spend **before/after a change**, run it twice with `--since`/`--until` datetimes that
   bracket each side of the change (e.g. the commit time), not two separate loose windows.

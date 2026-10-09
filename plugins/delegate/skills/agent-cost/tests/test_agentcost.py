@@ -139,6 +139,15 @@ class PricingTests(unittest.TestCase):
         spend = sorted(t["ie"] for l in loaded for t in l.window_turns)
         self.assertEqual([round(x) for x in spend], [25_000, 100_000])
 
+    def test_a_loaded_turn_on_opus_5_5_is_priced_with_a_twentieth_read_weight(self):
+        fx = FixtureRoot(self)
+        u = usage(input_tokens=0, cache_read=1_000_000, cache_creation=0)
+        fx.main_session(session="o55", entries=[assistant("m1", ts_str(BASE), u, model="claude-opus-5-5")])
+        fx.main_session(session="o5", entries=[assistant("m2", ts_str(BASE), u, model="claude-opus-5")])
+        loaded = ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
+        spend = sorted(t["ie"] for l in loaded for t in l.window_turns)
+        self.assertEqual([round(x) for x in spend], [50_000, 100_000])
+
     def test_a_cold_rewrite_on_fable_5_1_is_measured_against_its_cheaper_warm_read(self):
         u = usage(input_tokens=0, cache_read=0, cache_creation=100_000,
                   split={"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 100_000})
@@ -220,6 +229,18 @@ class SinceParsingTests(unittest.TestCase):
 
     def test_n_days(self):
         self.assertEqual(ac.parse_when("3d", self.now), self.now - timedelta(days=3))
+
+    def test_n_hours_and_minutes(self):
+        self.assertEqual(ac.parse_when("4h", self.now), self.now - timedelta(hours=4))
+        self.assertEqual(ac.parse_when("30m", self.now), self.now - timedelta(minutes=30))
+
+    def test_a_bad_unit_is_one_argparse_error_line_not_a_traceback(self):
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit) as cm:
+            ac.main(["--since", "4x"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertEqual(len([l for l in err.getvalue().splitlines() if "error:" in l]), 1)
+        self.assertNotIn("Traceback", err.getvalue())
 
     def test_date_is_local_midnight(self):
         self.assertEqual(ac.parse_when("2026-09-10", self.now), datetime(2026, 9, 10, 0, 0, 0, tzinfo=self.tz))

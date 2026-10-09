@@ -41,7 +41,7 @@ COLD_LARGE_CONTEXT = 100_000    # the size bucket a prompt guard would warn abou
 # ---------------------------------------------------------------------------
 
 def parse_when(value, now):
-    """Parse --since/--until: today, yesterday, <N>d, YYYY-MM-DD (local midnight), or an ISO datetime
+    """Parse --since/--until: today, yesterday, <N>d, <N>h, <N>m, YYYY-MM-DD (local midnight), or an ISO datetime
     (local unless it carries Z/an offset). `now` is an aware local datetime used as the reference point
     and the fallback timezone for naive ISO datetimes."""
     v = value.strip()
@@ -51,9 +51,10 @@ def parse_when(value, now):
     if v == "yesterday":
         d = (now - timedelta(days=1)).date()
         return datetime(d.year, d.month, d.day).astimezone()
-    m = re.fullmatch(r"(\d+)d", v)
+    m = re.fullmatch(r"(\d+)([dhm])", v)
     if m:
-        return now - timedelta(days=int(m.group(1)))
+        unit = {"d": "days", "h": "hours", "m": "minutes"}[m.group(2)]
+        return now - timedelta(**{unit: int(m.group(1))})
     iso = v[:-1] + "+00:00" if v.endswith("Z") else v
     dt = datetime.fromisoformat(iso)
     if dt.tzinfo is None:
@@ -184,8 +185,10 @@ def classify(name, inp):
 
 CACHE_READ_WEIGHT = 0.1
 # Published cache-read price over published input price, where it is not a tenth. Matched against the
-# model id reduced to lowercase letters and digits, so a dated id still matches.
-CACHE_READ_WEIGHTS = (("fable51", 0.025),)
+# model id reduced to lowercase letters and digits, so a dated id still matches. Keep in step with
+# CACHE_READ_PRICES and INPUT_PRICES in the cache-guard plugin's hooks/cache_guard.py (Sonnet 5.5 and
+# Haiku 5.5 read at a tenth there too, so they take the default).
+CACHE_READ_WEIGHTS = (("fable51", 0.025), ("opus55", 0.05))
 
 
 def cache_read_weight(model):
@@ -1455,8 +1458,9 @@ def main(argv=None):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")  # an ASCII-only terminal shows ? for the report's glyphs, not a crash
     p = argparse.ArgumentParser(prog="agent-cost", description=__doc__)
-    p.add_argument("--since", default="7d")
-    p.add_argument("--until", default=None)
+    when_help = "today, yesterday, <N>d, <N>h, <N>m, YYYY-MM-DD, or an ISO datetime"
+    p.add_argument("--since", default="7d", help=when_help + " (default: 7d)")
+    p.add_argument("--until", default=None, help=when_help)
     p.add_argument("--projects", default=default_projects_dir())
     p.add_argument("--project", default=None,
                    help="report on one project only: its path or the path's trailing part (e.g. App)")
@@ -1475,8 +1479,12 @@ def main(argv=None):
         p.error(str(e))
 
     now = datetime.now().astimezone()
-    since = parse_when(args.since, now)
-    until = parse_when(args.until, now) if args.until else now
+    try:
+        since = parse_when(args.since, now)
+        until = parse_when(args.until, now) if args.until else now
+    except ValueError:
+        p.error("--since/--until: not a time I can read; "
+                "use today, yesterday, <N>d, <N>h, <N>m, YYYY-MM-DD, or an ISO datetime")
 
     try:
         loaded = load_all(args.projects, args.transcript, since, until, project=args.project)
