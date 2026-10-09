@@ -1204,11 +1204,13 @@ VERDICT_RULES = (
     ("pass after fixes", re.compile(r"pass(ed)? after|merge-ready after|mergeable after"
                                     r"|after (the|one|two|\d) (named )?fix"
                                     r"|(merge|publish|ship|ready) after (the |those |these )?(named )?fix")),
-    ("fail", re.compile(r"verdict\**\s*[:—–-]?\**\s*\**fail|not merge-ready|not mergeable|do not merge"
+    ("fail", re.compile(r"verdict\**(?:\s*\([^)\n]{0,20}\))?\s*[:—–-]?\**\s*\**fail|not merge-ready|not mergeable|do not merge"
                         r"|fix first|fix(es)? (is |are )?needed before|not ready (to|for) merge|blocks? (the )?merge")),
-    ("pass", re.compile(r"verdict\**\s*[:—–-]?\**\s*\**pass|merge-ready|mergeable|ready to merge")),
+    ("pass", re.compile(r"verdict\**(?:\s*\([^)\n]{0,20}\))?\s*[:—–-]?\**\s*\**pass|merge-ready|mergeable|ready to merge")),
 )
-VERDICT_LINE = re.compile(r"(?im)^(\W*verdict\W*[:\u2014\u2013-]\s*.+)$")  # the whole line, label included
+# the whole line, label included; a word or two before the label ("Final verdict") and a short
+# parenthetical after it ("Verdict (A)") are still the label
+VERDICT_LINE = re.compile(r"(?im)^(\W*(?:\w+\W+){0,2}?verdict\**(?:\s*\([^)\n]{0,20}\))?\W*[:\u2014\u2013-]\s*.+)$")
 VERDICTS = tuple(name for name, _ in VERDICT_RULES) + ("unclassified",)
 
 

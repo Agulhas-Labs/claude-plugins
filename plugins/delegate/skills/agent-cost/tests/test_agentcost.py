@@ -1830,6 +1830,26 @@ class RuleScorecardTests(unittest.TestCase):
             with self.subTest(report=report[-60:]):
                 self.assertEqual(ac.reviewer_verdict(report), verdict)
 
+    def test_a_verdict_label_with_a_parenthetical_or_a_leading_word_is_classified_from_its_line(self):
+        # the rest of the report reads as a different verdict, so the whole-report fallback gets it wrong
+        draft = "\nAn earlier draft said merge-ready after the named fix."
+        for text in ("Verdict (A): fail" + draft, "Final verdict: fail" + draft,
+                     "**Final verdict** - fail" + draft):
+            with self.subTest(text=text):
+                self.assertEqual(ac.reviewer_verdict(text), "fail")
+        self.assertEqual(ac.reviewer_verdict("Final verdict: pass\nThe other path is not ready to merge."), "pass")
+
+    def test_a_parent_that_switched_model_before_the_first_turn_is_read_at_the_later_model(self):
+        parent = typed_loaded("main", "main", [1000, 1000, 1000], "m")
+        sub = typed_loaded("subagent", "builder", [1000], "s")
+        for i, (model, secs) in enumerate((("claude-sonnet-5", 0), ("claude-opus-5", 5), ("claude-sonnet-5", 30))):
+            parent.ctx.turns[i]["model"] = model
+            parent.ctx.turns[i]["ts"] = BASE + timedelta(seconds=secs)
+        sub.ctx.turns[0]["ts"] = BASE + timedelta(seconds=10)
+        sub.ctx.turns[0]["model"] = "claude-opus-5"   # above the parent's first model, not its model at this turn
+        judged, above = ac.above_ceiling([parent, sub])
+        self.assertEqual((len(judged), len(above)), (1, 0))
+
     def test_a_subagent_is_judged_against_the_model_its_parent_used_at_its_first_turn(self):
         # (parent model before, after the subagent's first turn; the subagent's model; above?)
         for before, after, own, expect_above in (
