@@ -1558,13 +1558,37 @@ class SpendByTypeTests(unittest.TestCase):
         rows, order = self._rows(loaded)
         # builder 659,999 input-eq, main 500,000, reviewer 50,000: sorted by input-eq, then the total
         self.assertEqual(order, ["builder", "main", "reviewer", "total"])
-        # columns: contexts, median turns, median peak, input-eq, share, output, >=150k, >=200k
-        self.assertEqual(rows["builder"], ["3", "1", "200k", "660k", "54.5%", "4", "3", "1"])
-        self.assertEqual(rows["main"], ["1", "3", "200k", "500k", "41.3%", "3", "1", "1"])
-        self.assertEqual(rows["reviewer"], ["1", "1", "50k", "50k", "4.1%", "1", "0", "0"])
-        self.assertEqual(rows["total"], ["5", "1", "200k", "1.2M", "100.0%", "8", "4", "2"])
+        # columns: contexts, median turns, median peak, input-eq, share, avg/ctx, output, >=150k, >=200k
+        self.assertEqual(rows["builder"], ["3", "1", "200k", "660k", "54.5%", "220k", "4", "3", "1"])
+        self.assertEqual(rows["main"], ["1", "3", "200k", "500k", "41.3%", "500k", "3", "1", "1"])
+        self.assertEqual(rows["reviewer"], ["1", "1", "50k", "50k", "4.1%", "50k", "1", "0", "0"])
+        self.assertEqual(rows["total"], ["5", "1", "200k", "1.2M", "100.0%", "242k", "8", "4", "2"])
         shares = sum(float(rows[name][4].rstrip("%")) for name in ("builder", "main", "reviewer"))
         self.assertAlmostEqual(shares, 100.0, delta=0.15)
+
+    def test_header_names_the_avg_per_context_column(self):
+        out = []
+        ac.section_spend_by_type(out, [typed_loaded("subagent", "builder", [100_000], "b1")])
+        self.assertIn("avg/ctx", out[1].split())
+
+    def test_a_subagent_typed_main_or_total_gets_its_own_row(self):
+        loaded = [
+            typed_loaded("subagent", "x:main", [70_000], "s1"),
+            typed_loaded("subagent", "total", [30_000], "s2"),
+            typed_loaded("main", "main", [100_000, 100_000], "m1"),
+        ]
+        rows, order = self._rows(loaded)
+        self.assertEqual(order, ["main", "subagent:main", "subagent:total", "total"])
+        self.assertEqual(rows["main"][0], "1")           # one context: the orchestrator's own
+        self.assertEqual(rows["main"][3], "200k")
+        self.assertEqual(rows["subagent:main"][0], "1")
+        self.assertEqual(rows["subagent:main"][3], "70k")
+        self.assertEqual(rows["total"][0], "3")
+
+    def test_equal_input_equivalent_rows_sort_by_name(self):
+        loaded = [typed_loaded("subagent", name, [40_000], name) for name in ("zeta", "alpha", "mid")]
+        _, order = self._rows(loaded)
+        self.assertEqual(order, ["alpha", "mid", "zeta", "total"])
 
     def _fixture(self):
         fx = FixtureRoot(self)
@@ -1679,12 +1703,12 @@ def rule_tree(case):
 SECTIONS_BEFORE_SCORECARD = {
     'spend-by-type': (
         '=== Spend by agent type ===\n'
-        '  type                 contexts med turns  med peak  input-eq  share    output  >=150k  >=200k\n'
-        '  builder                     1         5      205k      486k  75.6%        50       1       1\n'
-        '  reviewer                    2         2       20k       80k  12.4%        40       0       0\n'
-        '  mechanic                   10         1        6k       67k  10.4%       100       0       0\n'
-        '  main                        1         3        7k       10k   1.5%        30       0       0\n'
-        '  total                      14         1        8k      642k 100.0%       220       1       1\n'
+        '  type                 contexts med turns  med peak  input-eq  share  avg/ctx    output  >=150k  >=200k\n'
+        '  builder                     1         5      205k      486k  75.6%     486k        50       1       1\n'
+        '  reviewer                    2         2       20k       80k  12.4%      40k        40       0       0\n'
+        '  mechanic                   10         1        6k       67k  10.4%       7k       100       0       0\n'
+        '  main                        1         3        7k       10k   1.5%      10k        30       0       0\n'
+        '  total                      14         1        8k      642k 100.0%      46k       220       1       1\n'
         '\n'
         'harness versions in this window: 2.1.272\n'
         'note: input-eq is a price comparison against the uncached input rate, not a token count.'
