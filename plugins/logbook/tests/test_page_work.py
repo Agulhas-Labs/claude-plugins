@@ -156,6 +156,18 @@ class Stuck(unittest.TestCase):
                             command("pytest", "2026-01-05T09:25:00Z", test=True)])
         self.assertNotIn("test", [kind for kind, _ in items])
 
+    def test_a_pass_in_the_same_second_after_the_failure_clears_it(self):
+        items = self.kinds([command("pytest -k quoting", "2026-01-05T09:20:00Z", result="fail", exit=1, test=True,
+                                    latestRun=1),
+                            command("pytest", "2026-01-05T09:20:00Z", test=True, latestRun=2)])
+        self.assertNotIn("test", [kind for kind, _ in items])
+
+    def test_a_pass_in_the_same_second_before_the_failure_does_not_clear_it(self):
+        items = self.kinds([command("pytest", "2026-01-05T09:20:00Z", test=True, latestRun=1),
+                            command("pytest -k quoting", "2026-01-05T09:20:00Z", result="fail", test=True,
+                                    latestRun=2)])
+        self.assertIn(("test", "pytest -k quoting"), items)
+
     def test_a_pass_before_the_failure_does_not_clear_it(self):
         items = self.kinds([command("pytest", "2026-01-05T09:10:00Z", test=True),
                             command("pytest -k quoting", "2026-01-05T09:20:00Z", result="fail", test=True)])
