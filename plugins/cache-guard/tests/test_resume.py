@@ -130,6 +130,9 @@ class ResumeTestCase(unittest.TestCase):
     def test_a_bulleted_goal_loses_its_bullet(self):
         self.assertEqual(self.goal_summary("## Goal\n\n- Ship the band"), "Ship the band")
 
+    def test_a_goal_starting_with_an_issue_reference_is_not_a_heading(self):
+        self.assertEqual(self.goal_summary("## Goal\n\n#21 make the band read any goal"), "#21 make the band read any goal")
+
     def test_prints_an_empty_object_without_a_handoff(self):
         self.make_repo()
 
