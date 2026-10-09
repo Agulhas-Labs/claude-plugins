@@ -292,6 +292,22 @@ class ManyAtOnce(EarlyCommits):
         self.assertEqual([len(call.args[1]) for call in asked.call_args_list], [10])
 
 
+class NamesGit(unittest.TestCase):
+    """A commit line counts only from a command that runs git, not one whose text contains the word."""
+
+    def found(self, command):
+        return board_hook.commit_events(command, {"stdout": "[main abc1234] x\n"})
+
+    def test_text_that_only_contains_git_is_not_a_git_command(self):
+        for command in ("cat .git/HEAD", "git-lfs pull", "ls repo/.git/refs && echo done", "mygit commit"):
+            self.assertEqual(self.found(command), [], command)
+
+    def test_git_as_the_command_word_is_one(self):
+        for command in ("git commit -m x", "sudo git commit -m x", "/usr/bin/git commit -m x",
+                        "cd sub && git commit -m x", "make; git commit -m x", "GIT_EDITOR=true git commit"):
+            self.assertEqual(self.found(command), [("commit", {"hash": "abc1234", "branch": "main"})], command)
+
+
 class RecordsNothing(EarlyCommits):
 
     def read(self):

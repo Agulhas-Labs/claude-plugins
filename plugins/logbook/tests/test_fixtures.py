@@ -25,7 +25,8 @@ ITEM_KEYS = {
     "decisions": {"id", "text", "why", "reverse", "time"},
     "agents": {"id", "type", "model", "description", "started", "ended", "outcome", "gates", "tokens"},
     "changes": {"path", "edits", "added", "removed", "created", "first", "last", "agents"},
-    "commands": {"command", "description", "result", "exit", "runs", "fails", "time", "ms", "test", "agents"},
+    "commands": {"command", "description", "result", "exit", "runs", "fails", "time", "ms", "test", "agents",
+                 "latestRun"},
 }
 TIME_KEYS = {"started", "updated", "asked", "answered", "time", "ended", "first", "last"}
 # The words a status may take. The recorder writes no other, and the page has a glyph for each.

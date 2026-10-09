@@ -401,6 +401,13 @@ var PB = (function () {
     return command.test === true;
   }
 
+  // Whether command row `a` last ran after row `b`: by time, then, within one second, by `latestRun`.
+  function ranAfter(a, b) {
+    var at = parseTime(a.time), bt = parseTime(b.time);
+    if (at !== bt) return at > bt;
+    return typeof a.latestRun === 'number' && typeof b.latestRun === 'number' && a.latestRun > b.latestRun;
+  }
+
   // Test runs, newest first. They are evidence, so they sit in Verified after the checks.
   function testCommands(state) {
     return newestFirst(list(state, 'commands').filter(isTest), 'time');
@@ -483,13 +490,13 @@ var PB = (function () {
         items.push({ kind: 'check', id: str(check.id), text: str(check.proves), command: str(check.command) });
       }
     });
-    // A test whose latest run failed, unless a test run that passed came after it. Any other command
-    // that failed is only listed under Commands: a failing command is often a question, not a fault.
+    // A test whose latest run failed, unless a test run that passed came after it. Times are whole
+    // seconds, so of two runs in the same second the one run later (`latestRun`) came after. Any other
+    // command that failed is only listed under Commands: a failing command is often a question, not a fault.
     var tests = list(state, 'commands').filter(isTest);
     tests.forEach(function (c) {
       if (c.result !== 'fail') return;
-      var failed = parseTime(c.time);
-      var passedLater = tests.some(function (o) { return o.result === 'pass' && parseTime(o.time) > failed; });
+      var passedLater = tests.some(function (o) { return o.result === 'pass' && ranAfter(o, c); });
       if (!passedLater) {
         items.push({ kind: 'test', id: str(c.command), text: str(c.description), command: str(c.command),
           exit: typeof c.exit === 'number' ? c.exit : null });

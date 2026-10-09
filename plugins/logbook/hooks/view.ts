@@ -8,7 +8,7 @@ export type Question = {
 }
 export type Step = { id: string; subject: string; status: 'pending' | 'in_progress' | 'completed' }
 export type Check = { id: string; proves: string | null; command: string | null; result: 'pass' | 'fail' }
-export type Command = { command: string; description: string | null; result: string; time: string; test: boolean; fails: number }
+export type Command = { command: string; description: string | null; result: string; time: string; test: boolean; fails: number; latestRun?: number }
 export type Agent = { id: string; type: string | null; description: string | null; outcome: string }
 export type Commit = { hash: string; subject: string; step: string | null }
 export type Deliverable = { label: string; path: string | null; url: string | null }
@@ -55,6 +55,14 @@ export function openQuestions(state: BoardState): Question[] {
 
 export type Stuck = { kind: 'step' | 'check' | 'test' | 'agent'; id: string; text: string }
 
+// Whether command row `a` last ran after row `b`: by time, then, within one second, by `latestRun` (the page's
+// `ranAfter`).
+function ranAfter(a: Command, b: Command): boolean {
+  const at = Date.parse(a.time), bt = Date.parse(b.time)
+  if (at !== bt) return at > bt
+  return typeof a.latestRun === 'number' && typeof b.latestRun === 'number' && a.latestRun > b.latestRun
+}
+
 // An in-progress step on a live board that has been quiet past the board's own threshold; a failed check; a test
 // whose latest run failed with no later pass; a failed agent. Only the page's `Stuck` rules.
 export function stuckItems(state: BoardState, now: number): Stuck[] {
@@ -70,7 +78,7 @@ export function stuckItems(state: BoardState, now: number): Stuck[] {
   }
   const tests = list(state.commands).filter(c => c.test === true)
   for (const test of tests) {
-    const passedLater = tests.some(o => o.result === 'pass' && Date.parse(o.time) > Date.parse(test.time))
+    const passedLater = tests.some(o => o.result === 'pass' && ranAfter(o, test))
     if (test.result === 'fail' && !passedLater) out.push({ kind: 'test', id: test.command, text: test.description ?? test.command })
   }
   for (const agent of list(state.agents)) {

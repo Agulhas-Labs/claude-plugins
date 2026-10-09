@@ -324,5 +324,8 @@ test('the view rules: stuck, verified and the state file', () => {
   const pass = { ...fail, result: 'pass', time: '2026-01-05T09:10:00Z' }
   expect(stuckItems(board({ commands: [fail] }) as never, NOW).length).toBe(1)
   expect(stuckItems(board({ commands: [fail, { ...pass, command: 't2' }] }) as never, NOW).length).toBe(0)
+  const sameSecond = { ...fail, latestRun: 1 }
+  expect(stuckItems(board({ commands: [sameSecond, { ...sameSecond, command: 't2', result: 'pass', latestRun: 2 }] }) as never, NOW).length).toBe(0)
+  expect(stuckItems(board({ commands: [{ ...sameSecond, latestRun: 2 }, { ...sameSecond, command: 't2', result: 'pass' }] }) as never, NOW).length).toBe(1)
   expect(verifiedCount(board({ commands: [pass, { ...fail, command: 'u' }], checks: [{ id: 'C1', proves: 'p', command: 'c', result: 'pass' }] }) as never)).toEqual({ pass: 2, fail: 1 })
 })
