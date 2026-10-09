@@ -174,21 +174,26 @@ test('Handoff shows a turning spinner while it writes, then a box saying how to 
   await started($)
   await $.turn.complete(turn(usage(10, 980, 10)))
   const band = await mountBand($)
-  expect((await band.find({ key: 'cache-guard-handoff' }))?.props.label).toBe('Handoff')
+  const rest = await band.find({ key: 'cache-guard-handoff' })
+  expect(rest?.props.label).toBe('Handoff')
+  expect(JSON.stringify(rest)).not.toContain('yellow') // at rest the button is plain
   await $.ui.press({ plugin: 'cache-guard', key: 'cache-guard-handoff' })
   const run = seen.runs.at(-1)!
   expect(run.at(-2)).toEndWith('/hooks/handoff.py')
   expect(run.at(-1)).toBe('--write')
   expect(JSON.parse(seen.stdin.at(-1)!)).toEqual({ transcript_path: '/t/s.jsonl', cwd: '/w', session_id: 's' })
-  const labelA = (await band.find({ key: 'cache-guard-handoff' }))?.props.label
-  expect(labelA).toBe(`Writing handoff ${SPINNER[0]}`)
+  const writing = await band.find({ key: 'cache-guard-handoff' })
+  expect(writing?.props.label).toBe(`Writing handoff ${SPINNER[0]}`)
+  expect(JSON.stringify(writing)).toContain('"color":"yellow"') // the writing label is drawn in yellow
   await clock.advance(120)
   expect((await band.find({ key: 'cache-guard-handoff' }))?.props.label).toBe(`Writing handoff ${SPINNER[1]}`)
   expect(JSON.stringify(await band.drawn())).not.toContain('Handoff ready')
   expect(seen.toasts).toEqual([])
   seen.files[HANDOFF.path] = '# Handoff\nSummary written by haiku.\n'
   await clock.advance(5_000)
-  expect((await band.find({ key: 'cache-guard-handoff' }))?.props.label).toBe('Handoff')
+  const done = await band.find({ key: 'cache-guard-handoff' })
+  expect(done?.props.label).toBe('Handoff')
+  expect(JSON.stringify(done)).not.toContain('yellow') // done: the button is plain again and the box below is green
   const drawn = JSON.stringify(await band.drawn())
   expect(drawn).toContain('Handoff ready')
   expect(drawn).toContain(HANDOFF.path)

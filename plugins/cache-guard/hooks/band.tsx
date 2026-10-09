@@ -260,7 +260,11 @@ export async function drawBand($, e, next, s: State) {
         label={s.watch ? `Writing handoff ${SPINNER[s.frame]}` : 'Handoff'}
         hotkey="h"
         onPress={() => startHandoff($, s)}
-      />
+      >
+        {/* While it writes the label is drawn in yellow, the band's in-progress colour, so the press shows
+            beyond the spinner glyph; the green Handoff ready box above is the done state. */}
+        {s.watch ? <Text key="cache-guard-handoff-writing" color="yellow">{`Writing handoff ${SPINNER[s.frame]}`}</Text> : null}
+      </Button>
     </Box>
   )
   const above = s.saved ? drawSaved($, e, s, s.saved) : null
