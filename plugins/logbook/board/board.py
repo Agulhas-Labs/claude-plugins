@@ -1772,25 +1772,31 @@ def next_session_setting(start, env=None):
     return setting, path, None
 
 
-def next_session(project, env=None):
+def next_session(project, env=None, *, count_lines=True):
     """The next-session setting that applies to `project`, or None when the mode is off or its setting cannot be used.
 
     On: `{"path": the brief's real path, "exists": bool, "written": utc time or None, "lines": int or None}`.
-    Which setting applies, and when one cannot be used: `next_session_setting`.
+    Which setting applies, and when one cannot be used: `next_session_setting`. With `count_lines` false the
+    brief is never opened and `lines` stays None. A brief that is not a regular file (a FIFO, a device) is
+    never opened either, and counts as not written.
     """
     _, path, _ = next_session_setting(project, env)
     if path is None:
         return None
-    return brief_facts(path)
+    return brief_facts(path, count_lines)
 
 
-def brief_facts(path):
+def brief_facts(path, count_lines=True):
     """What `next_session` says about the brief at `path`: whether it exists, when it was written, its length."""
     found = {"path": path, "exists": False, "written": None, "lines": None}
     try:
-        written = os.stat(path).st_mtime
-        with open(path, encoding="utf-8", errors="replace") as f:
-            lines = len(f.read().splitlines())
+        info = os.stat(path)
+        if not stat.S_ISREG(info.st_mode):
+            return found
+        written, lines = info.st_mtime, None
+        if count_lines:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                lines = len(f.read().splitlines())
     except OSError:
         return found
     found.update(exists=True, written=utc(datetime.fromtimestamp(written, timezone.utc)), lines=lines)
@@ -1826,7 +1832,8 @@ def next_facts(state):
     """What a board holds that a next-session brief should carry forward, one line each.
 
     Unanswered questions with their defaults, hard stops still open, decisions, checks that failed and
-    deliverables, in that order.
+    deliverables, in that order. A failed check is dropped once a later check that passed proves the same thing
+    or ran the same command (each compared with its whitespace collapsed, and only when it has one).
     """
     lines = []
     for question in state.get("questions") or []:
@@ -1840,8 +1847,15 @@ def next_facts(state):
     for decision in state.get("decisions") or []:
         why = f" (why: {one_line(decision['why'])})" if decision.get("why") else ""
         lines.append(f"{decision['id']} decision: {one_line(decision['text'])}{why}")
-    for check in state.get("checks") or []:
-        if check.get("result") == "fail":
+    checks = state.get("checks") or []
+    for index, check in enumerate(checks):
+        if check.get("result") == "fail" and not any(
+            later.get("result") == "pass" and any(
+                check.get(key) and later.get(key) and one_line(check[key]) == one_line(later[key])
+                for key in ("proves", "command")
+            )
+            for later in checks[index + 1:]
+        ):
             command = f" (command: {one_line(check['command'])})" if check.get("command") else ""
             lines.append(f"{check['id']} failed: {one_line(check.get('proves') or '')}{command}")
     for deliverable in state.get("deliverables") or []:

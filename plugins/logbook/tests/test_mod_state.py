@@ -292,18 +292,23 @@ class BriefCue(ModState):
         done = subprocess.run(["git", *argv], cwd=self.project, env=env or self.env, capture_output=True, check=True)
         return done.stdout.decode("utf-8")
 
-    def mode_on(self):
+    def mode_on(self, project=None):
         env = dict(self.env, CLAUDE_CODE_SESSION_ID=SESSION)
-        subprocess.run([sys.executable, BOARD_PY, "next", "on", "--project", self.project], env=env, check=True, capture_output=True)
+        subprocess.run([sys.executable, BOARD_PY, "next", "on", "--project", project or self.project], env=env,
+                       check=True, capture_output=True)
 
-    def commit(self, at):
-        with open(os.path.join(self.project, "work.txt"), "a", encoding="utf-8") as f:
-            f.write(f"{at}\n")
+    def at(self, at):
+        """The environment for a git call that writes `at` into its commit and its reflog entry."""
         stamp = f"@{at} +0000"
-        env = dict(self.env, GIT_AUTHOR_DATE=stamp, GIT_COMMITTER_DATE=stamp, GIT_AUTHOR_NAME="t",
-                   GIT_AUTHOR_EMAIL="t@example.com", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
-        self.git("add", "work.txt", env=env)
-        self.git("commit", "-q", "-m", "work", env=env)
+        return dict(self.env, GIT_AUTHOR_DATE=stamp, GIT_COMMITTER_DATE=stamp, GIT_AUTHOR_NAME="t",
+                    GIT_AUTHOR_EMAIL="t@example.com", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+
+    def commit(self, at, project=None):
+        project = project or self.project
+        with open(os.path.join(project, "work.txt"), "a", encoding="utf-8") as f:
+            f.write(f"{at}\n")
+        for argv in (("add", "work.txt"), ("commit", "-q", "-m", "work")):
+            subprocess.run(["git", *argv], cwd=project, env=self.at(at), capture_output=True, check=True)
 
     def write_brief(self, at):
         with open(self.brief, "w", encoding="utf-8") as f:
@@ -353,6 +358,94 @@ class BriefCue(ModState):
     def test_a_project_with_no_commit_is_silent(self):
         self.mode_on()
         self.assertEqual(self.run_helper(), {})
+
+    def test_a_resumed_session_cues_for_a_commit_after_a_brief_written_since_the_start(self):
+        self.mode_on()
+        self.commit(self.STARTED + 60)
+        self.write_brief(self.STARTED + 8 * 3600)  # the brief written at the end of the first day
+        self.commit(self.STARTED + 25 * 3600)  # the session resumed the next day, and a commit landed
+        self.assertEqual(self.run_helper(), {"briefNotUpdated": True})
+
+    def test_a_brief_written_after_the_newest_commit_is_silent(self):
+        self.mode_on()
+        self.commit(self.STARTED + 60)
+        self.write_brief(self.STARTED + 120)
+        self.commit(self.STARTED + 600)
+        self.write_brief(self.STARTED + 700)
+        self.assertEqual(self.run_helper(), {})
+
+    def test_a_checkout_or_reset_after_the_brief_is_not_a_commit(self):
+        self.mode_on()
+        self.commit(self.STARTED - 60)
+        self.git("checkout", "-q", "-b", "side", env=self.at(self.STARTED - 30))
+        self.commit(self.STARTED + 60)
+        self.write_brief(self.STARTED + 120)
+        self.git("checkout", "-q", "-", env=self.at(self.STARTED + 180))
+        self.git("checkout", "-q", "side", env=self.at(self.STARTED + 240))
+        self.git("reset", "-q", "--hard", "HEAD", env=self.at(self.STARTED + 300))
+        self.assertEqual(self.run_helper(), {})
+
+    def test_a_checkout_since_the_start_with_no_commit_since_is_silent(self):
+        self.mode_on()
+        self.commit(self.STARTED - 60)
+        self.git("checkout", "-q", "-b", "side", env=self.at(self.STARTED + 60))
+        self.assertEqual(self.run_helper(), {})
+
+    def test_a_merge_since_the_start_is_a_commit(self):
+        self.mode_on()
+        self.commit(self.STARTED - 120)
+        self.git("checkout", "-q", "-b", "side", env=self.at(self.STARTED - 90))
+        self.commit(self.STARTED - 60)
+        self.git("checkout", "-q", "-", env=self.at(self.STARTED - 30))
+        self.git("merge", "-q", "side", env=self.at(self.STARTED + 60))  # a fast-forward
+        self.assertEqual(self.run_helper(), {"briefNotUpdated": True})
+
+    def test_a_linked_worktree_reads_its_own_reflog(self):
+        self.commit(self.STARTED - 60)
+        linked = os.path.join(self.tmp, "linked")
+        self.git("worktree", "add", "-q", "-b", "linked", linked, env=self.at(self.STARTED - 30))
+        linked_git = subprocess.run(["git", "rev-parse", "--absolute-git-dir"], cwd=linked, env=self.env,
+                                    capture_output=True, check=True).stdout.decode("utf-8").strip()
+        self.assertTrue(os.path.realpath(linked_git).startswith(self.tmp + os.sep), linked_git)
+        self.assertTrue(os.path.isfile(os.path.join(linked, ".git")), "a linked worktree's .git is a file")
+        self.mode_on(linked)
+        self.mode_on()
+        self.commit(self.STARTED + 60, project=linked)
+        self.assertEqual(self.run_helper(project=linked), {"briefNotUpdated": True})
+        self.assertEqual(self.run_helper(), {}, "the main checkout's HEAD has not moved since the start")
+
+    def test_no_reflog_is_silent(self):
+        self.mode_on()
+        self.commit(self.STARTED + 60)
+        os.unlink(os.path.join(self.project, ".git", "logs", "HEAD"))
+        self.assertEqual(self.run_helper(), {})
+
+    def test_the_cue_starts_no_process(self):
+        self.mode_on()
+        self.commit(self.STARTED + 60)
+        refused = OSError("no process may start")
+        with mock.patch.object(board, "git", side_effect=refused), \
+                mock.patch.object(subprocess, "run", side_effect=refused), \
+                mock.patch.object(subprocess, "Popen", side_effect=refused), \
+                mock.patch.object(os, "system", side_effect=refused):
+            self.assertIs(mod_state.brief_not_updated(self.project, SESSION, None, self.env), True)
+
+    def test_a_fifo_at_the_brief_path_never_blocks(self):
+        self.mode_on()
+        self.commit(self.STARTED + 60)
+        os.mkfifo(self.brief)
+        done = subprocess.run(
+            [sys.executable, HELPER, "--project", self.project, "--session", SESSION],
+            env=self.env, capture_output=True, timeout=10,
+        )
+        self.assertEqual(json.loads(done.stdout), {"briefNotUpdated": True})
+        reads = ("import json, sys; sys.path.insert(0, sys.argv[1]); import board; "
+                 "print(json.dumps(board.next_session(sys.argv[2])))")
+        done = subprocess.run([sys.executable, "-c", reads, os.path.dirname(BOARD_PY), self.project],
+                              env=self.env, capture_output=True, timeout=10)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(json.loads(done.stdout),
+                         {"path": os.path.realpath(self.brief), "exists": False, "written": None, "lines": None})
 
     def test_open_never_asks_git(self):
         self.mode_on()
