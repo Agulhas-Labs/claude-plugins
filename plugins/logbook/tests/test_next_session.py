@@ -4,8 +4,10 @@ Run: python3 -m unittest discover -s plugins/logbook/tests
 
 The commands run `board.py` as the skill does, as a program, and the session starts run the real
 `gate.sh`, both in the environment of `test_hooks.py`, which has every `GIT_*` variable removed. The
-project is not a repository; the only git the recorder runs is its own read of branch heads, which
-finds none.
+Bash tool's environment has no `CLAUDE_PROJECT_DIR`, so the tests of where the setting is found run the
+commands without it. The project is not a repository, except where a test makes it one with `git` below
+(every `GIT_*` variable removed, the repository checked to be inside the test's folder), with a linked
+worktree nested under it and one beside it.
 """
 import json
 import os
@@ -25,18 +27,51 @@ SECRET = "only the brief holds this line"
 
 class NextSession(Hooks):
 
-    def cli(self, *argv, cwd=None):
-        """board.py run as the skill runs it, in the hooks' environment with the session's id set."""
+    def cli(self, *argv, cwd=None, project_variable=True):
+        """board.py run as the skill runs it, in the hooks' environment with the session's id set.
+
+        Without `project_variable`, `CLAUDE_PROJECT_DIR` is left out, as it is from the Bash tool's environment.
+        """
         env = dict(self.env, CLAUDE_CODE_SESSION_ID=SESSION)
+        if not project_variable:
+            del env["CLAUDE_PROJECT_DIR"]
         done = subprocess.run(
             [sys.executable, BOARD_PY, *argv], cwd=cwd or self.project, env=env, capture_output=True, timeout=60,
         )
         return done.returncode, done.stdout.decode("utf-8"), done.stderr.decode("utf-8")
 
-    def session_start(self, source="startup"):
+    def session_start(self, source="startup", project=None):
         payload = fixture("SessionStart")
         payload.update(source=source, session_id=SESSION)
-        return self.hook(payload)
+        return self.hook(payload, env=dict(self.env, CLAUDE_PROJECT_DIR=project) if project else None)
+
+    def git(self, cwd, *args):
+        """git in `cwd` and nowhere else: every `GIT_*` variable a git hook exports is removed first."""
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        return subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True, check=True).stdout.strip()
+
+    def make_repository(self):
+        """The project as a repository with one commit, and two linked worktrees: one nested under the
+        project, where a session's isolation worktree goes, and one beside it. Returns the worktrees."""
+        self.git(self.project, "init", "-q")
+        inside = os.path.realpath(self.git(self.project, "rev-parse", "--absolute-git-dir"))
+        self.assertTrue(inside.startswith(self.tmp + os.sep), inside)
+        hooks = os.path.join(self.tmp, "no-hooks")
+        os.mkdir(hooks)
+        for key, value in (
+            ("user.name", "Test"), ("user.email", "test@example.com"), ("core.hooksPath", hooks),
+            ("commit.gpgsign", "false"),
+        ):
+            self.git(self.project, "config", key, value)
+        self.git(self.project, "commit", "-q", "--allow-empty", "-m", "first")
+        nested = os.path.join(self.project, ".claude", "worktrees", "x")
+        beside = os.path.join(self.tmp, "beside")
+        self.git(self.project, "worktree", "add", "-q", "-b", "x", nested)
+        self.git(self.project, "worktree", "add", "-q", "-b", "y", beside)
+        return nested, beside
+
+    def status_line(self, name="NEXT_SESSION.md"):
+        return f"next-session mode on\nbrief: {self.brief(name)} (not written yet)\n"
 
     def brief(self, name="NEXT_SESSION.md"):
         return os.path.join(self.project, name)
@@ -66,13 +101,58 @@ class NextSession(Hooks):
         self.assertFalse(os.path.exists(self.brief()), "turning the mode on wrote the brief")
 
     def test_on_with_a_path_names_it_relative_to_the_project_and_says_it_exists(self):
+        """Run from a subfolder with no `CLAUDE_PROJECT_DIR`, as the Bash tool runs it, in a project that has a
+        boards folder: the setting goes in the project's, and every reader finds it from either folder."""
+        os.mkdir(os.path.join(self.project, ".logbook"))
         path = self.write_brief(["# Brief", "one", "two"], name=os.path.join("notes", "brief.md"))
-        code, out, err = self.cli("next", "on", "notes/brief.md", cwd=os.path.join(self.project, "notes"))
+        notes = os.path.join(self.project, "notes")
+        code, out, err = self.cli("next", "on", "notes/brief.md", cwd=notes, project_variable=False)
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(out.splitlines()[0], "next-session mode on")
         self.assertRegex(out.splitlines()[1], rf"^brief: {re.escape(path)} \(written \d{{4}}-\d\d-\d\dT\d\d:\d\d:\d\dZ, 3 lines\)$")
         with open(self.setting(), encoding="utf-8") as f:
             self.assertEqual(json.load(f), {"path": os.path.join("notes", "brief.md")})
+        self.assertFalse(os.path.exists(os.path.join(notes, ".logbook")))
+        for cwd in (self.project, notes):
+            with self.subTest(cwd=cwd):
+                self.assertEqual(self.cli("next", "status", cwd=cwd, project_variable=False), (0, out, ""))
+                self.assertEqual(board.next_session(cwd)["path"], path)
+        self.assertIn(path, self.session_start()["hookSpecificOutput"]["additionalContext"])
+
+    def test_from_a_linked_worktree_the_setting_goes_in_the_main_checkout_and_every_entry_point_reads_it(self):
+        nested, beside = self.make_repository()
+        inner = os.path.join(nested, "sub")
+        os.mkdir(inner)
+        sub = os.path.join(self.project, "sub")
+        os.mkdir(sub)
+        self.assertIsNone(self.session_start(project=beside))
+        self.assertEqual(self.cli("next", "on", cwd=inner, project_variable=False), (0, self.status_line(), ""))
+        with open(self.setting(), encoding="utf-8") as f:
+            self.assertEqual(json.load(f), {"path": "NEXT_SESSION.md"})
+        for worktree in (nested, beside):
+            self.assertFalse(os.path.exists(os.path.join(worktree, ".logbook")), worktree)
+        for cwd in (self.project, sub, nested, inner, beside):
+            with self.subTest(cwd=cwd):
+                self.assertEqual(self.cli("next", "status", cwd=cwd, project_variable=False), (0, self.status_line(), ""))
+                self.assertEqual(board.next_session(cwd)["path"], self.brief())
+        for project in (self.project, nested, beside):
+            with self.subTest(session_start=project):
+                text = self.session_start(project=project)["hookSpecificOutput"]["additionalContext"]
+                self.assertTrue(text.startswith(f"Next-session brief: {self.brief()} "), text)
+        self.assertEqual(
+            self.cli("next", "off", cwd=beside, project_variable=False),
+            (0, "next-session mode off; the brief was left as it is\n", ""),
+        )
+        self.assertFalse(os.path.exists(os.path.join(self.project, ".logbook")))
+        self.assertEqual(self.cli("next", "status", cwd=nested, project_variable=False), (0, "next-session mode off\n", ""))
+
+    def test_from_a_subfolder_of_a_repository_the_setting_goes_in_its_top(self):
+        self.make_repository()
+        sub = os.path.join(self.project, "sub")
+        os.mkdir(sub)
+        self.assertEqual(self.cli("next", "on", cwd=sub, project_variable=False), (0, self.status_line(), ""))
+        self.assertTrue(os.path.isfile(self.setting()))
+        self.assertFalse(os.path.exists(os.path.join(sub, ".logbook")))
 
     def test_status_is_off_then_on_with_the_path_the_time_and_the_line_count(self):
         self.assertEqual(self.cli("next", "status"), (0, "next-session mode off\n", ""))
@@ -96,15 +176,57 @@ class NextSession(Hooks):
                 self.assertIn("is not a file path inside the project", err)
                 self.assertFalse(os.path.exists(self.setting()))
 
+    def test_a_path_inside_the_boards_folder_is_refused(self):
+        for path in (".logbook/next-session.json", ".logbook/brief.md", "notes/../.logbook/brief.md", ".logbook"):
+            with self.subTest(path=path):
+                code, out, err = self.cli("next", "on", path)
+                self.assertEqual((code, out), (1, ""))
+                self.assertIn("is not a file path inside the project", err)
+                self.assertFalse(os.path.exists(self.setting()))
+
     def test_off_removes_the_setting_and_leaves_the_brief_alone(self):
         self.cli("next", "on")
         self.write_brief([SECRET])
         self.assertEqual(self.cli("next", "off"), (0, "next-session mode off; the brief was left as it is\n", ""))
         self.assertFalse(os.path.exists(self.setting()))
+        self.assertFalse(os.path.exists(os.path.join(self.project, ".logbook")), "off left the boards folder behind")
         with open(self.brief(), encoding="utf-8") as f:
             self.assertEqual(f.read(), SECRET + "\n")
         self.assertEqual(self.cli("next", "status"), (0, "next-session mode off\n", ""))
         self.assertEqual(self.cli("next", "off"), (0, "next-session mode was already off\n", ""))
+
+    def test_off_keeps_a_boards_folder_that_holds_anything_else(self):
+        self.assertEqual(self.cli("start", "Work")[0], 0)
+        self.cli("next", "on")
+        self.cli("next", "off")
+        self.assertFalse(os.path.exists(self.setting()))
+        self.assertTrue(board.is_board(self.folder))
+        self.assertTrue(os.path.isfile(os.path.join(self.project, ".logbook", ".gitignore")))
+
+    def test_a_setting_that_is_not_json_is_unreadable_and_read_as_off(self):
+        os.mkdir(os.path.join(self.project, ".logbook"))
+        with open(self.setting(), "w", encoding="utf-8") as f:
+            f.write("{not json\n")
+        self.assertEqual(
+            self.cli("next", "status"), (0, f"next-session setting unreadable: {self.setting()} (it is not JSON)\n", ""),
+        )
+        self.assertIsNone(board.next_session(self.project))
+        self.assertIsNone(self.session_start())
+        self.assertEqual(self.cli("next", "on"), (0, self.status_line(), ""))
+
+    def test_a_hand_edited_setting_naming_no_file_in_the_project_is_unreadable_and_read_as_off(self):
+        os.mkdir(os.path.join(self.project, ".logbook"))
+        why = f"it names no file path inside {self.project} outside its .logbook folder"
+        for value in ({"path": "../elsewhere.md"}, {"path": os.path.join(self.tmp, "x.md")},
+                      {"path": ".logbook/next-session.json"}, {"path": 3}, ["NEXT_SESSION.md"]):
+            with self.subTest(value=value):
+                with open(self.setting(), "w", encoding="utf-8") as f:
+                    json.dump(value, f)
+                self.assertEqual(
+                    self.cli("next", "status"), (0, f"next-session setting unreadable: {self.setting()} ({why})\n", ""),
+                )
+                self.assertIsNone(board.next_session(self.project))
+                self.assertIsNone(self.session_start())
 
     def test_a_linked_boards_folder_is_refused(self):
         elsewhere = os.path.join(self.tmp, "boards")

@@ -58,14 +58,17 @@ finishes work overwrites it whole; it is never appended to.
 python3 "${CLAUDE_SKILL_DIR}/../../board/board.py" next on|off|status|facts
 ```
 
-- `/logbook next on [PATH]`: `next on [PATH]` (relative to the project; default `NEXT_SESSION.md`)
+- `/logbook next on [PATH]`: `next on [PATH]` (default `NEXT_SESSION.md`; relative to the folder that
+  holds the setting: the repository's top, the main checkout's from a worktree)
 - `/logbook next off`: `next off` (the brief is left as it is)
 - `/logbook next status`: `next status`
 
 `/logbook next` with no arguments means rewrite the brief now:
 
-1. Run `next status` and `next facts` together.
-2. Overwrite the file whole from what this session knows. Don't re-read files to pad it out.
+1. Run `next status` and `next facts` together. If status does not say the mode is on, tell the
+   user what it says and stop.
+2. Overwrite the path status prints, whole, from what this session knows. Don't re-read files to pad
+   it out.
 3. First line: it is rewritten by each session, never appended to. Then these sections, in order,
    each left out when empty: **Where things stand** (branch, commit, date written); **Read first**
    (one batch of files to request together); **Ask the user first** (open questions, carried from
