@@ -4,9 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!-- The page needs nothing from any network, so it is not allowed to reach one: this blocks requests,
-     images, fonts and frames even if a string in the state tried to smuggle one in. Scripts are left
+     fonts and frames even if a string in the state tried to smuggle one in, and lets images come only
+     from the page's own folder (a file, or the page's own origin when it is served). Scripts are left
      alone so the live board can load state.js from beside itself. -->
-<meta http-equiv="Content-Security-Policy" content="connect-src 'none'; img-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="connect-src 'none'; img-src 'self' file:; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">
 <title>Logbook</title>
 <style>
 /* Colour tokens. Light is the default; dark is defined twice, once for a viewer whose system is dark
@@ -216,7 +217,76 @@ h1.from-prompt {
 .agent-meta .ids { font-family: var(--mono); font-size: 0.95em; }
 .gates { list-style: none; margin: 4px 0 0; padding: 0; font-size: 0.9em; }
 .foot { margin-top: 24px; color: var(--muted); font-size: 0.86em; }
+.foot-facts { margin: 24px 0 0; color: var(--muted); font-size: 0.92em; overflow-wrap: anywhere; }
+.foot-facts + .foot { margin-top: 6px; }
 .empty { color: var(--muted); }
+
+/* The lede: the board's own few sentences on what exists now, under the title. */
+.lede { margin: 14px 0 0; font-size: 1.08em; max-width: 46rem; white-space: pre-line; overflow-wrap: anywhere; }
+
+/* A section with nothing to fold: What it looks like, and Rulings. */
+.block-head { display: flex; align-items: baseline; gap: 8px; padding: calc(var(--pad) - 4px) var(--pad); font-weight: 650; }
+
+/* What it looks like: each image with its caption, tall ones cut off at the top part. */
+.shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+.shot { margin: 0; min-width: 0; }
+.shot img {
+  display: block; width: 100%; height: auto; max-height: 560px; object-fit: cover; object-position: top;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--soft);
+}
+.shot figcaption { margin-top: 6px; color: var(--muted); font-size: 0.9em; overflow-wrap: anywhere; }
+
+/* Rulings: every call, ticked to keep it. An unticked one is marked to reverse. */
+.rhint { margin: 0 0 6px; }
+.rgroup {
+  margin: 16px 0 4px; font-family: var(--mono); font-size: 0.78em; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); overflow-wrap: anywhere;
+}
+.rulings { list-style: none; margin: 0; padding: 0; }
+.rule + .rule { margin-top: 2px; }
+.ruling {
+  display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 4px 10px; align-items: start;
+  padding: 10px; border: 1px solid transparent; border-radius: 8px; cursor: pointer;
+}
+.ruling:hover { background: var(--soft); }
+.ruling.reversed { background: var(--warn-bg); border-color: var(--warn-line); }
+.rtick { width: 18px; height: 18px; margin: 3px 0 0; accent-color: var(--accent); cursor: pointer; }
+.rtext { min-width: 0; overflow-wrap: anywhere; }
+.rtext > span { display: block; }
+.rid { font-family: var(--mono); font-size: 0.88em; color: var(--muted); margin-right: 6px; }
+.rtitle { font-weight: 650; }
+.yours {
+  display: inline-block; margin-left: 8px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--fg); font-size: 0.8em; font-weight: 600; vertical-align: 1px;
+}
+.rmark { margin-left: 6px; color: var(--warn); font-weight: 700; }
+.rmark[hidden] { display: none; }
+.rwhy { margin-top: 2px; }
+.rif { margin-top: 2px; color: var(--muted); font-size: 0.92em; }
+.rif strong { font-weight: 650; }
+.note-label { display: block; margin: 16px 0 4px; font-weight: 600; }
+.answers-note {
+  display: block; width: 100%; min-height: 4.5em; font: inherit; color: inherit; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; resize: vertical;
+}
+/* The answers bar stays at the foot of the window while anything above it is read. */
+.answerbar {
+  position: sticky; bottom: 8px; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+  margin: 0 0 var(--gap); padding: 10px var(--pad); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 2px 14px rgba(0, 0, 0, 0.12);
+}
+.copy-answers { min-height: 44px; padding: 6px 16px; background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 650; }
+.answers-line {
+  flex: 1 1 16rem; min-width: 0; margin: 0; font-family: var(--mono); font-size: 0.86em;
+  overflow-wrap: anywhere; -webkit-user-select: text; user-select: text;
+}
+.answerbar .copied:empty { display: none; }
+.answerbar .copied { flex-basis: 100%; }
+
+/* The record: the tiles, below everything the viewer acts on. */
+.record-head { margin: 28px 0 10px; }
+.record-head h2 { margin: 0; font-size: 1.15em; }
+.record-head p { margin: 2px 0 0; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
@@ -242,7 +312,10 @@ h1.from-prompt {
   .sec { border: 0; border-top: 1px solid var(--border); border-radius: 0; }
   .toggle { padding-left: 0; padding-right: 0; }
   .body { padding-left: 0; padding-right: 0; }
-  .item, .q.hard { break-inside: avoid; }
+  .item, .q.hard, .ruling, .shot { break-inside: avoid; }
+  .answerbar { display: none !important; }
+  .ruling:hover { background: transparent; }
+  .shot img { max-height: 360px; }
   a[href]::after { content: " (" attr(href) ")"; }
 }
 </style>
@@ -331,7 +404,7 @@ var PB = (function () {
       if (shown.indexOf(id) < 0) return;
       var t = { id: id, bad: false };
       if (id === 'built') {
-        var nd = list(state, 'deliverables').length;
+        var nd = builtDeliverables(state).length;
         t.label = 'Built'; t.big = String(list(state, 'commits').length);
         t.sub = 'commits · ' + nd + (nd === 1 ? ' deliverable' : ' deliverables');
       } else if (id === 'changed') {
@@ -378,6 +451,102 @@ var PB = (function () {
 
   function answeredQuestions(state) {
     return list(state, 'questions').filter(function (q) { return q && q.status === 'answered'; });
+  }
+
+  // The board's own summary: the lede under the title, and the facts line in the footer. A board written
+  // before there was one has none.
+  function summaryOf(state) {
+    var s = state && state.summary;
+    if (!s || typeof s !== 'object' || Array.isArray(s)) return null;
+    var text = typeof s.text === 'string' ? s.text.trim() : '';
+    var facts = typeof s.facts === 'string' ? s.facts.trim() : '';
+    return text || facts ? { text: text, facts: facts } : null;
+  }
+
+  // An image is shown only from a plain relative path inside the board folder. Nothing with a scheme or
+  // a drive (any colon), nothing absolute, no step up (`..`, or `%2e%2e`, which a URL reads the same way,
+  // so no percent sign at all), no backslash, which a URL reads as a slash, and no control character,
+  // which a URL drops. It must start with a letter, digit or underscore, since a URL also drops leading
+  // spaces, which would let " //host/x.png" through as a link to another machine.
+  function safeImage(value) {
+    if (typeof value !== 'string' || !/^[A-Za-z0-9_][^:%\\\u0000-\u001f\u007f]*$/.test(value)) return null;
+    return value.indexOf('..') >= 0 ? null : value;
+  }
+
+  // Deliverables with a picture are shown in What it looks like; every other one stays in Built.
+  function gallery(state) {
+    return list(state, 'deliverables').filter(function (d) { return safeImage(d.image) !== null; });
+  }
+
+  function builtDeliverables(state) {
+    return list(state, 'deliverables').filter(function (d) { return safeImage(d.image) === null; });
+  }
+
+  function groupName(value) {
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+  }
+
+  // Every call made, as a ruling the viewer keeps (ticked) or reverses: the decisions in the order they
+  // were made, then each answered question, as the viewer's own call. Grouped by group in the order each
+  // group first appears; the ungrouped come last, in a group named null. A board written before decisions
+  // had groups has every ruling in that one group.
+  function rulings(state) {
+    var items = list(state, 'decisions').map(function (d) {
+      return {
+        id: str(d.id), title: str(d.text), why: str(d.why), reverse: str(d.reverse), yours: d.yours === true,
+        group: groupName(d.group), revised: typeof d.revised === 'string' ? d.revised : null
+      };
+    }).concat(answeredQuestions(state).map(function (q) {
+      var ran = str(q['default']);
+      return {
+        id: str(q.id), title: str(q.text), why: 'Answered: ' + str(q.answer), yours: true, group: null, revised: null,
+        reverse: str(q.reverse) || (ran ? 'was running on: ' + ran : '')
+      };
+    }));
+    var groups = [];
+    var byName = {};
+    var loose = { name: null, items: [] };
+    items.forEach(function (item) {
+      if (item.group === null) { loose.items.push(item); return; }
+      if (!Object.prototype.hasOwnProperty.call(byName, item.group)) {
+        byName[item.group] = { name: item.group, items: [] };
+        groups.push(byName[item.group]);
+      }
+      byName[item.group].items.push(item);
+    });
+    return loose.items.length ? groups.concat([loose]) : groups;
+  }
+
+  function isReversed(ticks, id) {
+    return !!ticks && Object.prototype.hasOwnProperty.call(ticks, id) && ticks[id] === false;
+  }
+
+  var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  // The day a board started, in the viewer's time, as "10 Oct".
+  function dayLabel(iso) {
+    var t = parseTime(iso);
+    if (!isFinite(t)) return '';
+    var d = new Date(t);
+    return d.getDate() + ' ' + MONTHS[d.getMonth()];
+  }
+
+  // The one line the Copy answers button gives the viewer to paste into the chat: which board, the
+  // rulings to reverse (in the order the page shows them) or that every one stands, and the note.
+  // `ticks` holds false for each ruling unticked; anything else is kept.
+  function answersLine(state, ticks, note) {
+    var reversed = [];
+    rulings(state).forEach(function (g) {
+      g.items.forEach(function (item) {
+        if (isReversed(ticks, item.id) && reversed.indexOf(item.id) < 0) reversed.push(item.id);
+      });
+    });
+    var title = str(state && state.title).replace(/\s+/g, ' ').trim() || 'Untitled task';
+    var day = dayLabel(state && state.started);
+    var line = 'Logbook "' + title + '"' + (day ? ' ' + day : '') + ': ' +
+      (reversed.length ? 'reverse ' + reversed.join(', ') : 'keep all');
+    var said = str(note).replace(/\s+/g, ' ').trim();
+    return said ? line + ' | note: ' + said : line;
   }
 
   // Newest first by a time key. A row with no readable time goes last, and ties keep the recorded order.
@@ -538,7 +707,7 @@ var PB = (function () {
       return key !== null && Object.prototype.hasOwnProperty.call(byId, key) ? byId[key] : loose;
     }
     list(state, 'commits').forEach(function (c) { home(c).commits.push(c); });
-    list(state, 'deliverables').forEach(function (d) { home(d).deliverables.push(d); });
+    builtDeliverables(state).forEach(function (d) { home(d).deliverables.push(d); });
     return groups.concat([loose]).filter(function (g) { return g.commits.length || g.deliverables.length; });
   }
 
@@ -549,16 +718,19 @@ var PB = (function () {
       .concat(all.filter(function (a) { return a && a.outcome !== 'running'; }));
   }
 
-  // The sections with something in them, in the page's order. An empty section is not drawn.
+  // The sections with something in them, in the page's order: what needs the viewer, what exists, the
+  // calls to keep or reverse, what is stuck and the steps, then the record (the tabs). An empty section
+  // is not drawn.
   function sections(state, now) {
     var out = [];
     if (openQuestions(state).length) out.push('needs');
+    if (gallery(state).length) out.push('looks');
+    if (rulings(state).length) out.push('rulings');
     if (stuck(state, now).items.length) out.push('stuck');
     if (list(state, 'steps').length) out.push('steps');
-    if (list(state, 'commits').length || list(state, 'deliverables').length) out.push('built');
+    if (list(state, 'commits').length || builtDeliverables(state).length) out.push('built');
     if (list(state, 'changes').length) out.push('changed');
     if (verifiedRows(state).length) out.push('verified');
-    if (list(state, 'decisions').length || answeredQuestions(state).length) out.push('decisions');
     if (otherCommands(state).length) out.push('commands');
     if (list(state, 'agents').length) out.push('agents');
     return out;
@@ -675,7 +847,9 @@ var PB = (function () {
     copyText: copyText, statusOf: statusOf, shortHash: shortHash, linkKey: linkKey,
     schemaMismatch: schemaMismatch, changedFiles: changedFiles, testCommands: testCommands,
     otherCommands: otherCommands, verifiedRows: verifiedRows, verifiedCount: verifiedCount,
-    commandStatus: commandStatus, runsText: runsText, commandsNote: commandsNote, changeCounts: changeCounts
+    commandStatus: commandStatus, runsText: runsText, commandsNote: commandsNote, changeCounts: changeCounts,
+    summaryOf: summaryOf, safeImage: safeImage, gallery: gallery, builtDeliverables: builtDeliverables,
+    rulings: rulings, isReversed: isReversed, dayLabel: dayLabel, answersLine: answersLine
   };
 })();
 
@@ -685,8 +859,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   var root = document.documentElement;
   var STORE = 'logbook-theme';
   var frozen = window.BOARD_FROZEN === true;
-  // The answered questions start collapsed. A viewer who opens a section keeps it open across refreshes.
-  var ui = { last: null, json: null, shape: null, loadError: false, collapsed: { answered: true }, chosen: null, tab: null };
+  // A viewer who folds a section keeps it folded across refreshes. The rulings' ticks (false for each one
+  // unticked) and the note live here too, so a redraw never undoes a tick or a half-typed note.
+  var ui = { last: null, json: null, shape: null, loadError: false, collapsed: {}, chosen: null, tab: null,
+    ticks: {}, note: '', answersKey: null };
 
   // A browser may refuse storage to a local file. Then the switch still works for as long as the page
   // is open, from ui.chosen.
@@ -695,6 +871,25 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   }
   function writeStored(mode) {
     try { window.localStorage.setItem(STORE, mode); } catch (e) { /* kept in memory only */ }
+  }
+  // The ticks and the note are kept per board, so a reload, or the report of the same board, still has them.
+  function loadAnswers(state) {
+    var key = 'logbook-answers-' + PB.str(state.session || state.title);
+    if (ui.answersKey === key) return;
+    ui.answersKey = key;
+    ui.ticks = {};
+    ui.note = '';
+    var saved = null;
+    try { saved = JSON.parse(window.localStorage.getItem(key) || 'null'); } catch (e) { saved = null; }
+    if (!saved || typeof saved !== 'object') return;
+    if (saved.ticks && typeof saved.ticks === 'object') {
+      Object.keys(saved.ticks).forEach(function (id) { if (saved.ticks[id] === false) ui.ticks[id] = false; });
+    }
+    if (typeof saved.note === 'string') ui.note = saved.note;
+  }
+  function saveAnswers() {
+    var data = JSON.stringify({ ticks: ui.ticks, note: ui.note });
+    try { window.localStorage.setItem(ui.answersKey, data); } catch (e) { /* kept in memory only */ }
   }
   function systemDark() {
     try { return window.matchMedia('(prefers-color-scheme: dark)').matches; } catch (e) { return false; }
@@ -878,6 +1073,72 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     }
   }
 
+  // A section with nothing to fold, for what the viewer reads and acts on rather than looks up.
+  function block(id, title, count, body) {
+    var sec = el('section', 'sec sec-' + id);
+    sec.setAttribute('aria-labelledby', 'h-' + id);
+    var h2 = el('h2', 'block-head');
+    h2.id = 'h-' + id;
+    add(h2, el('span', null, title), count ? el('span', 'count', count) : null);
+    body.id = 'b-' + id;
+    body.className = 'body';
+    return add(sec, h2, body);
+  }
+
+  // Copy answers puts the line on the clipboard where the browser allows it. A page opened from a file
+  // is often refused the clipboard, so then the line is selected for the viewer to copy themselves.
+  function copyAnswers(text, line, said) {
+    function say(words) {
+      said.textContent = words;
+      window.setTimeout(function () { if (said.textContent === words) said.textContent = ''; }, 6000);
+    }
+    function select() {
+      try {
+        var range = document.createRange();
+        range.selectNodeContents(line);
+        var selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      } catch (e) { /* the line is still there to select by hand */ }
+      var mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+      say('Selected. Copy it with ' + (mac ? '⌘C' : 'Ctrl+C') + '.');
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { say('Copied. Paste it into the chat.'); }, select);
+    } else {
+      select();
+    }
+  }
+
+  // One ruling: a row whose tick keeps the call, with its code, title, whose call it was, why, and what
+  // reversing it would mean. Unticking it marks it to reverse.
+  function rulingRow(item, now, changed) {
+    var kept = !PB.isReversed(ui.ticks, item.id);
+    var row = el('label', 'ruling' + (kept ? '' : ' reversed'));
+    var box = el('input', 'rtick');
+    box.type = 'checkbox';
+    box.checked = kept;
+    box.setAttribute('data-key', 'tick-' + item.id);
+    box.setAttribute('data-ruling', item.id);
+    var mark = el('span', 'rmark', '· reverse');
+    mark.hidden = kept;
+    var yours = item.yours ? el('span', 'yours', 'yours') : null;
+    if (yours) yours.title = 'You made this call';
+    var text = add(el('span', 'rtext'),
+      add(el('span', 'rhead'), el('span', 'rid', item.id), el('span', 'rtitle', item.title), yours, mark));
+    if (item.why) add(text, el('span', 'rwhy', item.why));
+    if (item.reverse) add(text, add(el('span', 'rif'), el('strong', null, 'If reversed:'), ' ' + item.reverse));
+    if (item.revised) add(text, add(el('span', 'rif'), 'Revised ', when(item.revised, now)));
+    box.addEventListener('change', function () {
+      if (box.checked) delete ui.ticks[item.id]; else ui.ticks[item.id] = false;
+      row.className = 'ruling' + (box.checked ? '' : ' reversed');
+      mark.hidden = box.checked;
+      saveAnswers();
+      changed();
+    });
+    return add(el('li', 'rule'), add(row, box, text));
+  }
+
   function question(q, now) {
     var hard = q.hardStop === true;
     var item = el('li', 'item q' + (hard ? ' hard' : ''));
@@ -983,10 +1244,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     var main = el('main');
     var tabs = shown.filter(function (id) { return PB.TAB_IDS.indexOf(id) >= 0; });
     if (tabs.indexOf(ui.tab) < 0) ui.tab = tabs[0] || null;
-    var placed = false;
     function tabStrip() {
-      placed = true;
       if (!tabs.length) return;
+      add(main, add(el('div', 'record-head'), el('h2', null, 'The record'),
+        el('p', 'sub', 'What was built, changed, checked and run, for reference.')));
       var strip = el('div', 'tiles');
       strip.setAttribute('role', 'tablist');
       strip.setAttribute('aria-label', 'Detail');
@@ -1007,16 +1268,17 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       ui.pane = true;
       try { tabs.forEach(function (id) { add(main, SECTIONS[id](state, now)); }); } finally { ui.pane = false; }
     }
-    // Needs you, Stuck and Steps lead; then the tiles and the panel of the one chosen; then Decisions.
+    // Needs you, What it looks like, Rulings, Stuck and Steps lead; then the record: the tiles and the
+    // panel of the one chosen.
     shown.forEach(function (id) {
-      if (PB.TAB_IDS.indexOf(id) >= 0) return;
-      if (id === 'decisions' && !placed) tabStrip();
-      add(main, SECTIONS[id](state, now));
+      if (PB.TAB_IDS.indexOf(id) < 0) add(main, SECTIONS[id](state, now));
     });
-    if (!placed) tabStrip();
-    if (!shown.length) add(main, el('p', 'empty', 'Nothing recorded yet.'));
+    tabStrip();
+    var summary = PB.summaryOf(state);
+    if (!shown.length && !(summary && summary.text)) add(main, el('p', 'empty', 'Nothing recorded yet.'));
     add(wrap, main);
 
+    if (summary && summary.facts) add(wrap, el('p', 'foot-facts', summary.facts));
     var foot = el('p', 'foot', 'Times are shown in your local time; the board records them in UTC.' +
       (frozen ? ' This report is a snapshot and does not refresh.' : ''));
     if (ui.loadError && !frozen) add(foot, ' The last attempt to read state.js failed, so this is the last state it read.');
@@ -1067,6 +1329,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       add(meta, tk);
     }
     add(top, meta);
+    var summary = PB.summaryOf(state);
+    if (summary && summary.text) add(top, el('p', 'lede', summary.text));
     if (PB.isStale(state, now, frozen)) {
       var notice = el('p', 'notice');
       notice.setAttribute('role', 'status');
@@ -1084,6 +1348,71 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       open.forEach(function (q) { add(ul, question(q, now)); });
       var hard = open.filter(function (q) { return q.hardStop === true; }).length;
       return section('needs', 'Needs you', hard ? hard + ' blocking, ' + open.length + ' open' : open.length + ' open', add(el('div'), ul));
+    },
+
+    looks: function (state) {
+      var grid = el('div', 'shots');
+      var shown = 0;
+      PB.gallery(state).forEach(function (d) {
+        var src = PB.safeImage(d.image);
+        if (!src) return;
+        var caption = PB.str(d.label || d.path);
+        var img = el('img');
+        img.alt = caption;
+        img.decoding = 'async';
+        img.src = src;
+        add(grid, add(el('figure', 'shot'), img, caption ? el('figcaption', null, caption) : null));
+        shown++;
+      });
+      return block('looks', 'What it looks like', shown === 1 ? '1 image' : shown + ' images', add(el('div'), grid));
+    },
+
+    // The rulings, then the note, then the bar that copies both as one line. The bar is the section's
+    // sibling, so it stays at the foot of the window over everything above it, not only the rulings.
+    rulings: function (state, now) {
+      loadAnswers(state);
+      var groups = PB.rulings(state);
+      var line = el('p', 'answers-line');
+      line.id = 'answers-line';
+      function changed() { line.textContent = PB.answersLine(state, ui.ticks, ui.note); }
+      var body = el('div');
+      add(body, el('p', 'sub rhint', 'Ticked means keep. Untick any call you want reversed, add a note if you like, ' +
+        'then copy your answers into the chat.'));
+      var count = 0;
+      groups.forEach(function (g) {
+        // The ungrouped have a heading only when there are groups to set them apart from.
+        var name = g.name !== null ? g.name : groups.length > 1 ? 'Other' : null;
+        if (name) add(body, el('h3', 'rgroup', name));
+        var ul = el('ul', 'rulings');
+        g.items.forEach(function (item) { add(ul, rulingRow(item, now, changed)); count++; });
+        add(body, ul);
+      });
+      var label = el('label', 'note-label', 'Note');
+      label.htmlFor = 'answers-note';
+      var area = el('textarea', 'answers-note');
+      area.id = 'answers-note';
+      area.rows = 3;
+      area.value = ui.note;
+      area.placeholder = 'Anything to add (optional)';
+      area.setAttribute('data-key', 'answers-note');
+      area.addEventListener('input', function () { ui.note = area.value; saveAnswers(); changed(); });
+      add(body, label, area);
+
+      var bar = el('div', 'answerbar');
+      bar.setAttribute('role', 'region');
+      bar.setAttribute('aria-label', 'Your answers');
+      var btn = el('button', 'copy-answers', 'Copy answers');
+      btn.type = 'button';
+      btn.setAttribute('data-key', 'copy-answers');
+      btn.setAttribute('aria-describedby', 'answers-line');
+      var said = el('span', 'copied');
+      said.setAttribute('role', 'status');
+      btn.addEventListener('click', function () { copyAnswers(line.textContent, line, said); });
+      changed();
+      add(bar, btn, line, said);
+
+      var both = document.createDocumentFragment();
+      return add(both, block('rulings', 'Rulings', count === 1 ? '1 call' : count + ' calls', body), bar);
     },
 
     stuck: function (state, now) {
@@ -1136,7 +1465,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
         add(body, ul);
       });
       var nc = PB.list(state, 'commits').length;
-      var nd = PB.list(state, 'deliverables').length;
+      var nd = PB.builtDeliverables(state).length;
       return section('built', 'Built', nc + (nc === 1 ? ' commit, ' : ' commits, ') + nd + (nd === 1 ? ' deliverable' : ' deliverables'), body);
     },
 
@@ -1165,49 +1494,6 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
         add(ul, li);
       });
       return section('verified', 'Verified', PB.verifiedCount(state), add(el('div'), ul));
-    },
-
-    decisions: function (state, now) {
-      var body = el('div');
-      var decisions = PB.list(state, 'decisions');
-      if (decisions.length) {
-        var ul = el('ul', 'list');
-        decisions.forEach(function (d) {
-          var li = el('li', 'item');
-          add(li, add(el('p'), el('span', 'tag', d.id), el('span', null, d.text)));
-          add(li, facts([['Why', d.why], ['To reverse', d.reverse]]));
-          add(ul, li);
-        });
-        add(body, ul);
-      }
-      // Answered questions leave Needs you: they are settled calls now, kept here for the record.
-      var answered = PB.answeredQuestions(state);
-      if (answered.length) {
-        var open = !ui.collapsed.answered;
-        var btn = el('button', 'subtoggle', (open ? 'Hide' : 'Show') + ' answered questions (' + answered.length + ')');
-        btn.type = 'button';
-        btn.setAttribute('data-key', 'toggle-answered');
-        btn.setAttribute('aria-expanded', String(open));
-        btn.setAttribute('aria-controls', 'b-answered');
-        var sub = el('ul', 'list subbody');
-        sub.id = 'b-answered';
-        sub.hidden = !open;
-        answered.forEach(function (q) {
-          var li = el('li', 'item');
-          add(li, add(el('p'), el('span', 'tag', q.id), el('span', null, q.text)));
-          add(li, facts([['Answer', q.answer], ['Was running on', q['default']], ['Answered', q.answered ? localTime(q.answered, now) : null]]));
-          add(sub, li);
-        });
-        btn.addEventListener('click', function () {
-          ui.collapsed.answered = !ui.collapsed.answered;
-          var nowOpen = !ui.collapsed.answered;
-          btn.setAttribute('aria-expanded', String(nowOpen));
-          btn.textContent = (nowOpen ? 'Hide' : 'Show') + ' answered questions (' + answered.length + ')';
-          sub.hidden = !nowOpen;
-        });
-        add(body, btn, sub);
-      }
-      return section('decisions', 'Decisions', decisions.length + (answered.length ? ' made, ' + answered.length + ' answered' : ''), body);
     },
 
     commands: function (state, now) {
@@ -1291,8 +1577,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     if (!app) return;
     var fresh;
     try { fresh = build(state, now); } catch (e) { buildFailed(app); return; }
-    var focused = document.activeElement && document.activeElement.getAttribute
-      ? document.activeElement.getAttribute('data-key') : null;
+    var active = document.activeElement;
+    var focused = active && active.getAttribute ? active.getAttribute('data-key') : null;
+    // A note being typed keeps its caret and its own scroll, not only its focus.
+    var caret = active && active.tagName === 'TEXTAREA' ? [active.selectionStart, active.selectionEnd, active.scrollTop] : null;
     var x = window.scrollX, y = window.scrollY;
     while (app.firstChild) app.removeChild(app.firstChild);
     app.appendChild(fresh);
@@ -1300,7 +1588,13 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     if (focused) {
       var keyed = app.querySelectorAll('[data-key]');
       for (var i = 0; i < keyed.length; i++) {
-        if (keyed[i].getAttribute('data-key') === focused) { keyed[i].focus({ preventScroll: true }); break; }
+        if (keyed[i].getAttribute('data-key') !== focused) continue;
+        keyed[i].focus({ preventScroll: true });
+        if (caret && keyed[i].tagName === 'TEXTAREA') {
+          keyed[i].setSelectionRange(caret[0], caret[1]);
+          keyed[i].scrollTop = caret[2];
+        }
+        break;
       }
     }
     ui.json = state ? JSON.stringify(state) : null;

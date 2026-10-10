@@ -9,6 +9,10 @@
 // in the header offers light, dark and system and remembers the choice; the copy button beside a
 // question works or says it could not; text from the state stays text; nothing is requested from any
 // network; and report.html, closed and copied away on its own, still opens and never looks for state.js.
+// Then, on a board written from fixtures/state-rulings.json: the rulings are drawn by group, with the
+// board's two images and no image whose path leaves the board; unticking a ruling and typing a note make
+// the answers line; the ticks and the note survive a redraw and a reload; Copy answers copies the line or
+// selects it; and the report of that board keeps all of it working, and prints with no answers bar.
 //
 // Needs Node 22 or later (fetch and WebSocket are built in), python3, and a Chromium-family browser:
 // --browser PATH, else $BROWSER, else the usual install places on macOS, Linux and Windows. It builds a
@@ -18,6 +22,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import zlib from 'node:zlib';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -108,6 +113,60 @@ board.render(folder, now)
 
 function closeBoard() {
   boardPy(`board.close(board.board_dir(A['project'], 'proof-session'), now)`);
+}
+
+// A small PNG of one colour, so the board has real images to show.
+function png(width, height, rgb) {
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(body));
+    return Buffer.concat([len, body, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 2;
+  const row = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: width * 3 }, (_, i) => rgb[i % 3]))]);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', header),
+    chunk('IDAT', zlib.deflateSync(Buffer.concat(Array(height).fill(row)))), chunk('IEND', Buffer.alloc(0))]);
+}
+
+// The paths a deliverable's image may not take. Each points at a real picture (secret.png beside the
+// board folder), so one that slipped through would load and be seen.
+const UNSAFE_IMAGES = ['../secret.png', '/etc/secret.png', 'https://example.com/secret.png', ' //example.com/secret.png',
+  'images/%2e%2e/../secret.png', 'images\\..\\..\\secret.png', 'javascript:alert(1)'];
+const RULING_ADDED = 'A call recorded while the page was open';
+
+// The rulings board: the fixture as the page's state, written as board.py writes board.html, state.js and
+// report.html, with the two images it names and the unsafe ones added.
+function rulingsState(extra) {
+  const state = JSON.parse(fs.readFileSync(path.join(HERE, 'fixtures', 'state-rulings.json'), 'utf-8'));
+  state.updated = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  for (const image of UNSAFE_IMAGES) state.deliverables.push({ label: 'Unsafe ' + image, path: null, url: null, step: null, time: null, image });
+  if (extra) state.decisions.push({ id: 'D6', text: RULING_ADDED, why: 'To prove a redraw', reverse: 'Nothing', time: null,
+    group: null, yours: false, revised: null });
+  return state;
+}
+function writeRulings(folder, state) {
+  const file = path.join(scratch.root, 'rulings-state.json');
+  fs.writeFileSync(file, JSON.stringify(state));
+  boardPy(`
+import os
+st = json.load(open(${JSON.stringify(file)}, encoding='utf-8'))
+folder = ${JSON.stringify(folder)}
+template = board.read_text(board.DEFAULT_TEMPLATE)
+open(os.path.join(folder, 'board.html'), 'w', encoding='utf-8').write(board.board_page(template))
+open(os.path.join(folder, 'state.js'), 'w', encoding='utf-8').write('window.BOARD = ' + board.inline_json(st) + ';\\n')
+open(os.path.join(folder, 'report.html'), 'w', encoding='utf-8').write(board.report_page(template, st))
+`);
+}
+function buildRulings() {
+  const folder = path.join(scratch.root, 'rulings', 'board');
+  fs.mkdirSync(path.join(folder, 'images'), { recursive: true });
+  fs.writeFileSync(path.join(folder, 'images', '3-reports-page.png'), png(80, 50, [47, 100, 200]));
+  fs.writeFileSync(path.join(folder, 'images', '3-reports-phone.png'), png(40, 90, [27, 106, 51]));
+  fs.writeFileSync(path.join(scratch.root, 'rulings', 'secret.png'), png(20, 20, [173, 35, 25]));
+  writeRulings(folder, rulingsState(false));
+  return folder;
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -305,7 +364,7 @@ async function main() {
   let before = null;
   let refreshed = false;
   await check(2, 'the board refreshes in place', async () => {
-    await page.click('toggle-decisions');
+    await page.click('toggle-needs');
     before = await page.eval(`(() => {
       window.__proofMarker = 'unchanged';
       window.scrollTo(0, ${SCROLL});
@@ -331,9 +390,9 @@ async function main() {
 
   await check(4, 'a collapsed section stays collapsed across the refresh', async () => {
     if (!refreshed) return [false, 'no refresh in place happened to survive'];
-    const r = await page.eval(`({ expanded: document.querySelector('[data-key="toggle-decisions"]').getAttribute('aria-expanded'),
-      hidden: document.getElementById('b-decisions').hidden })`);
-    return [r.expanded === 'false' && r.hidden === true, `Decisions aria-expanded=${r.expanded}, body hidden=${r.hidden}`];
+    const r = await page.eval(`({ expanded: document.querySelector('[data-key="toggle-needs"]').getAttribute('aria-expanded'),
+      hidden: document.getElementById('b-needs').hidden })`);
+    return [r.expanded === 'false' && r.hidden === true, `Needs you aria-expanded=${r.expanded}, body hidden=${r.hidden}`];
   });
 
   await check(5, 'light, dark and system, remembered', async () => {
@@ -378,6 +437,115 @@ async function main() {
       (quiet ? ', nothing thrown' : ', and the page threw: ' + errors.slice(thrown).join(' | '))];
   });
 
+  // The rulings view, on a board written from the rulings fixture.
+  const rulings = buildRulings();
+  const rulingsView = () => page.eval(`(() => {
+    const line = document.getElementById('answers-line');
+    const note = document.getElementById('answers-note');
+    return {
+      groups: [...document.querySelectorAll('.sec-rulings .rgroup')].map((h) => h.textContent),
+      ids: [...document.querySelectorAll('[data-ruling]')].map((b) => b.getAttribute('data-ruling')),
+      unticked: [...document.querySelectorAll('[data-ruling]')].filter((b) => !b.checked).map((b) => b.getAttribute('data-ruling')),
+      reversedRows: [...document.querySelectorAll('.ruling.reversed [data-ruling]')].map((b) => b.getAttribute('data-ruling')),
+      marks: [...document.querySelectorAll('.ruling .rmark')].filter((m) => !m.hidden).length,
+      yours: [...document.querySelectorAll('.ruling')].filter((r) => r.querySelector('.yours')).map((r) => r.querySelector('[data-ruling]').getAttribute('data-ruling')),
+      line: line ? line.textContent : null,
+      note: note ? note.value : null,
+      focused: document.activeElement && document.activeElement.getAttribute('data-key'),
+      text: document.body.innerText,
+    };
+  })()`);
+  const head = 'Logbook "CSV export for the reports page" 5 Jan: ';
+  const NOTE = 'Make the icon bigger';
+
+  await check(10, 'the rulings are drawn by group, with the lede, the facts and the images', async () => {
+    await page.open(pathToFileURL(path.join(rulings, 'board.html')).href);
+    const v = await rulingsView();
+    const imgs = await page.eval(`[...document.querySelectorAll('#pb-app img')].map((i) => [i.getAttribute('src'), i.complete && i.naturalWidth > 0])`);
+    const ok = JSON.stringify(v.groups) === '["Data format","Page layout","Other"]' &&
+      JSON.stringify(v.ids) === '["D1","D3","D2","D5","D4","Q3"]' && v.unticked.length === 0 &&
+      JSON.stringify(v.yours) === '["D2","Q3"]' && v.line === head + 'keep all' &&
+      v.text.includes('Download CSV button in its header') && v.text.includes('4 files changed') &&
+      JSON.stringify(imgs) === '[["images/3-reports-page.png",true],["images/3-reports-phone.png",true]]';
+    return [ok, `groups ${JSON.stringify(v.groups)}, rows ${JSON.stringify(v.ids)}, unticked ${JSON.stringify(v.unticked)}, ` +
+      `yours ${JSON.stringify(v.yours)}, line "${v.line}", images ${JSON.stringify(imgs)}`];
+  });
+
+  await check(11, 'an image path that leaves the board is not rendered', async () => {
+    const r = await page.eval(`({ imgs: document.querySelectorAll('#pb-app img').length,
+      unsafeShown: document.body.innerText.includes('Unsafe ../secret.png') })`);
+    const asked = requests.filter((u) => u.includes('secret') || u.includes('example.com'));
+    const ok = r.imgs === 2 && asked.length === 0 && r.unsafeShown;
+    return [ok, `${r.imgs} img elements, requests for the unsafe paths: ${asked.length ? asked.join(', ') : 'none'}, ` +
+      `the unsafe deliverables listed as text in Built: ${r.unsafeShown}`];
+  });
+
+  await check(12, 'unticking D2 and typing a note make the answers line', async () => {
+    await page.click('tick-D2');
+    const after = await rulingsView();
+    await page.click('answers-note');
+    await page.send('Input.insertText', { text: NOTE });
+    await sleep(300);
+    const typed = await rulingsView();
+    const ok = after.line === head + 'reverse D2' && JSON.stringify(after.reversedRows) === '["D2"]' && after.marks === 1 &&
+      typed.line === head + 'reverse D2 | note: ' + NOTE;
+    return [ok, `after the untick: "${after.line}", rows marked to reverse ${JSON.stringify(after.reversedRows)}; ` +
+      `after typing: "${typed.line}"`];
+  });
+
+  await check(13, 'the ticks and the note survive a redraw and a reload', async () => {
+    const marker = await page.eval(`(window.__proofMarker = 'unchanged', performance.timeOrigin)`);
+    writeRulings(rulings, rulingsState(true));
+    const seen = await until(async () => (await page.text()).includes(RULING_ADDED), 25000);
+    const redrawn = await rulingsView();
+    const same = await page.eval(`window.__proofMarker === 'unchanged' && performance.timeOrigin === ${marker}`);
+    await page.reload();
+    const reloaded = await rulingsView();
+    const want = head + 'reverse D2 | note: ' + NOTE;
+    const ok = seen && same && JSON.stringify(redrawn.unticked) === '["D2"]' && redrawn.note === NOTE &&
+      redrawn.line === want && redrawn.focused === 'answers-note' &&
+      JSON.stringify(reloaded.unticked) === '["D2"]' && reloaded.note === NOTE && reloaded.line === want;
+    return [ok, (seen && same ? 'redrawn in place' : seen ? 'the page navigated' : 'no redraw within 25s') +
+      `: unticked ${JSON.stringify(redrawn.unticked)}, note ${JSON.stringify(redrawn.note)}, focus on ${redrawn.focused}, ` +
+      `line "${redrawn.line}"; after a reload: unticked ${JSON.stringify(reloaded.unticked)}, note ${JSON.stringify(reloaded.note)}`];
+  });
+
+  const copied = async () => {
+    const thrown = errors.length;
+    await page.click('copy-answers');
+    await sleep(700);
+    const r = await page.eval(`({ said: document.querySelector('.answerbar .copied').textContent,
+      line: document.getElementById('answers-line').textContent, selected: String(window.getSelection()) })`);
+    const clip = await page.eval(`navigator.clipboard.readText().then((t) => ({ t }), (e) => ({ e: String(e) }))`);
+    const quiet = errors.length === thrown;
+    if (clip.t === r.line) return [quiet && r.said.startsWith('Copied'), `clipboard holds the line; the page said "${r.said}"`, r.line];
+    const ok = quiet && r.said.startsWith('Selected. Copy it with') && r.selected === r.line;
+    return [ok, `clipboard not readable or not the line (${clip.t !== undefined ? JSON.stringify(clip.t) : clip.e}); ` +
+      `the page said "${r.said}" and selected ${r.selected === r.line ? 'the line' : JSON.stringify(r.selected)}`, r.line];
+  };
+
+  await check(14, 'Copy answers copies the line, or selects it', async () => {
+    const [ok, saw, line] = await copied();
+    return [ok && line === head + 'reverse D2 | note: ' + NOTE, saw + ` (line "${line}")`];
+  });
+
+  await check(15, 'the report keeps the rulings working, and prints every row without the bar', async () => {
+    await page.open(pathToFileURL(path.join(rulings, 'report.html')).href);
+    const first = await rulingsView();
+    await page.click('tick-D1');
+    const after = await rulingsView();
+    const [copiedOk, saw] = await copied();
+    await page.send('Emulation.setEmulatedMedia', { media: 'print' });
+    const printed = await page.eval(`({ bar: getComputedStyle(document.querySelector('.answerbar')).display,
+      rows: [...document.querySelectorAll('.ruling')].filter((r) => r.getBoundingClientRect().height > 0).length,
+      boxes: [...document.querySelectorAll('[data-ruling]')].map((b) => b.checked ? 1 : 0).join('') })`);
+    await page.send('Emulation.setEmulatedMedia', { media: '' });
+    const ok = JSON.stringify(first.unticked) === '["D2"]' && after.line === head + 'reverse D1, D2 | note: ' + NOTE &&
+      copiedOk && printed.bar === 'none' && printed.rows === 7 && printed.boxes === '0101111';
+    return [ok, `opened with ${JSON.stringify(first.unticked)} unticked; after unticking D1: "${after.line}"; copy: ${saw}; ` +
+      `in print the bar is display:${printed.bar}, ${printed.rows} rows drawn, ticks ${printed.boxes}`];
+  });
+
   // The report is closed, then copied on its own into a folder with nothing beside it.
   let reportRequests = 0;
   await check(9, 'report.html stands alone', async () => {
@@ -408,7 +576,7 @@ async function main() {
       : `${requests.length} requests, all file://, data: or about: (${reportRequests} of them from the report)`];
   });
 
-  return results.every((r) => r.ok) && results.length === 9 ? 0 : 1;
+  return results.every((r) => r.ok) && results.length === 15 ? 0 : 1;
 }
 
 let code = 1;

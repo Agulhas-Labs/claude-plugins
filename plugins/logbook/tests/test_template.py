@@ -168,6 +168,53 @@ class Styles(unittest.TestCase):
         self.assertIn("overflow-wrap: anywhere", rule.group(1))
 
 
+class ImagesStayLocal(unittest.TestCase):
+    """The page shows images from its own folder and nowhere else."""
+
+    def test_images_may_come_only_from_a_file_or_the_pages_own_origin(self):
+        policy = re.search(r'http-equiv="Content-Security-Policy" content="([^"]*)"', read_template()).group(1)
+        directives = dict(d.strip().split(" ", 1) for d in policy.split(";") if d.strip())
+        self.assertEqual(set(directives["img-src"].split()), {"'self'", "file:"})
+        self.assertEqual(directives["connect-src"], "'none'")
+
+    def test_an_image_source_is_set_only_from_safe_image(self):
+        script = page_script(read_template())
+        sources = re.findall(r"^\s*(\w+)\.src\s*=\s*(.*);$", script, re.M)
+        self.assertEqual(sources, [("img", "src"), ("tag", "'state.js?t=' + Date.now()")])
+        self.assertRegex(script, r"var src = PB\.safeImage\(d\.image\);\s+if \(!src\) return;")
+
+
+# The fields the rulings page reads beyond the reference contract. A board written before them lacks them.
+RULINGS_STATE_KEYS = STATE_KEYS | {"summary"}
+RULINGS_ITEM_KEYS = dict(ITEM_KEYS, decisions=ITEM_KEYS["decisions"] | {"group", "yours", "revised"},
+                         deliverables=ITEM_KEYS["deliverables"] | {"image"})
+
+
+class RulingsFixture(unittest.TestCase):
+    def test_the_rulings_fixture_carries_the_contract_and_the_rulings_fields(self):
+        state = fixture("state-rulings.json")
+        self.assertEqual(set(state), RULINGS_STATE_KEYS)
+        self.assertEqual(set(state["summary"]), {"text", "facts", "time"})
+        for key, keys in RULINGS_ITEM_KEYS.items():
+            if key == "settings":
+                continue
+            for item in state[key]:
+                self.assertEqual(set(item), keys, key)
+
+    def test_it_holds_what_the_rulings_view_is_proven_on(self):
+        state = fixture("state-rulings.json")
+        decisions = state["decisions"]
+        self.assertGreaterEqual(len(decisions), 4)
+        self.assertGreaterEqual(len({d["group"] for d in decisions if d["group"]}), 2)
+        self.assertTrue(any(d["yours"] for d in decisions))
+        self.assertTrue(any(d["group"] is None for d in decisions))
+        statuses = [(q["status"], q["hardStop"]) for q in state["questions"]]
+        self.assertIn(("answered", False), statuses)
+        self.assertIn(("open", False), statuses)
+        self.assertIn(("open", True), statuses)
+        self.assertEqual(len([d for d in state["deliverables"] if d["image"]]), 2)
+
+
 class StateFixtures(unittest.TestCase):
     """The three extra states the page is tested on hold to the same contract as the reference."""
 
@@ -270,10 +317,13 @@ class PageLogic(unittest.TestCase):
         cases = {
             "state-started.json": ["steps"],
             "state-live.json": [
-                "needs", "stuck", "steps", "built", "changed", "verified", "decisions", "commands", "agents",
+                "needs", "rulings", "stuck", "steps", "built", "changed", "verified", "commands", "agents",
             ],
             "state-stuck.json": ["stuck", "steps", "built", "verified", "agents"],
-            "state-finished.json": ["steps", "built", "verified", "decisions", "agents"],
+            "state-finished.json": ["rulings", "steps", "built", "verified", "agents"],
+            "state-rulings.json": [
+                "needs", "looks", "rulings", "stuck", "steps", "built", "changed", "verified", "commands", "agents",
+            ],
         }
         for name, expected in cases.items():
             state = fixture(name)
@@ -393,6 +443,86 @@ class PageLogic(unittest.TestCase):
                          ["compact", "comfortable", "comfortable"])
         self.assertEqual(pb("[PB.refreshSeconds({refreshSeconds: 10}), PB.refreshSeconds({}),"
                             " PB.refreshSeconds({refreshSeconds: 0.5}), PB.refreshSeconds(null)]"), [10, 10, 2, 10])
+
+
+@unittest.skipUnless(NODE, NEEDS_NODE)
+class Rulings(unittest.TestCase):
+    """The rulings page's logic: the lede, the images, the rulings and the line the viewer copies."""
+
+    def setUp(self):
+        self.state = fixture("state-rulings.json")
+
+    def test_rulings_are_grouped_in_order_of_first_appearance_and_the_ungrouped_go_last(self):
+        groups = pb("PB.rulings(s).map(function (g) { return [g.name, g.items.map(function (i) { return i.id; })]; })",
+                    s=self.state)
+        self.assertEqual(groups, [["Data format", ["D1", "D3"]], ["Page layout", ["D2", "D5"]], [None, ["D4", "Q3"]]])
+
+    def test_a_ruling_carries_its_title_why_reversal_and_whose_call_it_was(self):
+        items = {i["id"]: i for g in pb("PB.rulings(s)", s=self.state) for i in g["items"]}
+        self.assertEqual(items["D2"]["title"], "The download button sits in the page header.")
+        self.assertTrue(items["D2"]["yours"])
+        self.assertFalse(items["D1"]["yours"])
+        self.assertEqual(items["D1"]["reverse"], "Change format_date in export.py.")
+        self.assertEqual(items["D3"]["revised"], "2026-01-05T13:10:00Z")
+
+    def test_an_answered_question_is_a_ruling_of_yours(self):
+        q3 = pb("PB.rulings(s)[2].items[1]", s=self.state)
+        self.assertEqual(q3, {"id": "Q3", "title": "Comma or semicolon as the separator?", "why": "Answered: Comma is fine.",
+                              "reverse": "Change SEPARATOR in export.py.", "yours": True, "group": None, "revised": None})
+        self.state["questions"][2]["reverse"] = None
+        self.assertEqual(pb("PB.rulings(s)[2].items[1].reverse", s=self.state), "was running on: Comma.")
+
+    def test_open_questions_stay_in_needs_you_and_are_not_rulings(self):
+        self.assertEqual(pb("PB.openQuestions(s).map(function (q) { return q.id; })", s=self.state), ["Q1", "Q2"])
+        ids = pb("[].concat.apply([], PB.rulings(s).map(function (g) { return g.items.map(function (i) { return i.id; }); }))",
+                 s=self.state)
+        self.assertNotIn("Q1", ids)
+        self.assertNotIn("Q2", ids)
+
+    def test_a_board_from_before_groups_has_its_rulings_in_one_unnamed_group(self):
+        live = fixture("state-live.json")
+        self.assertEqual(pb("PB.rulings(s)", s=live), [{"name": None, "items": [
+            {"id": "D1", "title": live["decisions"][0]["text"], "why": live["decisions"][0]["why"],
+             "reverse": live["decisions"][0]["reverse"], "yours": False, "group": None, "revised": None},
+            {"id": "Q3", "title": "Comma or semicolon as the separator?", "why": "Answered: Comma is fine.",
+             "reverse": "Change SEPARATOR in export.py.", "yours": True, "group": None, "revised": None},
+        ]}])
+        self.assertIsNone(pb("PB.summaryOf(s)", s=live))
+
+    def test_the_answers_line_says_keep_all_until_a_ruling_is_unticked(self):
+        head = 'Logbook "CSV export for the reports page" 5 Jan: '
+        self.assertEqual(pb("PB.answersLine(s, {}, '')", s=self.state), head + "keep all")
+        self.assertEqual(pb("PB.answersLine(s, {D2: false}, '')", s=self.state), head + "reverse D2")
+        # In the order the page shows them, which is by group, and only what is false counts.
+        self.assertEqual(pb("PB.answersLine(s, {Q3: false, D4: true, D5: false, D2: false}, '')", s=self.state),
+                         head + "reverse D2, D5, Q3")
+        self.assertEqual(pb("PB.answersLine(s, {D2: false}, n)", s=self.state, n="  Keep the  icon,\nbut bigger. "),
+                         head + "reverse D2 | note: Keep the icon, but bigger.")
+        self.assertEqual(pb("PB.answersLine(s, {}, 'Looks good')", s=self.state), head + "keep all | note: Looks good")
+
+    def test_the_lede_and_the_facts_line_come_from_the_summary(self):
+        self.assertEqual(pb("PB.summaryOf(s)", s=self.state),
+                         {"text": self.state["summary"]["text"], "facts": self.state["summary"]["facts"]})
+        self.assertIsNone(pb("PB.summaryOf({summary: null})"))
+        self.assertIsNone(pb("PB.summaryOf({summary: {text: 3, facts: null}})"))
+
+    def test_images_go_to_what_it_looks_like_and_the_other_deliverables_stay_in_built(self):
+        self.assertEqual(pb("PB.gallery(s).map(function (d) { return d.label; })", s=self.state),
+                         ["The reports page with the Download CSV button", "The same page on a phone"])
+        self.assertEqual(pb("PB.builtDeliverables(s).map(function (d) { return d.label; })", s=self.state), ["The exporter"])
+        built = pb("PB.tiles(s, now)[0]", s=self.state, now=ms(self.state["updated"]))
+        self.assertEqual(built["sub"], "commits · 1 deliverable")
+
+    def test_only_a_plain_relative_path_inside_the_board_is_an_image(self):
+        paths = ["images/3-x.png", "shot.png", "images/3 x.png", "../secret.png", "images/../../x.png", "/etc/x.png",
+                 "https://example.com/x.png", "file:///etc/x.png", "javascript:alert(1)", " //example.com/x.png",
+                 "\t//example.com/x.png", "images\\..\\x.png", "\\\\host\\x.png", "images/%2e%2e/%2E%2E/x.png",
+                 "./x.png", "C:/x.png", "", None, 3]
+        self.assertEqual(pb("p.map(PB.safeImage)", p=paths),
+                         ["images/3-x.png", "shot.png", "images/3 x.png"] + [None] * (len(paths) - 3))
+        unsafe = dict(self.state, deliverables=[dict(self.state["deliverables"][1], image=p) for p in paths[3:]])
+        self.assertEqual(pb("PB.gallery(s).length", s=unsafe), 0)
+        self.assertEqual(pb("PB.builtDeliverables(s).length", s=unsafe), len(paths) - 3)
 
 
 if __name__ == "__main__":
