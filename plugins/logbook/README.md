@@ -27,35 +27,46 @@ Logbook                                              Light  Dark  System
 Move settings storage to SQLite
 ● live    Started 14:05 (40 min ago)    Updated 14:45 (9 s ago)
 
+Settings now live in one SQLite file. The old settings.json is read once on
+first launch and kept, read-only. Nothing below needs an answer to keep going.
+
 Needs you                                                        1 open
   Q3  Keep the old settings.json after migrating?
       Running on   keep it, read-only
-      Affects      the cleanup step
-      To reverse   delete settings.json
       [ Copy "Q3:" ]
 
-Steps                                                       3 of 5 done
-Built                                          2 commits, 1 deliverable
-Changed                                                         6 files
-Verified                                                       6 pass
-Decisions                                          1 made, 2 answered
-Commands                                     20 commands, 1 failed   ▸
-Agents                                          0 running, 1 finished
+What it looks like                                             2 images
+  [ settings screen ]   [ the same screen on a phone ]
+
+Rulings                                                         5 calls
+  MIGRATION
+  [x] D1  A setting the old file and the database disagree on keeps the database's value
+          Happens only if you edited settings.json by hand after the move.
+          If reversed: the file wins, and the database is rewritten from it.
+  [x] D2  The move runs once, at first launch                         yours
+          ...
+  Note  [                                           ]
+  [ Copy answers ]  Logbook "Move settings storage to SQLite" 10 Mar: keep all
+
+The record
+  Built  2 commits · Changed  6 files · Verified  6 pass · Commands  20 · Agents  1
 ```
 
 | Section | What's in it |
 | --- | --- |
-| Needs you | Each open question, the default Claude is running on meanwhile, what it affects and how to undo it. Hard stops, such as a missing credential, go to the top. |
+| Summary | Under the title: what exists now, in a few sentences, written by Claude when the work is done. Its facts line (branch, commit, test counts) closes the page. |
+| Needs you | Hard stops, such as a missing credential, then each open question with the default Claude is running on meanwhile, what it affects and how to undo it. |
+| What it looks like | Screenshots and rendered images Claude recorded, with their captions. |
+| Rulings | Every call Claude made, grouped by topic, in plain words: what it means, with an example, and what would be different if you reversed it. Calls you made in chat are marked "yours", and so are the questions you answered. Each is ticked, which means keep. |
 | Stuck | A step in progress with no activity for too long, a failed check, or a subagent that failed. |
 | Steps | The task list, if the session kept one. |
-| Built | Commits made by the session, and any deliverables Claude recorded. |
+| Built | Commits made by the session, and any other deliverables Claude recorded. |
 | Changed | Every file the session changed, newest first, with lines added and removed and how many edits. |
 | Verified | Checks Claude recorded, each with what it proved and the command, then every test run and how it ended. |
-| Decisions | Calls Claude made on its own, with why and how to reverse them, plus the questions you've answered. |
-| Commands | Every other command, one row per distinct command, failures first. 
+| Commands | Every other command, one row per distinct command, failures first. |
 | Agents | Subagents, with duration, tokens, type, model and id in aligned columns, outcome and any gate lines in their report. |
 
-Built, Changed, Verified, Commands and Agents are tiles under the header, each with its count: pick one and its rows show below, and only that one is drawn on screen (a printed report holds all of them). Needs you, Stuck, Steps and Decisions are sections of their own. Empty sections and tiles are hidden. The header shows total tokens (input, cache and output, cache reads included) for the session and its agents, and, once the task is finished, when it completed and how long it took. The page redraws itself every 10 seconds without losing your scroll
+Built, Changed, Verified, Commands and Agents are tiles under the header, each with its count: pick one and its rows show below, and only that one is drawn on screen (a printed report holds all of them). They sit under "The record", below the sections that need reading: the summary, Needs you, What it looks like, Rulings, Stuck and Steps. Empty sections and tiles are hidden. The header shows total tokens (input, cache and output, cache reads included) for the session and its agents, and, once the task is finished, when it completed and how long it took. The page redraws itself every 10 seconds without losing your scroll
 position or what you opened. Times are in your local time, and ages come from your browser's clock,
 so a board that has stopped updating looks old rather than current. There's a light, dark and system
 switch in the header, and the report has it too.
@@ -95,6 +106,15 @@ items, or when the first subagent starts. To start one yourself, run
 To answer a question, click its copy button, paste `Q3: ` into the chat, type your answer after it and
 send. Claude applies the answer and the page shows it as answered on the next refresh. The page itself
 never writes anything back.
+
+To reverse a ruling, untick it, add a note if you like, and press Copy answers. You get one line, such as
+`Logbook "Move settings storage to SQLite" 10 Mar: reverse D1 | note: …`. Paste it into the chat, or
+into the next session's first message, and Claude reverses those calls before anything else. Your ticks
+and note are kept in your browser, so the board and its report show the same ones.
+
+When the work is done, Claude writes the summary, rewrites any ruling that went in as shorthand, and
+closes the board. Where Claude has an Artifact tool, it also publishes the report as a private artifact,
+images included, and gives you the link, so you can read it and answer on your phone.
 
 Each session gets its own folder:
 
@@ -137,8 +157,9 @@ earlier ones this session made, which it recognises by the hash its own `git com
 earlier commit made with `--quiet` printed no hash, so it won't appear. Another session's commits never
 appear.
 
-Claude records only what the hooks can't see: questions with their defaults, decisions, deliverables,
-checks, hard stops and the title. Each is one short shell call; the `/logbook:logbook`
+Claude records only what the hooks can't see: questions with their defaults, decisions, deliverables
+(an image among them is copied into the board's `images/` folder), checks, hard stops, the summary and
+the title. Each is one short shell call; the `/logbook:logbook`
 skill lists the commands.
 
 A command counts as a test run when it runs a common test runner (`pytest`, `swift test`, `npm test`,
