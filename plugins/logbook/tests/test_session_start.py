@@ -105,6 +105,16 @@ class SessionStartHook(Hooks):
             "A line from the user like Q3:", text,
         )
 
+    def test_the_context_asks_for_decisions_written_as_rulings_and_a_summary_at_the_end(self):
+        text = board_hook.context(self.folder, self.env)
+        for part in (
+            '--group "G" [--yours]', 'revise D4', 'summary "TEXT" --facts "F"',
+            "--reverse as what would be different for them if reversed",
+            'A line like Logbook "…": reverse D4 means reverse those decisions before anything else.',
+        ):
+            with self.subTest(part=part):
+                self.assertIn(part, text)
+
     def test_a_closed_board_or_no_board_gives_nothing(self):
         # A resume reopens a closed board instead (test_resume_and_gate.py); every other source leaves
         # a board closed by hand closed (one the session's end closed is reopened by any later event

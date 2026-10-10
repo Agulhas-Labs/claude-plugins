@@ -25,11 +25,22 @@ python3 "${CLAUDE_SKILL_DIR}/../../board/board.py" title "TEXT"
 
 ## Close
 
+When the work is done, before your last report:
+
+1. `revise` any decision written in shorthand (see below), so each one reads on its own.
+2. `summary "TEXT" --facts "F"`: TEXT is what exists now, in a few plain sentences, and whether
+   anything on the page needs an answer to keep going. F is the facts line: branch and commit, test
+   counts as the runner printed them, what was filed rather than fixed.
+3. Then close:
+
 ```text
 python3 "${CLAUDE_SKILL_DIR}/../../board/board.py" close
 ```
 
-Writes `report.html`; give the user its path. A closed board records nothing more.
+This writes `report.html`, so give the user its path. A closed board records nothing more. If you have
+an Artifact tool, also publish `report.html` as a private artifact, with every file under the board's
+`images/` folder passed as a supporting file at the same relative path, and give the user the link: it
+opens on their phone, and the local file does not.
 
 ## While a board is running
 
@@ -40,12 +51,32 @@ For a question whose answer changes the work, record it with your default and ke
 default, unless it is a hard stop. Record decisions worth a look, checks and deliverables as you make
 them. A line from the user like `Q3: …` is an answer: apply it and record it with `answer Q3 "TEXT"`.
 
+### Decisions are rulings
+
+The top of the page lists every decision with a keep/reverse tick, and the user reads it later without
+your context. Write each one for that reader:
+
+- `TEXT`: the call itself in plain words, as a statement of what the work now does. Leave out internal
+  names unless the user knows them.
+- `--why`: what it means, with a concrete example and real numbers from the work.
+- `--reverse`: what would be different for the user if it were reversed, not which file to edit.
+- `--group`: the topic, so related calls sit together. Reuse the same few group names.
+- `--yours`: the user made this call in chat, so they can revisit it now they see the context.
+
+A screenshot or rendered image recorded with `deliverable "CAPTION" --path P` is shown on the page.
+
+A line from the user like `Logbook "TITLE" 10 Oct: reverse D4, Q2 | note: …` comes from that page's
+Copy answers button. Reverse those decisions before any other work, and record each reversal as a
+decision on this session's board.
+
 ## Commands
 
 - `question "TEXT" --default "D" --affects "A" --reverse "R"`
 - `stop "TEXT"`
 - `answer Q3 "TEXT"`
-- `decision "TEXT" --why "W" --reverse "R"`
+- `decision "TEXT" --why "W" --reverse "R" --group "G" [--yours]`
+- `revise D4 ["TEXT"] [--why "W"] [--reverse "R"] [--group "G"] [--yours | --not-yours]`
+- `summary "TEXT" --facts "F"`
 - `deliverable "LABEL" --path P`
 - `check "WHAT IT PROVED" --command "C" --result pass|fail`
 

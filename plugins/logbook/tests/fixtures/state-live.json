@@ -105,7 +105,8 @@
       "path": "src/reports/export.py",
       "url": null,
       "step": "2",
-      "time": "2026-01-05T09:22:00Z"
+      "time": "2026-01-05T09:22:00Z",
+      "image": null
     }
   ],
   "checks": [
@@ -134,9 +135,17 @@
       "text": "Dates are written as ISO 8601, not in the viewer's locale.",
       "why": "A CSV is read by programs more often than by people.",
       "reverse": "Change format_date in export.py.",
-      "time": "2026-01-05T09:18:00Z"
+      "time": "2026-01-05T09:18:00Z",
+      "group": "Export format",
+      "yours": false,
+      "revised": null
     }
   ],
+  "summary": {
+    "text": "The CSV export runs from the reports page; quoting of commas is still failing.",
+    "facts": "1 of 2 checks passes.",
+    "time": "2026-01-05T09:40:00Z"
+  },
   "agents": [
     {
       "id": "ab12cd34ef56ab78c",

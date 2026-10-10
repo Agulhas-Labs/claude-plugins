@@ -118,13 +118,21 @@ CONTEXT = (
     "A logbook is recording this task at {page}. Record what only you know, one shell call each, "
     'batched with your other calls: python3 "{script}" <command> --board "{folder}". '
     'Commands: question "TEXT" --default "D" --affects "A" --reverse "R" | stop "TEXT" | answer Q3 "TEXT" | '
-    'decision "TEXT" --why "W" --reverse "R" | deliverable "LABEL" --path P | '
-    'check "WHAT IT PROVED" --command "C" --result pass|fail | title "TEXT". '
+    'decision "TEXT" --why "W" --reverse "R" --group "G" [--yours] | revise D4 ["TEXT"] [--why|--reverse|--group] | '
+    'deliverable "LABEL" --path P | check "WHAT IT PROVED" --command "C" --result pass|fail | '
+    'summary "TEXT" --facts "F" | title "TEXT". '
     "Files changed and commands run are recorded for you: record a check only for what a command's "
     "exit status does not show. "
     "For a question whose answer changes the work, record it with your default and keep going on the "
     "default, unless it is a hard stop. Record decisions worth a look, checks and deliverables as you "
-    "make them. A line from the user like Q3: … is an answer: apply it and record it."
+    "make them. A line from the user like Q3: … is an answer: apply it and record it. "
+    "The user reads each decision later, without your context, and ticks keep or reverse: write TEXT as "
+    "the call in plain words, --why as what it means with a concrete example, --reverse as what would be "
+    "different for them if reversed, --group as the topic, and --yours when the user made the call. A "
+    "screenshot recorded as a deliverable shows on the page. When the work is done, before your last "
+    "report: revise any decision written in shorthand, then write summary (what exists now, in a few "
+    "plain sentences; --facts: branch, commit, test counts). A line like Logbook \"…\": reverse D4 means "
+    "reverse those decisions before anything else."
 )
 
 
