@@ -181,7 +181,7 @@ class ImagesStayLocal(unittest.TestCase):
         script = page_script(read_template())
         sources = re.findall(r"^\s*(\w+)\.src\s*=\s*(.*);$", script, re.M)
         self.assertEqual(sources, [("img", "src"), ("tag", "'state.js?t=' + Date.now()")])
-        self.assertRegex(script, r"var src = PB\.safeImage\(d\.image\);\s+if \(!src\) return;")
+        self.assertRegex(script, r"var src = PB\.imageSrc\(d\.image\);\s+if \(!src\) return;")
 
 
 # The fields the rulings page reads beyond the reference contract. A board written before them lacks them.
@@ -481,6 +481,11 @@ class Rulings(unittest.TestCase):
 
     def test_a_board_from_before_groups_has_its_rulings_in_one_unnamed_group(self):
         live = fixture("state-live.json")
+        # A board written before groups: its decisions have no group, yours or revised, and it has no summary.
+        live.pop("summary", None)
+        for d in live["decisions"]:
+            for key in ("group", "yours", "revised"):
+                d.pop(key, None)
         self.assertEqual(pb("PB.rulings(s)", s=live), [{"name": None, "items": [
             {"id": "D1", "title": live["decisions"][0]["text"], "why": live["decisions"][0]["why"],
              "reverse": live["decisions"][0]["reverse"], "yours": False, "group": None, "revised": None},
@@ -516,13 +521,18 @@ class Rulings(unittest.TestCase):
     def test_only_a_plain_relative_path_inside_the_board_is_an_image(self):
         paths = ["images/3-x.png", "shot.png", "images/3 x.png", "../secret.png", "images/../../x.png", "/etc/x.png",
                  "https://example.com/x.png", "file:///etc/x.png", "javascript:alert(1)", " //example.com/x.png",
-                 "\t//example.com/x.png", "images\\..\\x.png", "\\\\host\\x.png", "images/%2e%2e/%2E%2E/x.png",
+                 "\t//example.com/x.png", "images\\..\\x.png", "\\\\host\\x.png",
                  "./x.png", "C:/x.png", "", None, 3]
         self.assertEqual(pb("p.map(PB.safeImage)", p=paths),
                          ["images/3-x.png", "shot.png", "images/3 x.png"] + [None] * (len(paths) - 3))
         unsafe = dict(self.state, deliverables=[dict(self.state["deliverables"][1], image=p) for p in paths[3:]])
         self.assertEqual(pb("PB.gallery(s).length", s=unsafe), 0)
         self.assertEqual(pb("PB.builtDeliverables(s).length", s=unsafe), len(paths) - 3)
+
+    def test_an_image_name_is_url_encoded_so_any_name_stays_a_name(self):
+        names = ["images/3-x.png", "images/3-a b#1?.png", "images/3-100%.png", "images/%2e%2e/x.png", "../x.png"]
+        self.assertEqual(pb("n.map(PB.imageSrc)", n=names),
+                         ["images/3-x.png", "images/3-a%20b%231%3F.png", "images/3-100%25.png", "images/%252e%252e/x.png", None])
 
 
 if __name__ == "__main__":

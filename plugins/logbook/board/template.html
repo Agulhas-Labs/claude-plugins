@@ -464,13 +464,20 @@ var PB = (function () {
   }
 
   // An image is shown only from a plain relative path inside the board folder. Nothing with a scheme or
-  // a drive (any colon), nothing absolute, no step up (`..`, or `%2e%2e`, which a URL reads the same way,
-  // so no percent sign at all), no backslash, which a URL reads as a slash, and no control character,
+  // a drive (any colon), nothing absolute, no step up (`..`), no backslash, which a URL reads as a slash,
+  // and no control character,
   // which a URL drops. It must start with a letter, digit or underscore, since a URL also drops leading
   // spaces, which would let " //host/x.png" through as a link to another machine.
   function safeImage(value) {
-    if (typeof value !== 'string' || !/^[A-Za-z0-9_][^:%\\\u0000-\u001f\u007f]*$/.test(value)) return null;
+    if (typeof value !== 'string' || !/^[A-Za-z0-9_][^:\\\u0000-\u001f\u007f]*$/.test(value)) return null;
     return value.indexOf('..') >= 0 ? null : value;
+  }
+
+  // The src for a safe image path. File names are kept as given, so each part is URL-encoded: a '#', '?' or
+  // '%' in a name is then part of the name, and '%2e%2e' stays a name, never a step up.
+  function imageSrc(value) {
+    var safe = safeImage(value);
+    return safe === null ? null : safe.split('/').map(encodeURIComponent).join('/');
   }
 
   // Deliverables with a picture are shown in What it looks like; every other one stays in Built.
@@ -849,7 +856,7 @@ var PB = (function () {
     otherCommands: otherCommands, verifiedRows: verifiedRows, verifiedCount: verifiedCount,
     commandStatus: commandStatus, runsText: runsText, commandsNote: commandsNote, changeCounts: changeCounts,
     summaryOf: summaryOf, safeImage: safeImage, gallery: gallery, builtDeliverables: builtDeliverables,
-    rulings: rulings, isReversed: isReversed, dayLabel: dayLabel, answersLine: answersLine
+    imageSrc: imageSrc, rulings: rulings, isReversed: isReversed, dayLabel: dayLabel, answersLine: answersLine
   };
 })();
 
@@ -1354,7 +1361,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       var grid = el('div', 'shots');
       var shown = 0;
       PB.gallery(state).forEach(function (d) {
-        var src = PB.safeImage(d.image);
+        var src = PB.imageSrc(d.image);
         if (!src) return;
         var caption = PB.str(d.label || d.path);
         var img = el('img');
