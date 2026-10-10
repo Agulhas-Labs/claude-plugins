@@ -13,22 +13,22 @@ UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 STATE_KEYS = {
     "schema", "session", "title", "titleSource", "started", "updated", "state", "settings",
     "questions", "steps", "commits", "deliverables", "checks", "decisions", "agents",
-    "changes", "commands", "commandsTotal", "tokens",
+    "changes", "commands", "commandsTotal", "tokens", "summary",
 }
 ITEM_KEYS = {
     "settings": {"theme", "accent", "density", "refreshSeconds", "stuckAfterSeconds"},
     "questions": {"id", "text", "default", "affects", "reverse", "hardStop", "status", "answer", "asked", "answered"},
     "steps": {"id", "subject", "status", "updated"},
     "commits": {"hash", "subject", "branch", "time", "step"},
-    "deliverables": {"label", "path", "url", "step", "time"},
+    "deliverables": {"label", "path", "url", "step", "time", "image"},
     "checks": {"id", "proves", "command", "result", "time", "source", "agent"},
-    "decisions": {"id", "text", "why", "reverse", "time"},
+    "decisions": {"id", "text", "why", "reverse", "time", "group", "yours", "revised"},
     "agents": {"id", "type", "model", "description", "started", "ended", "outcome", "gates", "tokens"},
     "changes": {"path", "edits", "added", "removed", "created", "first", "last", "agents"},
     "commands": {"command", "description", "result", "exit", "runs", "fails", "time", "ms", "test", "agents",
                  "latestRun"},
 }
-TIME_KEYS = {"started", "updated", "asked", "answered", "time", "ended", "first", "last"}
+TIME_KEYS = {"started", "updated", "asked", "answered", "time", "ended", "first", "last", "revised"}
 # The words a status may take. The recorder writes no other, and the page has a glyph for each.
 WORDS = {
     "state": {"live", "idle", "finished"},
