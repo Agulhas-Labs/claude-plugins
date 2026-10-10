@@ -19,8 +19,17 @@ prints `{}`. This never changes what the hooks do; it only reads, or starts a bo
 Without `--transcript` (the mod is told the session's id, not its transcript's path), the transcript is the one
 file named for the id under `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/*/`; an id that is not UUID-shaped, or
 no single match, starts the board untitled.
+
+In a project with next-session mode on, the line also carries `"briefNotUpdated": true` when the newest commit
+landed after both the session's start and the brief's last write (`brief_not_updated`), board or no board; a
+brief not written yet is older than any commit. The session started at the first entry in its transcript that
+carries a time: the same file for the whole session, through a compaction or a resume, and a new one after a
+`/clear`, which is a new session. The newest commit is read from the end of the checkout's own reflog
+(`newest_commit`), so it starts no process. With the mode off, no transcript, no repository or no reflog, the key
+is left out.
 """
 import argparse
+from datetime import datetime
 import glob
 import json
 import os
@@ -74,6 +83,92 @@ def start_board(project, session, transcript, env):
     return board.start(project, session, board.clock(), board_hook.title_from(prompt), env, early=earlier) is not None
 
 
+# How far into a transcript to look for its first timed entry: the few untimed ones a host writes come first.
+TIMED_ENTRY_LINES = 50
+
+
+def session_started(transcript):
+    """When the session started, in seconds since the epoch: the first transcript entry with a `timestamp`, or None."""
+    if transcript is None:
+        return None
+    try:
+        with open(transcript, encoding="utf-8", errors="replace") as f:
+            for _, line in zip(range(TIMED_ENTRY_LINES), f):
+                try:
+                    stamp = json.loads(line).get("timestamp")
+                    return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+                except (ValueError, AttributeError, TypeError):
+                    continue
+    except OSError:
+        return None
+    return None
+
+
+# How much of a reflog's end is read: a few hundred entries, never the whole file.
+REFLOG_TAIL_BYTES = 32 * 1024
+# The reflog messages git writes when HEAD moves to a commit made or merged here: `commit: …` and `commit (amend|
+# initial|merge|cherry-pick): …`, `merge <name>: …` (a fast-forward too), `cherry-pick: …`, `revert: …`, `am: …`,
+# and a rebase finishing, `rebase (finish): …` (`rebase -i (finish): …` from older gits). A checkout, a reset, a
+# rebase's own start and steps, and a pull are not commits landing here.
+LANDED = re.compile(r"(?:commit(?: \([^)]*\))?|merge [^:]*|cherry-pick|revert|am|rebase(?: -i)? \(finish\)):")
+
+
+def git_dir(project):
+    """The project's own git directory, found as git finds it from inside: the nearest `.git` above, a folder, or
+    a file naming one (a linked worktree's, a submodule's). None outside a repository."""
+    directory = os.path.realpath(project)
+    while True:
+        dot = os.path.join(directory, ".git")
+        if os.path.isdir(dot):
+            return dot
+        if os.path.isfile(dot):
+            return board.git_pointer(dot)
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            return None
+        directory = parent
+
+
+def newest_commit(project):
+    """When HEAD last moved to a commit made or merged in this checkout, in seconds since the epoch, or None.
+
+    Read from the last entries of `<git dir>/logs/HEAD` whose message `LANDED` matches; none, or no reflog, is None.
+    """
+    found = git_dir(project)
+    tail = board.read_regular(os.path.join(found, "logs", "HEAD"), REFLOG_TAIL_BYTES) if found else None
+    if not tail:
+        return None
+    lines = tail.split(b"\n")
+    if len(tail) == REFLOG_TAIL_BYTES:
+        lines = lines[1:]  # the first may be cut
+    for line in reversed(lines):
+        head, tab, message = line.partition(b"\t")
+        if not tab or not LANDED.match(message.decode("utf-8", errors="replace")):
+            continue
+        stamp = head.rsplit(b" ", 2)  # `<old> <new> <name> <email> <seconds> <zone>`
+        if len(stamp) == 3 and stamp[1].isdigit():
+            return int(stamp[1])
+    return None
+
+
+def brief_not_updated(project, session, transcript, env):
+    """Whether next-session mode is on and the newest commit is newer than both the session's start and the brief."""
+    project = board.contained(os.path.abspath(env.get("CLAUDE_PROJECT_DIR") or project), env)
+    brief = board.next_session(project, count_lines=False) if project is not None else None
+    if brief is None:
+        return False
+    started = session_started(transcript or find_transcript(session, env))
+    if started is None:
+        return False
+    committed = newest_commit(project)
+    if committed is None or committed <= started:
+        return False
+    try:
+        return committed > os.stat(brief["path"]).st_mtime
+    except OSError:
+        return True  # no brief yet
+
+
 def open_board(folder):
     """Open the board's page in the default browser. Returns whether the browser took it."""
     page = os.path.join(folder, board.BOARD_FILE)
@@ -96,6 +191,12 @@ def main(argv=None):
             found = dict(found, opened=bool(found) and open_board(found["board"]))
     except Exception:
         found = {}
+    if not args.open:
+        try:
+            if brief_not_updated(args.project, args.session, args.transcript, os.environ):
+                found = dict(found, briefNotUpdated=True)
+        except Exception:
+            pass
     print(json.dumps(found, separators=(",", ":")))
     return 0
 

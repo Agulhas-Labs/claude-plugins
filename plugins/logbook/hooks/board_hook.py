@@ -42,8 +42,10 @@ calls made before the board existed and only for those: it stops at the first ca
 hook recorded, and it never runs again once the board has been closed.
 
 `SessionStart` prunes boards older than the retention setting, and gives a board that is still open
-its context back: after a compaction or a resume the model no longer has it. `gate.sh` starts this
-for `SessionStart` only in a project that has a boards folder at all.
+its context back: after a compaction or a resume the model no longer has it. In a project with
+next-session mode on, it also names the brief, when it was written and its length, in a few lines
+after the board's context, on every source. `gate.sh` starts this for `SessionStart` only in a project
+that has a boards folder at all, which is where the mode's setting lives.
 
 A work call made inside a subagent (it carries `agent_id`) is recorded with the subagent's id as
 `agent`, never counts towards a start, and never carries the model's context, which would reach the
@@ -673,21 +675,34 @@ def carry_on(folder, payload, env, now):
     return None
 
 
-def session_start(project, folder, payload, env, now):
-    """Prune old boards, then give an open board's context back, whether or not it was announced before.
+def open_board_context(folder, payload, env, now):
+    """An open board's context, whether or not it was announced before, or None when there is no open board.
 
     A resumed session (`source` is `resume`) reopens its own board if closing it had left it final:
     the events lost while it was closed stay lost, but the board records again from here. Any other
     source (`compact`, `startup`, `clear`) leaves a closed board closed.
     """
-    board.prune(project, now, env, keep=folder)
     if not board.is_board(folder):
         return None
     if board.is_closed(board.events(folder)):
         if payload.get("source") != "resume":
             return None
         board.reopen(folder, now, env)
-    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context(folder, env)}}
+    return context(folder, env)
+
+
+def session_start(project, folder, payload, env, now):
+    """Prune old boards, then give the session its context: an open board's, then the next-session brief's.
+
+    The brief's lines (`board.next_session_context`) come on every source while the mode is on, after the
+    board's context when there is one; a project without the mode gets only the board's.
+    """
+    board.prune(project, now, env, keep=folder)
+    parts = [open_board_context(folder, payload, env, now), board.next_session_context(project)]
+    parts = [part for part in parts if part]
+    if not parts:
+        return None
+    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "\n\n".join(parts)}}
 
 
 def revive(folder, payload, env, now):

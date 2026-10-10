@@ -8,6 +8,9 @@ import type { BoardState } from './view'
 // and its state (and starts the board early); it runs at session start, when a turn completes, and at the first
 // changed file or commit of a session with no board. Every other update re-reads `state.js` with $.fs.read, after
 // a tool call that can have changed it and on a 30-second tick while a turn runs. Drawing runs no process.
+// In next-session mode, the cue that a commit has landed since the session started and the brief has not been
+// written since comes in the same line (`briefNotUpdated`) and changes only when mod_state.py runs again; it is
+// drawn on a running board's row or, with none, on a row of its own.
 // The session's id and folder come from the engine ($.session), read each time they are needed: a host may skip
 // a plugin's classic.* hooks, and a /clear changes the id with no session.start after it.
 
@@ -18,6 +21,7 @@ const HELPER = 'board/mod_state.py'
 const FILE_TOOLS = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit']
 const COMMITS = /\bgit\b[^\n;&|]*\bcommit\b/ // the gate's own test is stricter; a false hit costs one idempotent run
 const TOAST = 70
+export const CUE = 'next-session brief not updated'
 
 type State = {
   transcriptPath: string
@@ -25,6 +29,7 @@ type State = {
   sessionId: string
   board: string | null
   state: BoardState | null
+  briefNotUpdated: boolean
   seen: Set<string> | null // the open questions the last read showed; null until a read has set the baseline
   located: boolean
   startTried: boolean
@@ -62,6 +67,7 @@ function forget(s: State) {
   s.epoch++
   s.board = null
   s.state = null
+  s.briefNotUpdated = false
   s.seen = null
   s.located = false
   s.startTried = false
@@ -117,6 +123,7 @@ export async function locate($, s: State, opts: { start?: boolean; quiet?: boole
   s.located = true
   const found = stdout.trim() ? JSON.parse(stdout) : {}
   s.board = typeof found.board === 'string' ? found.board : null
+  s.briefNotUpdated = found.briefNotUpdated === true
   take($, s, s.board ? (found.state as BoardState) : null, opts.quiet === true)
 }
 
@@ -142,9 +149,11 @@ export async function openBoard($, s: State) {
 
 export async function drawBand($, e, next, s: State) {
   const below = await next(e)
-  if (e.props.hasSurvey || !s.state || s.state.state === 'finished') return below
+  const running = s.state !== null && s.state.state !== 'finished'
+  if (e.props.hasSurvey || (!running && !s.briefNotUpdated)) return below
   const { Box, Button, Text } = $.ui.resolve(e)
-  const shown = parts(s.state, await $.clock.now())
+  const cue: Part[] = s.briefNotUpdated ? [{ key: 'brief', text: CUE, color: 'yellow' }] : []
+  const shown = [...(running ? parts(s.state!, await $.clock.now()) : []), ...cue]
   const row = (
     <Box key="logbook-band">
       <Text key="logbook-tag" bold color="white">{TAG}</Text>
@@ -153,8 +162,8 @@ export async function drawBand($, e, next, s: State) {
         i > 0 ? <Text key={`${part.key}-sep`} dimColor>{' · '}</Text> : null,
         <Text key={`${part.key}-value`} color={part.color} bold={part.bold}>{part.text}</Text>,
       ])}
-      <Text>{shown.length > 0 ? '   ' : ''}</Text>
-      <Button key="logbook-open" label="Logbook" onPress={() => run(() => openBoard($, s))} />
+      {running ? <Text>{shown.length > 0 ? '   ' : ''}</Text> : null}
+      {running ? <Button key="logbook-open" label="Logbook" onPress={() => run(() => openBoard($, s))} /> : null}
     </Box>
   )
   return below ? (
@@ -183,7 +192,7 @@ function stopTick(s: State) {
 
 export const register: Register = on => {
   const s: State = {
-    transcriptPath: '', cwd: '', sessionId: '', board: null, state: null, seen: null,
+    transcriptPath: '', cwd: '', sessionId: '', board: null, state: null, briefNotUpdated: false, seen: null,
     located: false, startTried: false, epoch: 0, tick: null,
   }
 

@@ -6,8 +6,8 @@
 # `LOGBOOK_CALLS`, a `Stop` after a work call that changed something). Everything else exits
 # here, silently, so a short session that changed nothing pays for this script and nothing more.
 # `SessionStart` reaches the handler only in a project that has a boards folder, where it prunes old
-# boards and gives this session's board back (reopening it, on a resume); a project that has never had
-# a board pays nothing at start either.
+# boards and gives this session's board back (reopening it, on a resume), or that a next-session setting
+# may apply to (`next_setting`); a project that has never had either pays a few file tests at start.
 #
 # A task's id is its position in the list, so the `TaskCreate` that reaches its threshold says so
 # itself. Work calls (a main-session `Write`, `Edit`, `MultiEdit`, `NotebookEdit` or `Bash`, whether
@@ -237,8 +237,27 @@ fi
 # A boards folder that is a symbolic link is never used: nothing is recorded through it.
 [ -L "$project/.logbook" ] && exit 0
 
+# Whether a next-session setting may apply to $project, walking up the way the handler does
+# (`board.next_session_walk`): a folder holding `.logbook/next-session.json` on the way up, or a `.git`
+# file (a linked worktree, whose setting may be in the main checkout: the handler asks git). The walk
+# stops at the first `.git` folder, a repository's top. File tests only: it starts no program.
+next_setting() {
+  dir=$project
+  while :; do
+    [ -e "$dir/.logbook/next-session.json" ] && return 0
+    [ -d "$dir/.git" ] && return 1
+    [ -f "$dir/.git" ] && return 0
+    case $dir in
+      /*/*) dir=${dir%/*} ;;
+      /?*) dir=/ ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
 if [ "$event" = SessionStart ]; then
   [ -d "$project/.logbook" ] && run
+  next_setting && run
   exit 0
 fi
 
