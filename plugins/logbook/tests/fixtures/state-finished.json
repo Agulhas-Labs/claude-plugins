@@ -126,21 +126,24 @@
       "path": "src/reports/export.py",
       "url": null,
       "step": "2",
-      "time": "2026-01-05T09:58:00Z"
+      "time": "2026-01-05T09:58:00Z",
+      "image": null
     },
     {
       "label": "The download button",
       "path": "src/reports/templates/table.html",
       "url": null,
       "step": "3",
-      "time": "2026-01-05T10:10:00Z"
+      "time": "2026-01-05T10:10:00Z",
+      "image": null
     },
     {
       "label": "The pull request",
       "path": null,
       "url": "https://example.com/reports/pull/12",
       "step": null,
-      "time": "2026-01-05T10:31:00Z"
+      "time": "2026-01-05T10:31:00Z",
+      "image": null
     }
   ],
   "checks": [
@@ -178,16 +181,27 @@
       "text": "Dates are written as ISO 8601, not in the viewer's locale.",
       "why": "A CSV is read by programs more often than by people.",
       "reverse": "Change format_date in export.py.",
-      "time": "2026-01-05T09:18:00Z"
+      "time": "2026-01-05T09:18:00Z",
+      "group": "Export format",
+      "yours": false,
+      "revised": null
     },
     {
       "id": "D2",
       "text": "The export streams rows instead of building the file in memory.",
       "why": "The largest report has hundreds of thousands of rows.",
       "reverse": "Replace stream_rows with a list in export.py.",
-      "time": "2026-01-05T09:56:00Z"
+      "time": "2026-01-05T09:56:00Z",
+      "group": "Export format",
+      "yours": true,
+      "revised": "2026-01-05T10:05:00Z"
     }
   ],
+  "summary": {
+    "text": "The reports page exports CSV, with dates in ISO 8601 and one file per export.",
+    "facts": null,
+    "time": "2026-01-05T10:10:00Z"
+  },
   "agents": [
     {
       "id": "ab12cd34ef56ab78c",

@@ -78,6 +78,13 @@ BOARD_FILES = (ANNOUNCED_FILE, CATCH_UP_FILE, EVENTS_FILE, STATE_FILE, BOARD_FIL
 TEMPORARY_FILE = re.compile(
     r"\.(?:" + "|".join(re.escape(n) for n in (STATE_FILE, BOARD_FILE, REPORT_FILE, CATCH_UP_FILE)) + r")\.[a-z0-9_]{8}\.tmp"
 )
+# A deliverable that is an image is copied into this folder of its board as `<n>-<file name>`, n its
+# 1-based position among the deliverables, so the page and the report show it beside themselves.
+IMAGES_DIR = "images"
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")
+IMAGE_CAP_BYTES = 10 * 1024 * 1024
+# What a deliverable's `image` may be: one file name inside the board's images folder, never a way out.
+IMAGE_PATH = re.compile(IMAGES_DIR + r"/(?!\.\.?$)[^/\\\x00]+")
 UNTITLED = "Untitled task"
 DEFAULT_RETENTION_DAYS = 14
 DIGITS = re.compile(r"[0-9]+")
@@ -519,6 +526,7 @@ class Derivation:
         self.deliverables = []
         self.checks = []
         self.decisions = []
+        self.summary = None
         self.agents = {}
         self.tokens = None
 
@@ -667,14 +675,37 @@ class Derivation:
         self.decisions.append({
             "id": f"D{len(self.decisions) + 1}", "text": decision,
             "why": text(event.get("why")), "reverse": text(event.get("reverse")), "time": t,
+            "group": text(event.get("group")), "yours": event.get("yours") is True, "revised": None,
         })
+
+    def on_revise(self, event, t):
+        """Rewrite an earlier decision in place: only the fields the event carries change; id and position stay."""
+        decision = find_entry(self.decisions, "D", event.get("id"))
+        if decision is None:
+            return False
+        changes = {key: text(event[key]) for key in ("text", "why", "reverse", "group") if text(event.get(key))}
+        if isinstance(event.get("yours"), bool):
+            changes["yours"] = event["yours"]
+        if not changes:
+            return False
+        decision.update(changes, revised=t)
+
+    def on_summary(self, event, t):
+        summary = text(event.get("text"))
+        if not summary:
+            return False
+        self.summary = {"text": summary, "facts": text(event.get("facts")), "time": t}
 
     def on_deliverable(self, event, t):
         path, url = text(event.get("path")), text(event.get("url"))
         label = text(event.get("label")) or path or url
         if not label:
             return False
-        self.deliverables.append({"label": label, "path": path, "url": url, "step": text(event.get("step")), "time": t})
+        image = text(event.get("image"))
+        self.deliverables.append({
+            "label": label, "path": path, "url": url, "step": text(event.get("step")), "time": t,
+            "image": image if image and IMAGE_PATH.fullmatch(image) else None,
+        })
 
     def on_check(self, event, t):
         result = text(event.get("result"))
@@ -772,6 +803,7 @@ class Derivation:
             "deliverables": self.deliverables,
             "checks": self.checks,
             "decisions": self.decisions,
+            "summary": self.summary,
             "agents": list(self.agents.values()),
             "tokens": self.tokens,
             "changes": list(self.changes.values()),
@@ -780,11 +812,16 @@ class Derivation:
         }
 
 
+def find_entry(items, prefix, entry_id):
+    """The entry an id names: with prefix `Q`, `Q2`, `q2` and `2` all name the second one. None when none does."""
+    wanted = (text(entry_id) or "").strip().upper()
+    wanted = wanted if wanted.startswith(prefix) else prefix + wanted
+    return next((item for item in items if item["id"] == wanted), None)
+
+
 def find_question(questions, question_id):
     """The question an answer names: `Q2`, `q2` and `2` all name the second one. None when none does."""
-    wanted = (text(question_id) or "").strip().upper()
-    wanted = wanted if wanted.startswith("Q") else "Q" + wanted
-    return next((q for q in questions if q["id"] == wanted), None)
+    return find_entry(questions, "Q", question_id)
 
 
 HANDLERS = {
@@ -800,6 +837,8 @@ HANDLERS = {
     "question": Derivation.on_question,
     "answer": Derivation.on_answer,
     "decision": Derivation.on_decision,
+    "revise": Derivation.on_revise,
+    "summary": Derivation.on_summary,
     "deliverable": Derivation.on_deliverable,
     "check": Derivation.on_check,
     "change": Derivation.on_change,
@@ -1549,9 +1588,19 @@ def abandoned_start(folder, now):
 def remove_board(folder):
     """Delete a board's own files by exact name, the marker last, then the folder. Returns whether it went.
 
-    Nothing is recursed into and no link is followed: a name that is not a board file, or is not a
+    The one folder gone into is the board's own images folder, when it is a real folder: the regular
+    files in it go, then it does. No link is followed: a name that is not a board file, or is not a
     regular file, stays, and so does the folder around it.
     """
+    images = os.path.join(folder, IMAGES_DIR)
+    if os.path.isdir(images) and not os.path.islink(images):
+        for name in os.listdir(images):
+            if is_regular(os.path.join(images, name)):
+                os.unlink(os.path.join(images, name))
+        try:
+            os.rmdir(images)
+        except OSError:
+            pass
     names = os.listdir(folder)
     doomed = [n for n in names if n != MARKER_FILE and (n in BOARD_FILES or TEMPORARY_FILE.fullmatch(n))]
     for name in doomed + [MARKER_FILE]:
@@ -2062,12 +2111,73 @@ def command_answer(args, board, now):
 
 
 def command_decision(args, board, now):
-    event, state = recorded(board, now, "decision", text=args.text, why=args.why, reverse=args.reverse)
+    event, state = recorded(
+        board, now, "decision", text=args.text, why=args.why, reverse=args.reverse, group=args.group, yours=args.yours,
+    )
     return f"{entry_id(state['decisions'], text=event['text'], time=event['t'])} recorded"
 
 
+def command_revise(args, board, now):
+    """Rewrite a decision in place: a `revise` event carrying only the fields given."""
+    decision = find_entry(open_state(board)["decisions"], "D", args.id)
+    if decision is None:
+        raise Refused(f"no decision {args.id} on this board")
+    given = (("text", args.text), ("why", args.why), ("reverse", args.reverse), ("group", args.group), ("yours", args.yours))
+    fields = {key: value for key, value in given if value is not None}
+    if not fields:
+        raise Refused(f"nothing to revise in {decision['id']}: give new text or a field to change")
+    append(board, "revise", now, id=decision["id"], **fields)
+    render(board, now)
+    return f"{decision['id']} revised"
+
+
+def command_summary(args, board, now):
+    recorded(board, now, "summary", text=args.text, facts=args.facts)
+    return "summary set"
+
+
+def board_image(board, path, number):
+    """Copy the image at `path` into the board as `images/<number>-<file name>`; return that path, relative
+    to the board. None, with nothing kept, when `path` is not a regular file with an image extension of at
+    most IMAGE_CAP_BYTES, or the copy cannot be made.
+
+    Nothing is written through a link: the images folder is opened without following one, and the copy is
+    created in it by name (exclusively, never followed) and renamed into place there.
+    """
+    name = os.path.basename(path)
+    if os.path.splitext(name)[1].lower() not in IMAGE_EXTENSIONS:
+        return None
+    data = read_regular(path, IMAGE_CAP_BYTES + 1)
+    if data is None or len(data) > IMAGE_CAP_BYTES:
+        return None
+    target, folder = f"{number}-{name}", os.path.join(board, IMAGES_DIR)
+    temporary = f".{number}.{os.getpid()}.tmp"
+    try:
+        os.makedirs(folder, exist_ok=True)
+        directory = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+        try:
+            write_all(fd, data)
+        finally:
+            os.close(fd)
+        os.replace(temporary, target, src_dir_fd=directory, dst_dir_fd=directory)
+    except OSError:
+        try:
+            os.unlink(temporary, dir_fd=directory)
+        except OSError:
+            pass
+        return None
+    finally:
+        os.close(directory)
+    return f"{IMAGES_DIR}/{target}"
+
+
 def command_deliverable(args, board, now):
-    recorded(board, now, "deliverable", label=args.label, path=args.path, url=args.url, step=args.step)
+    image = board_image(board, args.path, len(open_state(board)["deliverables"]) + 1) if args.path else None
+    recorded(board, now, "deliverable", label=args.label, path=args.path, url=args.url, step=args.step, image=image)
     return "deliverable recorded"
 
 
@@ -2199,6 +2309,20 @@ def parser():
     sub.add_argument("text", type=entry_text)
     sub.add_argument("--why", type=entry_text)
     sub.add_argument("--reverse", type=entry_text, help="how to undo it")
+    sub.add_argument("--group", type=entry_text, help="the heading it is shown under")
+    sub.add_argument("--yours", action="store_true", help="the user made this call")
+    sub = model_command("revise", command_revise, "rewrite a decision by its id (D4, d4 or 4); only what is given changes")
+    sub.add_argument("id")
+    sub.add_argument("text", nargs="?", type=entry_text)
+    sub.add_argument("--why", type=entry_text)
+    sub.add_argument("--reverse", type=entry_text, help="how to undo it")
+    sub.add_argument("--group", type=entry_text, help="the heading it is shown under")
+    whose = sub.add_mutually_exclusive_group()
+    whose.add_argument("--yours", dest="yours", action="store_true", default=None, help="the user made this call")
+    whose.add_argument("--not-yours", dest="yours", action="store_false", default=None, help="the user did not make this call")
+    sub = model_command("summary", command_summary, "say what exists now; a later summary replaces it whole")
+    sub.add_argument("text", type=entry_text)
+    sub.add_argument("--facts", type=entry_text, help="the figures and facts behind it")
     sub = model_command("deliverable", command_deliverable, "record something made: a file or a link")
     sub.add_argument("label", type=entry_text)
     where = sub.add_mutually_exclusive_group(required=True)
