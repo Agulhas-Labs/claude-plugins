@@ -53,7 +53,7 @@
       "displayName": "Logbook",
       "source": "./plugins/logbook",
       "description": "Keeps a live local page for a long Claude Code task: what needs you, what was built, what was verified, and what was decided without you. Hooks record it without spending model tokens, the page follows light, dark or your system's setting, and when the task ends the same page is the report.",
-      "version": "2.4.0",
+      "version": "2.5.0",
       "author": {
         "name": "Agulhas Labs"
       },
