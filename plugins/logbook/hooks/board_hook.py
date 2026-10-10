@@ -120,7 +120,7 @@ CONTEXT = (
     'Commands: question "TEXT" --default "D" --affects "A" --reverse "R" | stop "TEXT" | answer Q3 "TEXT" | '
     'decision "TEXT" --why "W" --reverse "R" --group "G" [--yours] | revise D4 ["TEXT"] [--why|--reverse|--group] | '
     'deliverable "LABEL" --path P | check "WHAT IT PROVED" --command "C" --result pass|fail | '
-    'summary "TEXT" --facts "F" | title "TEXT". '
+    'summary "TEXT" --facts "F" | close | title "TEXT". '
     "Files changed and commands run are recorded for you: record a check only for what a command's "
     "exit status does not show. "
     "For a question whose answer changes the work, record it with your default and keep going on the "
@@ -130,9 +130,11 @@ CONTEXT = (
     "the call in plain words, --why as what it means with a concrete example, --reverse as what would be "
     "different for them if reversed, --group as the topic, and --yours when the user made the call. A "
     "screenshot recorded as a deliverable shows on the page. When the work is done, before your last "
-    "report: revise any decision written in shorthand, then write summary (what exists now, in a few "
-    "plain sentences; --facts: branch, commit, test counts). A line like Logbook \"…\": reverse D4 means "
-    "reverse those decisions before anything else."
+    "report: revise any decision written in shorthand, write summary (what exists now, in a few plain "
+    "sentences; --facts: branch, commit, test counts), then close; if you have an Artifact tool, publish "
+    "the report.html close prints, with its images/ folder as files, and give the user the link. A line "
+    "like Logbook \"…\": reverse D4 means reverse those decisions before anything else, skipping any "
+    "already reversed; revise each one you reverse on this board to say what now holds."
 )
 
 

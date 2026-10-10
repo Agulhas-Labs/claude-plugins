@@ -30,7 +30,8 @@ When the work is done, before your last report:
 1. `revise` any decision written in shorthand (see below), so each one reads on its own.
 2. `summary "TEXT" --facts "F"`: TEXT is what exists now, in a few plain sentences, and whether
    anything on the page needs an answer to keep going. F is the facts line: branch and commit, test
-   counts as the runner printed them, what was filed rather than fixed.
+   counts as the runner printed them, and any issues you filed, with their links. Claim nothing you
+   didn't do.
 3. Then close:
 
 ```text
@@ -66,8 +67,9 @@ your context. Write each one for that reader:
 A screenshot or rendered image recorded with `deliverable "CAPTION" --path P` is shown on the page.
 
 A line from the user like `Logbook "TITLE" 10 Oct: reverse D4, Q2 | note: …` comes from that page's
-Copy answers button. Reverse those decisions before any other work, and record each reversal as a
-decision on this session's board.
+Copy answers button. Reverse those decisions before any other work, skipping any already reversed.
+If the decision is on this session's board, `revise` it to say what now holds. Otherwise record the
+reversal as a decision here.
 
 ## Commands
 

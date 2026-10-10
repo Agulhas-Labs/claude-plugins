@@ -33,6 +33,8 @@ first launch and kept, read-only. Nothing below needs an answer to keep going.
 Needs you                                                        1 open
   Q3  Keep the old settings.json after migrating?
       Running on   keep it, read-only
+      Affects      the cleanup step
+      To reverse   delete settings.json
       [ Copy "Q3:" ]
 
 What it looks like                                             2 images
@@ -66,7 +68,7 @@ The record
 | Commands | Every other command, one row per distinct command, failures first. |
 | Agents | Subagents, with duration, tokens, type, model and id in aligned columns, outcome and any gate lines in their report. |
 
-Built, Changed, Verified, Commands and Agents are tiles under the header, each with its count: pick one and its rows show below, and only that one is drawn on screen (a printed report holds all of them). They sit under "The record", below the sections that need reading: the summary, Needs you, What it looks like, Rulings, Stuck and Steps. Empty sections and tiles are hidden. The header shows total tokens (input, cache and output, cache reads included) for the session and its agents, and, once the task is finished, when it completed and how long it took. The page redraws itself every 10 seconds without losing your scroll
+Built, Changed, Verified, Commands and Agents are tiles, each with its count: pick one and its rows show below, and only that one is drawn on screen (a printed report holds all of them). They sit under "The record", below the sections that need reading: the summary, Needs you, What it looks like, Rulings, Stuck and Steps. Empty sections and tiles are hidden. The header shows total tokens (input, cache and output, cache reads included) for the session and its agents, and, once the task is finished, when it completed and how long it took. The page redraws itself every 10 seconds without losing your scroll
 position or what you opened. Times are in your local time, and ages come from your browser's clock,
 so a board that has stopped updating looks old rather than current. There's a light, dark and system
 switch in the header, and the report has it too.

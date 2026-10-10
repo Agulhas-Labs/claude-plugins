@@ -110,7 +110,8 @@ class SessionStartHook(Hooks):
         for part in (
             '--group "G" [--yours]', 'revise D4', 'summary "TEXT" --facts "F"',
             "--reverse as what would be different for them if reversed",
-            'A line like Logbook "…": reverse D4 means reverse those decisions before anything else.',
+            'A line like Logbook "…": reverse D4 means reverse those decisions before anything else',
+            "then close; if you have an Artifact tool, publish the report.html close prints",
         ):
             with self.subTest(part=part):
                 self.assertIn(part, text)
