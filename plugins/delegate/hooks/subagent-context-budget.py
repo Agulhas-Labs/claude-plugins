@@ -26,12 +26,21 @@ So the line says the cache has expired, what each further turn costs, and to lan
 and report rather than run another long command. `DELEGATE_SUBAGENT_CACHE_SECONDS` overrides the
 300-second lifetime.
 
+A run of single read-only calls gets a "batch your reads" line. Measured across four projects on one
+machine, five days: 85.7% of subagent turns made exactly one tool call (the target is 70%), and a
+read-only call straight after another one was 29.1% of subagent turns and 24.8% of subagent spend.
+The prose rule to request independent calls together did not change that, so the line says it at the
+moment it happens: on the third turn in a row that made one read-only call, once, not on a fourth or
+fifth. A turn with two or more calls, or a call that may write, ends the run. `DELEGATE_BATCH_NUDGE=0`
+turns the line off.
+
 Only subagent calls carry `agent_id`, so the main session is never told. Anything unexpected exits
 silently: a budget nudge is never worth breaking a tool call.
 """
 import io
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -56,7 +65,7 @@ def transcript(payload):
 
 
 def turns(path):
-    """(context size, tool_use ids, {tool_use id: timestamp}) of each distinct assistant message in the
+    """(context size, tool_use ids, {tool_use id: timestamp}, {tool_use id: (name, input)}) of each distinct assistant message in the
     transcript's tail. A message split across lines takes each call's timestamp from the line that
     carries it."""
     with open(path, "rb") as f:
@@ -78,12 +87,13 @@ def turns(path):
         if mid not in found:
             usage = message.get("usage") or {}
             size = sum(usage.get(k, 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
-            found[mid] = (size, [], {})
+            found[mid] = (size, [], {}, {})
             order.append(mid)
         for block in message.get("content") or []:
             if isinstance(block, dict) and block.get("type") == "tool_use":
                 found[mid][1].append(block.get("id"))
                 found[mid][2][block.get("id")] = entry.get("timestamp")
+                found[mid][3][block.get("id")] = (block.get("name"), block.get("input"))
     return [found[mid] for mid in order]
 
 
@@ -156,21 +166,63 @@ def cold(seconds, size):
     )
 
 
+# Mirrors agent-cost's READ_ONLY_CATEGORIES and WRITES (skills/agent-cost/scripts/agent_cost.py); keep
+# the two in step with them.
+READ_ONLY_TOOLS = frozenset({"Read", "Grep", "Glob"})
+LOOKING = re.compile(r"\b(grep|rg|git grep)\b|^(cat|sed|head|tail|nl|awk|ls|find|wc)\b|\|\s*(sed|head|tail)"
+                     r"|\bgit (diff|show|log|status|branch|rev-parse|merge-base|ls-remote|cherry)\b")
+WRITES = re.compile(r"\bsed\b[^|;&]*\s-i|(?<![0-9&>])>>?(?!&)\s*(?!/dev/null)[^\s&|;]|\btee\b"
+                    r"|\bgit (branch -[dDmM]|worktree (add|remove|move|prune)|fetch|tag)\b")
+LEADING_CD = re.compile(r"^\s*cd\b[^;&]*(&&|;)\s*")
+
+
+def read_only(name, tool_input):
+    """Whether one call only looks: a looking tool, or a Bash command that looks and does not write."""
+    if name in READ_ONLY_TOOLS:
+        return True
+    if name != "Bash":
+        return False
+    command = (tool_input or {}).get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(command, str):
+        return False
+    while LEADING_CD.match(command):
+        command = LEADING_CD.sub("", command, count=1)
+    return bool(LOOKING.search(command)) and not WRITES.search(command)
+
+
+def qualifies(turn):
+    """A turn qualifies when it made exactly one tool call and that call is read-only."""
+    calls = turn[3]
+    return len(calls) == 1 and read_only(*next(iter(calls.values())))
+
+
+def batch(size):
+    """The line for the third single read-only turn in a row."""
+    return (
+        "Batch your reads: your last three turns each made one read-only call, and every turn re-sends all "
+        f"{size // 1000}k tokens of context. When you know the next reads, searches or checks you need, "
+        "request them together in one response."
+    )
+
+
 def advice(payload, env=None, now=None):
     path = transcript(payload)
     if not path or not os.path.isfile(path):
         return None
     history = turns(path)
     call = payload.get("tool_use_id")
-    index = next((i for i, (_, ids, _) in enumerate(history) if call in ids), None)
+    index = next((i for i, (_, ids, _, _) in enumerate(history) if call in ids), None)
     if index is None:
         return None
-    size, ids, stamps = history[index]
+    size, ids, stamps, _ = history[index]
     before = history[index - 1][0] if index > 0 else 0
     said = []
     # The turn that issued this call; parallel calls share it, so only its first call speaks a tier.
     if ids[0] == call and level(size) > level(before):
         said.append(nudge(size))
+    if (env or {}).get("DELEGATE_BATCH_NUDGE") != "0" and index >= 2 and all(qualifies(history[i]) for i in (index - 2, index - 1, index)) \
+            and not (index >= 3 and qualifies(history[index - 3])):
+        said.append(batch(size))
     # Any call can outlive the cache: the slow one of several parallel calls is not always the first.
     elapsed = waited(stamps.get(call), time.time() if now is None else now)
     if elapsed is not None and elapsed > cache_seconds(env or {}):
