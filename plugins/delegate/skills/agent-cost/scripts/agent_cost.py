@@ -845,8 +845,8 @@ READ_ONLY_CATEGORIES = frozenset({
 # given a name (a listing flag or none stays a read), and a standalone rm.
 WRITES = re.compile(r"\bsed\b[^|;&]*\s-i|(?<![0-9&>])>>?(?!&)\s*(?!/dev/null)[^\s&|;]|\btee\b"
                     r"|\bgit (branch -[dDmM]|worktree (add|remove|move|prune)|fetch|tag)\b"
-                    r"|\bgit (checkout|switch|reset|stash|commit|merge|rebase|push|pull|cherry-pick|add|rm|mv|restore|clean)\b"
-                    r"|\bgit branch\s+(?![0-9]*>)[^-\s|;&]|(?:^|[;&|(\n])\s*rm\b")
+                    r"|\bgit (checkout|switch|reset|stash|commit|merge|rebase|push|pull|cherry-pick|add|rm|mv|restore|clean)(?![\w-])"
+                    r"|\bgit branch\s+(?![0-9]*>)[^-\s|;&]|(?:^|[;&(\n])\s*rm\s")
 
 
 def turn_shape_category(cat, inp):
@@ -1319,7 +1319,9 @@ def branches_named(text, worktree_branch=None):
 def rung_links(loaded):
     """[(maker Loaded, round, reviewer Loaded or None)] for every maker in the window. Within one session,
     subagents are ordered by their first turn. A maker's own branches are the ones the fewest makers of the
-    session name, so a base branch every handoff names does not tie makers together. A maker links to the
+    session name in their handoffs, so a base branch every handoff names does not tie makers together, plus
+    the maker's own worktree branch, which is left out of that count: it is unique to each agent, so counted
+    it would always be the fewest and crowd out the branch a fix round shares. A maker links to the
     first reviewer whose first turn is at or after the maker's last turn and which names one of those, and
     is a later round if an earlier maker of the session shares one."""
     sessions = collections.defaultdict(list)
@@ -1330,14 +1332,15 @@ def rung_links(loaded):
     for group in sessions.values():
         group.sort(key=lambda l: l.ctx.turns[0]["ts"])
         branches = {id(l): branches_named(l.ctx.first_prompt, l.ctx.worktree_branch) for l in group}
-        named_by = collections.Counter(t for l in group if folded_type(l) in MAKER_TYPES for t in branches[id(l)])
+        handoff = {id(l): branches_named(l.ctx.first_prompt) for l in group}
+        named_by = collections.Counter(t for l in group if folded_type(l) in MAKER_TYPES for t in handoff[id(l)])
         seen = set()
         for i, l in enumerate(group):
             if folded_type(l) not in MAKER_TYPES:
                 continue
-            tokens = branches[id(l)]
+            tokens = handoff[id(l)]
             fewest = min((named_by[t] for t in tokens), default=0)
-            mine = {t for t in tokens if named_by[t] == fewest}
+            mine = {t for t in tokens if named_by[t] == fewest} | branches[id(l)] - tokens
             finished = l.ctx.turns[-1]["ts"]
             reviewer = next((r for r in group[i + 1:] if folded_type(r) == "reviewer"
                              and r.ctx.turns[0]["ts"] >= finished and mine & branches[id(r)]), None)
@@ -1370,7 +1373,8 @@ def section_review_by_rung(out, loaded):
                        f" {fail_pct:>6} {fmt_tok(avg):>13}")
     out.append("  (a heuristic: a branch is a backticked name, a feat/ or fix/ style word, or the worktree's own branch;"
                " the link uses the maker's least-shared branch and a reviewer that started after the maker finished."
-               " A reviewer outside the window, or one that names no such branch, leaves its maker unlinked.)")
+               " A reviewer outside the window, or one that names no such branch, leaves its maker unlinked; a fix round"
+               " whose handoff leaves out the base branch can make that base the least shared.)")
     out.append("")
 
 

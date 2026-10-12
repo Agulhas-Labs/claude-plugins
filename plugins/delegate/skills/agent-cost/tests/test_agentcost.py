@@ -2132,6 +2132,19 @@ class ReviewByRungTests(unittest.TestCase):
         self.assertEqual(rows[("builder", "first")][:2], ["2", "1"])
         self.assertEqual(rows[("builder", "first")][5], "1")
 
+    def test_worktree_makers_of_one_branch_are_linked_and_the_fix_round_is_later(self):
+        # Each agent's worktree branch is unique, so counted with the handoff's branches it would always be
+        # the least shared and hide the branch the two rounds share.
+        fx = FixtureRoot(self)
+        rung_agent(fx, "a", "builder", 0, "Build on `feat/slice-1`.", worktree_branch="worktree-agent-a")
+        rung_agent(fx, "ra", "reviewer", 100, "Review `feat/slice-1`.", "Verdict: FAIL.")
+        rung_agent(fx, "a2", "builder", 200, "Fix `feat/slice-1`.", worktree_branch="worktree-agent-a2")
+        rung_agent(fx, "ra2", "reviewer", 300, "Review `feat/slice-1` again.", "Verdict: pass.")
+        rows = rung_rows(self.report(fx))
+        self.assertEqual(rows[("builder", "first")][:2], ["1", "1"])
+        self.assertEqual(rows[("builder", "first")][5], "1")
+        self.assertEqual(rows[("builder", "later")][:3], ["1", "1", "1"])
+
     def test_a_reviewer_that_started_before_the_maker_finished_is_not_linked(self):
         fx = FixtureRoot(self)
         at = ts_str(BASE)

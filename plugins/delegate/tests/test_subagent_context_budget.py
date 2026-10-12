@@ -172,6 +172,10 @@ class BudgetTests(unittest.TestCase):
 
     def test_leading_cd_is_dropped_before_matching(self):
         self.assertTrue(budget.read_only("Bash", {"command": "cd /x && git log --oneline"}))
+        # A subcommand that only starts like a writing one, and an rm inside a search pattern, stay reads.
+        self.assertTrue(budget.read_only("Bash", {"command": "git merge-base --is-ancestor a b"}))
+        self.assertTrue(budget.read_only("Bash", {"command": 'grep -E "foo|rm" f'}))
+        self.assertFalse(budget.read_only("Bash", {"command": "rm -rf .build && grep -r x ."}))
         self.assertTrue(budget.read_only("Bash", {"command": "cd /x; cd y && git status"}))
         self.assertFalse(budget.read_only("Bash", {"command": "cd /x && make"}))
         for tool in ("Read", "Grep", "Glob"):

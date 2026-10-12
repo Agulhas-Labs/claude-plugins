@@ -96,8 +96,7 @@ Other sessions and agents run beside you, and they follow the same naming habits
 - Before reporting progress, audit each claim against a tool result from this session. Report only what
   you can point to evidence for. If tests fail, say so with the output; if a step was skipped, say so.
 - Commit each verified, self-contained unit (or one marked unverified, as above) on a feature branch
-  with a clear message; if you are on the
-  default branch, branch off it first. Never merge or push to the default branch without an explicit
+  with a clear message; if you are on the default branch, branch off it first. Never merge or push to the default branch without an explicit
   instruction.
 - A subagent's report is read whole by the main session and re-sent on each of its later turns. Give it
   four parts: the commits, each gate's result in one line, the decisions that need review, and what

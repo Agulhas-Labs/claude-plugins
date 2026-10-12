@@ -1,5 +1,6 @@
 """The subagent hook and agent-cost must call the same commands read-only."""
 import importlib.util
+import inspect
 import os
 import unittest
 
@@ -20,6 +21,7 @@ COMMANDS = (
     "swift test --filter Foo 2>&1 | tail -20", "npm test | tail", "make 2>&1 | grep error",
     'git commit -am "fix grep usage"', "git push origin x | tail", "git merge feat/x | tail",
     'python3 -c "print(1)" | head', "ls", "find . -name x", "wc -l f",
+    "git merge-base --is-ancestor a b", 'grep -E "foo|rm" f',
     "git checkout feat/x && git log -1", "git branch feat/new", "git reset --hard && git status",
     "git stash && git diff", "rm -rf .build && grep -r x .",
     "grep -rn x .", "sed -n 1,20p f", "git log --oneline -5", "git diff main", "git branch",
@@ -32,6 +34,13 @@ COMMANDS = (
 class AgreementTests(unittest.TestCase):
     def test_the_writes_pattern_is_the_same(self):
         self.assertEqual(hook.WRITES.pattern, cost.WRITES.pattern)
+
+    def test_the_copied_classifier_is_verbatim(self):
+        # A drift outside the sampled commands would pass the verdict comparison, so pin the copy itself.
+        for name in ("is_wait_loop", "pipeline_stages", "bash_class", "stage_class", "turn_shape_category"):
+            self.assertEqual(inspect.getsource(getattr(hook, name)), inspect.getsource(getattr(cost, name)), name)
+        for name in ("PURE_FILTER", "WAIT_LOOP", "SLEEPS"):
+            self.assertEqual(getattr(hook, name).pattern, getattr(cost, name).pattern, name)
 
     def test_the_read_only_sets_are_the_same(self):
         self.assertEqual(hook.READ_ONLY_CATEGORIES, cost.READ_ONLY_CATEGORIES)

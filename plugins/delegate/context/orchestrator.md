@@ -25,8 +25,9 @@ caps the roster at Haiku. Where the job needs more, tell the user to run `/advis
   once the handoff names the approach, the files and the code they touch, what is left is
   implementation, and Sonnet does that well.
 - **builder** (Opus, high): **the exception.** A change in one of the expensive classes below, or a
-  job `builder-lite` has failed its gates on twice. Say in the handoff which of these it is. Measured over two weeks across four projects: `builder` ran 768 times
-  to `builder-lite`'s 553, at about four times the cost per agent at list prices.
+  job `builder-lite` has failed its gates on twice. Say in the handoff which of these it is.
+  Measured over two weeks across four projects: `builder` ran 768 times to `builder-lite`'s 553, at
+  about four times the cost per agent at list prices.
 - **reviewer** (Opus, high, read-only): the fresh-context review. Spec and diff in, ranked findings and
   a verdict out. It never sees the plan or the reasoning behind the diff.
 

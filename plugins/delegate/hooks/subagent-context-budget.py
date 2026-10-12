@@ -27,8 +27,8 @@ and report rather than run another long command. `DELEGATE_SUBAGENT_CACHE_SECOND
 300-second lifetime.
 
 A run of single read-only calls gets a "batch your reads" line. Measured across four projects on one
-machine, five days: 85.7% of subagent turns made exactly one tool call (the baseline is 70%), and a
-read-only call straight after another one was 29.1% of subagent turns and 24.8% of subagent spend.
+machine, five days: 85.6% of subagent turns made exactly one tool call (the baseline is 70%), and a
+read-only call straight after another one was 27.9% of subagent turns and 23.8% of subagent spend.
 The prose rule to request independent calls together did not change that, so the line says it at the
 moment it happens: on the third turn in a row that made one read-only call, once, not on a fourth or
 fifth. A turn with two or more calls, or a call that may write, ends the run. `DELEGATE_BATCH_NUDGE=0`
@@ -264,8 +264,8 @@ READ_ONLY_CATEGORIES = frozenset({
 # given a name (a listing flag or none stays a read), and a standalone rm.
 WRITES = re.compile(r"\bsed\b[^|;&]*\s-i|(?<![0-9&>])>>?(?!&)\s*(?!/dev/null)[^\s&|;]|\btee\b"
                     r"|\bgit (branch -[dDmM]|worktree (add|remove|move|prune)|fetch|tag)\b"
-                    r"|\bgit (checkout|switch|reset|stash|commit|merge|rebase|push|pull|cherry-pick|add|rm|mv|restore|clean)\b"
-                    r"|\bgit branch\s+(?![0-9]*>)[^-\s|;&]|(?:^|[;&|(\n])\s*rm\b")
+                    r"|\bgit (checkout|switch|reset|stash|commit|merge|rebase|push|pull|cherry-pick|add|rm|mv|restore|clean)(?![\w-])"
+                    r"|\bgit branch\s+(?![0-9]*>)[^-\s|;&]|(?:^|[;&(\n])\s*rm\s")
 
 
 def turn_shape_category(cat, inp):
@@ -274,6 +274,8 @@ def turn_shape_category(cat, inp):
     if cat in READ_ONLY_CATEGORIES and cat.startswith("bash: ") and WRITES.search(inp.get("command", "")):
         return "bash: writes"
     return cat
+
+
 def read_only(name, tool_input):
     """Whether one call only looks, by agent-cost's rule: its category is a looking one and the command writes nothing."""
     if not isinstance(tool_input, dict):
