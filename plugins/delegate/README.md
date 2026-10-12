@@ -18,7 +18,7 @@ Start a new session and work as you normally would. There's nothing to configure
 
 ## What changes in your session
 
-Say you ask for a fix. Your session writes a handoff for `builder`, and the handoff ends in gates: one
+Say you ask for a fix. Your session writes a handoff for `builder-lite`, and the handoff ends in gates: one
 command per outcome, with the output to expect.
 
 | Gate | Check | Expect |
@@ -81,6 +81,11 @@ on one machine over eight days, 79 of 84 cold subagent turns followed a single B
 wait of nine minutes; cold turns were 2.6% of subagent spend, and agents that went cold twice or more
 held 74% of it, so the first cold wait predicts the next.
 
+A third single read-only call in a row also gets one "Batch your reads" line, once per run, because the
+rule to request independent calls together has not held: across four projects on one machine, five days,
+85.6% of subagent turns made exactly one tool call (the baseline is 70%), and a read-only call straight
+after another one was 27.9% of subagent turns and 23.8% of subagent spend.
+
 The plugin once also held a subagent's stop while a command it had backgrounded still ran. Measured on
 Claude Code 2.1.293, the harness re-invokes the agent when the command exits and a report is delivered
 once, so the hold changed nothing the parent receives and was retired.
@@ -107,8 +112,8 @@ Your numbers will differ; `agent-cost` shows you yours.
 | your session | yours (Sonnet, Opus or Fable) | Plans, picks the agent for each job, writes the handoff, re-runs the gates. |
 | `runner` | Haiku | A scripted list of commands whose output is the answer. It edits nothing. |
 | `mechanic` | Sonnet | Bulky, fully specified changes: sweeps, renames, fixtures, running suites. |
-| `builder-lite` | Sonnet | A small round of fixes a review has already spelled out. |
-| `builder` | Opus, or your session's model if lower | Implementation inside an agreed plan, where decisions remain. |
+| `builder-lite` | Sonnet | The default implementer: any change whose design the handoff has settled, from a feature slice to a round of review fixes. |
+| `builder` | Opus, or your session's model if lower | The exception: safety-critical code, classification subtleties, or a job `builder-lite` failed its gates on twice. |
 | `reviewer` | Opus, or your session's model if lower | Sees the spec and the diff, never the reasoning that produced them. |
 
 The agents are namespaced (`delegate:runner` and so on). The plugin never changes your session's
@@ -152,6 +157,8 @@ isn't a positive integer means the default.
 `DELEGATE_SUBAGENT_CACHE_SECONDS` (default 300) is set the same way: how long a subagent's tool call may
 run before the budget hook says the prompt cache has expired. Set it to match your cache lifetime;
 anything that isn't a positive integer means the default.
+
+`DELEGATE_BATCH_NUDGE=0` switches off the "Batch your reads" line; any other value leaves it on.
 
 To let agents run above your session's model, for instance Opus builders under a Sonnet session, switch
 the ceiling hook off the same way:
@@ -247,7 +254,8 @@ and each one says what to do about what it shows:
 | Cold cache | How much went on messages sent into a large context after its prompt cache expired, and whether your sessions get the five-minute or the one-hour cache lifetime. | [`cache-guard`](../cache-guard/README.md), a sibling plugin, which warns you with the cost before that message is sent. |
 | What fills the context | Which kind of content you keep re-sending, with your sessions' share and subagents' share side by side. | Reading files by range, and a code index in place of `cat` and `grep`. |
 | Fixed start | What every context pays before any work: instruction files, MCP tool listings, the skill listing. | Trimming the instruction files every session loads (and every subagent loads again), and disconnecting servers a coding session never calls. |
-| Rule scorecard | One line per rule this plugin states: the metric that measures it in the window, the measured baseline where there is one (a target for the model ceiling), and whether it holds. | Running it over the windows before and after a change to see which rules your agents keep. |
+| Rule scorecard | One line per rule this plugin states: the metric that measures it in the window, the measured baseline where there is one (a target for the model ceiling), and whether it holds. Its `handoffs carry the code` line is the share of builder and mechanic spend before their first edit. | Running it over the windows before and after a change to see which rules your agents keep. A high share before the first edit means handoffs aren't carrying the code the job touches: quote it, or scout first. |
+| Review by rung | For each maker type (`builder`, `builder-lite`, `mechanic`) and round, how many makers a later reviewer passed or failed, linked by a branch name both handoffs state (a heuristic; unnamed or out-of-window reviews leave a maker unlinked), the fail share, and the mean input-eq per maker. | Choosing between the dearer and the cheaper builder: if the cheaper rung's fail share matches the dearer one's in the same round, send it more of that work. |
 | Tools called (`--tools`) | The tools each agent type actually called. | Editing an agent definition's `tools:` or `disallowedTools:` line. |
 
 ### Asking for what you need

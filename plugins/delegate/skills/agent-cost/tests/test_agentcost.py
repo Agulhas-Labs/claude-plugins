@@ -316,7 +316,7 @@ def seq_loaded(kind, specs, agent="s0"):
     return ac.Loaded(c, BASE - timedelta(minutes=1), BASE + timedelta(minutes=1))
 
 
-R, G, E, B = ["Read (ranged)"], ["Grep/Glob tool"], ["Edit/Write"], ["bash: raw swift build/test"]
+R, G, E, B = ["Read (ranged)"], ["Grep/Glob tool"], ["Edit/Write"], ["bash: swift build/test"]
 
 
 def followon_idx(*cat_lists, n_tools=None):
@@ -840,7 +840,7 @@ class ClassifyMcpNameTests(unittest.TestCase):
 
 class BashClassTests(unittest.TestCase):
     def test_cases(self):
-        self.assertEqual(ac.bash_class("swift test --package-path ."), "bash: raw swift build/test")
+        self.assertEqual(ac.bash_class("swift test --package-path ."), "bash: swift build/test")
         self.assertEqual(ac.bash_class("git status"), "bash: git log/status/etc")
         self.assertEqual(ac.bash_class("git commit -m 'x'"), "bash: git mutate")
         self.assertEqual(ac.bash_class("grep -rn Foo Sources/"), "bash: grep")
@@ -853,8 +853,13 @@ class BashClassTests(unittest.TestCase):
         self.assertEqual(ac.bash_class("cargo build"), "bash: build/test")
         self.assertEqual(ac.bash_class("cargo clippy"), "bash: lint/format/gates")
 
+    def test_a_build_run_through_a_wrapper_gets_the_same_class_as_a_bare_one(self):
+        # the label names the command, not how it was run: a wrapped build is no bypass
+        self.assertEqual(ac.bash_class("runtool run -- xcodebuild test -scheme X"), "bash: swift build/test")
+        self.assertEqual(ac.bash_class("xcodebuild test -scheme X"), "bash: swift build/test")
+
     def test_a_pipeline_is_classified_by_the_stage_that_feeds_its_filters(self):
-        self.assertEqual(ac.bash_class("swift build 2>&1 | grep -E 'error|warning'"), "bash: raw swift build/test")
+        self.assertEqual(ac.bash_class("swift build 2>&1 | grep -E 'error|warning'"), "bash: swift build/test")
         self.assertEqual(ac.bash_class("npm test | tail -20"), "bash: build/test")
         self.assertEqual(ac.bash_class("cd pkg && cargo test 2>&1 | grep FAILED | head -5"), "bash: build/test")
         self.assertEqual(ac.bash_class("git log --oneline | grep fix"), "bash: git log/status/etc")
@@ -1131,7 +1136,7 @@ class SubagentColdBreakdownTests(unittest.TestCase):
         a_prev = self._turn(t0, {"Bash": 1}, usage(input_tokens=0, cache_read=50000))
         a_cold = self._turn(t0 + timedelta(seconds=300), {},
                             usage(input_tokens=50000, cache_read=0, cache_creation=0))
-        self.ctx_a = self._context([a_prev, a_cold], [(1, "bash: raw swift build/test", 500)])
+        self.ctx_a = self._context([a_prev, a_cold], [(1, "bash: swift build/test", 500)])
 
         # Context D: two cold turns, both following Bash, gaps 600s/900s, prev_ctx 100000/150000,
         # extras 90000/135000 — exercises the "two or more" grouping.
@@ -1142,7 +1147,7 @@ class SubagentColdBreakdownTests(unittest.TestCase):
         d3 = self._turn(t0 + timedelta(seconds=1600), {},
                         usage(input_tokens=150000, cache_read=0, cache_creation=0))
         self.ctx_d = self._context([d0, d1, d2, d3],
-                                    [(1, "bash: grep", 500), (3, "bash: raw swift build/test", 500)])
+                                    [(1, "bash: grep", 500), (3, "bash: swift build/test", 500)])
 
         # Context B: one cold turn following a Read (a tool, but not Bash). prev_ctx 20000, extra 18000.
         b_prev = self._turn(t0, {"Read": 1}, usage(input_tokens=0, cache_read=20000))
@@ -1176,7 +1181,7 @@ class SubagentColdBreakdownTests(unittest.TestCase):
     def test_by_command_top_categories(self):
         bd = ac.subagent_cold_breakdown(self.records_by_context)
         by_command = {cat: (av, n) for cat, av, n in bd["by_command"]}
-        self.assertEqual(by_command["bash: raw swift build/test"], (45000 + 135000, 2))
+        self.assertEqual(by_command["bash: swift build/test"], (45000 + 135000, 2))
         self.assertEqual(by_command["bash: grep"], (90000, 1))
 
     def test_contexts_with_cold_and_two_or_more_share(self):
@@ -1203,7 +1208,7 @@ class SubagentColdBreakdownTests(unittest.TestCase):
         t_cold = BASE - timedelta(hours=1)
         prev = self._turn(t_early, {"Bash": 1}, usage(input_tokens=0, cache_read=50000))
         cold = self._turn(t_cold, {}, usage(input_tokens=50000, cache_read=0, cache_creation=0))
-        ctx_outside = self._context([prev, cold], [(1, "bash: raw swift build/test", 500)])
+        ctx_outside = self._context([prev, cold], [(1, "bash: swift build/test", 500)])
 
         loaded = [ac.Loaded(ctx, BASE - timedelta(minutes=1), BASE + timedelta(hours=1))
                   for ctx in (self.ctx_a, self.ctx_b, self.ctx_c, self.ctx_d)]
@@ -1442,6 +1447,7 @@ SECTION_HEADINGS = {
     "what-fills-the-context": "=== What fills the context ===",
     "fixed-start": "=== Fixed start ===",
     "rule-scorecard": "=== Rule scorecard ===",
+    "review-by-rung": "=== Review by rung ===",
     "largest-contexts": "=== Largest contexts",
     "tools-called": "=== Tools called",
 }
@@ -1794,7 +1800,8 @@ SECTIONS_BEFORE_SCORECARD = {
 def scorecard_lines(report):
     """The scorecard's rule lines, keyed by the rule's words."""
     body = section_body(report, "Rule scorecard")
-    rules = ("one job per agent, budget tiers", "a fresh agent per round", "calls requested together",
+    rules = ("one job per agent, budget tiers", "handoffs carry the code", "a fresh agent per round",
+             "calls requested together",
              "the slow check goes to a runner", "the model ceiling", "the reviewer pays")
     found = {}
     for raw in body.splitlines():
@@ -1816,12 +1823,15 @@ class RuleScorecardTests(unittest.TestCase):
     def test_each_rule_on_the_fixture(self):
         _, loaded = rule_tree(self)
         lines = scorecard_lines(ac.build_report(loaded, 12, sections=["rule-scorecard"]))
-        self.assertEqual(len(lines), 6, lines)
+        self.assertEqual(len(lines), 7, lines)
         # 13 subagents: the builder's 486k of 633k is the top 10%; it peaked at 205k and took 4 turns
         # after its nudge; the reviewer's quoted hook text in a tool result is no nudge
         self.assertEqual(lines["one job per agent, budget tiers"],
                          "top 10% of subagents' share of subagent spend: 76.8% (past 150k 1, past 200k 1, "
                          "median 4 turns after the hand-back nudge, 1 nudged); baseline 45%: not holding")
+        # the builder and the ten mechanics made no edit, so there is no share to give
+        self.assertEqual(lines["handoffs carry the code"],
+                         "maker spend before the first edit: n/a (0 of 11 makers edited); n/a")
         # the builder was prompted again after handing back; the reviewer's hook feedback is no prompt
         self.assertEqual(lines["a fresh agent per round"],
                          "subagents prompted again after their hand-back: 1 of 3 that handed back; no baseline")
@@ -1940,10 +1950,11 @@ class RuleScorecardTests(unittest.TestCase):
         report = ac.build_report(loaded, 12, sections=["rule-scorecard"])
         self.assertEqual(section_body(report, "Rule scorecard").splitlines()[0].strip(), "none in this window")
 
-    def test_in_the_default_report_just_before_largest_contexts(self):
+    def test_in_the_default_report_just_before_review_by_rung_and_largest_contexts(self):
         _, loaded = rule_tree(self)
         headings = [l for l in ac.build_report(loaded, 12).splitlines() if l.startswith("=== ")]
-        self.assertEqual(headings[-2], "=== Rule scorecard ===")
+        self.assertEqual(headings[-3], "=== Rule scorecard ===")
+        self.assertEqual(headings[-2], "=== Review by rung ===")
         self.assertTrue(headings[-1].startswith("=== Largest contexts"))
 
     def test_asked_for_alone_with_sections(self):
@@ -1954,7 +1965,70 @@ class RuleScorecardTests(unittest.TestCase):
                      "--until", ts_str(BASE + timedelta(hours=1)), "--sections", "rule-scorecard"])
         output = buf.getvalue()
         self.assertEqual([l for l in output.splitlines() if l.startswith("=== ")], ["=== Rule scorecard ==="])
-        self.assertEqual(len(scorecard_lines(output)), 6)
+        self.assertEqual(len(scorecard_lines(output)), 7)
+
+
+def edit_tree(case):
+    """A builder that reads and greps (1k, 2k) then edits (3k) and runs a check (4k); a mechanic that
+    never edits; and a reviewer whose only turn before an edit is its first. Each turn is Sonnet uncached
+    input, so its input-eq is its input tokens."""
+    fx = FixtureRoot(case)
+    at = lambda s: ts_str(BASE + timedelta(seconds=s))
+    fx.subagent(agent="b1", agent_type="delegate:builder", entries=[
+        assistant("s1", at(0), usage(input_tokens=1000), [tool_use_block("u1", "Read", {"file_path": "/a"})]),
+        user_tool_result(at(1), "u1", "text"),
+        assistant("s2", at(10), usage(input_tokens=2000), [tool_use_block("u2", "Grep", {"pattern": "x"})]),
+        user_tool_result(at(11), "u2", "hit"),
+        assistant("s3", at(20), usage(input_tokens=3000), [tool_use_block("u3", "Edit", {"file_path": "/a"})]),
+        user_tool_result(at(21), "u3", "ok"),
+        assistant("s4", at(30), usage(input_tokens=4000), [tool_use_block("u4", "Bash", {"command": "make test"})]),
+        user_tool_result(at(31), "u4", "ok"),
+    ])
+    fx.subagent(agent="m1", agent_type="mechanic", entries=[
+        assistant("s1", at(5), usage(input_tokens=5000), [tool_use_block("v1", "Grep", {"pattern": "y"})]),
+        user_tool_result(at(6), "v1", "hit"),
+    ])
+    fx.subagent(agent="r1", agent_type="delegate:reviewer", entries=[
+        assistant("s1", at(5), usage(input_tokens=9000), [tool_use_block("w1", "Read", {"file_path": "/a"})]),
+        user_tool_result(at(6), "w1", "text"),
+        assistant("s2", at(15), usage(input_tokens=1000), [tool_use_block("w2", "Write", {"file_path": "/b"})]),
+        user_tool_result(at(16), "w2", "ok"),
+    ])
+    return fx
+
+
+class MakerSpendBeforeFirstEditTests(unittest.TestCase):
+    """The scorecard's "handoffs carry the code" line: the share of an editing maker's in-window spend
+    that fell before its first edit, with the makers that never edited counted beside it."""
+
+    def _line(self, since):
+        fx = edit_tree(self)
+        loaded = ac.load_all(fx.root, None, since, BASE + timedelta(hours=1))
+        return scorecard_lines(ac.build_report(loaded, 12, sections=["rule-scorecard"]))["handoffs carry the code"]
+
+    def test_load_context_keeps_the_index_of_the_first_turn_that_edits(self):
+        fx = edit_tree(self)
+        by_agent = {l.ctx.agent_id: l.ctx for l in ac.load_all(fx.root, None, BASE - timedelta(hours=1),
+                                                               BASE + timedelta(hours=1))}
+        self.assertEqual(by_agent["b1"].first_edit_turn, 2)
+        self.assertEqual(by_agent["r1"].first_edit_turn, 1)   # Write counts as an edit
+        self.assertIsNone(by_agent["m1"].first_edit_turn)
+
+    def test_the_share_before_the_first_edit_counting_a_maker_that_never_edited_apart(self):
+        # the builder's 1k + 2k of 10k; the mechanic is in the never-edited count, not the share; the
+        # reviewer's 9k before its Write is not a maker's
+        self.assertEqual(self._line(BASE - timedelta(hours=1)),
+                         "maker spend before the first edit: 30.0% (1 of 2 makers edited); no baseline")
+
+    def test_a_window_that_starts_after_the_first_edit_has_nothing_before_it(self):
+        # only the builder's 4k check is in the window; its first edit is still turn 2 of the context
+        self.assertEqual(self._line(BASE + timedelta(seconds=25)),
+                         "maker spend before the first edit: 0.0% (1 of 1 makers edited); no baseline")
+
+    def test_no_makers_reads_n_a(self):
+        loaded = [typed_loaded("subagent", "reviewer", [1000], "r")]
+        lines = scorecard_lines(ac.build_report(loaded, 12, sections=["rule-scorecard"]))
+        self.assertEqual(lines["handoffs carry the code"], "maker spend before the first edit: n/a; n/a")
 
 
 if __name__ == "__main__":
@@ -1973,3 +2047,145 @@ class VerdictLabelFormTests(unittest.TestCase):
         report = "Final verdict: merge-ready.\nThe Windows path is not ready yet; file it."
         self.assertEqual(ac.reviewer_verdict(report), "pass")
         self.assertEqual(ac.reviewer_verdict("Verdict: not ready to merge."), "fail")
+
+
+# ---------------------------------------------------------------------------
+# review by rung
+# ---------------------------------------------------------------------------
+
+def rung_agent(fx, agent, agent_type, secs, prompt, report=None, session="sess1", worktree_branch=None):
+    """A subagent whose first prompt is `prompt`, starting `secs` after BASE and handing back `report`."""
+    at = ts_str(BASE + timedelta(seconds=secs))
+    turn = assistant("s1", at, usage(input_tokens=1000),
+                     [handback("h1", report)] if report is not None else [])
+    path = fx.subagent(session=session, agent=agent, agent_type=agent_type,
+                       entries=[user_text(at, prompt), turn])
+    if worktree_branch:
+        with open(path[:-len(".jsonl")] + ".meta.json", "w") as f:
+            json.dump({"agentType": agent_type, "worktreeBranch": worktree_branch}, f)
+
+
+def rung_rows(report):
+    """The section's rows keyed by (rung, round), each a list of the numeric cells that follow."""
+    rows = {}
+    for raw in section_body(report, "Review by rung").splitlines():
+        m = re.match(r"\s+(builder-lite|builder|mechanic)\s+(first|later)\s+(.*)$", raw)
+        if m:
+            rows[(m.group(1), m.group(2))] = m.group(3).split()
+    return rows
+
+
+class ReviewByRungTests(unittest.TestCase):
+    def report(self, fx):
+        loaded = ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
+        return ac.build_report(loaded, 12, sections=["review-by-rung"])
+
+    def test_a_failed_review_counts_against_the_first_round_builder_and_a_later_lite_is_later_round(self):
+        fx = FixtureRoot(self)
+        rung_agent(fx, "b1", "delegate:builder", 0, "Build it on `feat/widget`.")
+        rung_agent(fx, "r1", "delegate:reviewer", 100, "Review `feat/widget`.", "Verdict: FAIL. One blocker.")
+        rung_agent(fx, "l1", "delegate:builder-lite", 200, "Fix round on feat/widget.")
+        rows = rung_rows(self.report(fx))
+        # makers, linked, pass, lows, after-fixes, fail, unclass, fail%, avg
+        self.assertEqual(rows[("builder", "first")][:8], ["1", "1", "0", "0", "0", "1", "0", "100%"])
+        self.assertEqual(rows[("builder-lite", "later")][:8], ["1", "0", "0", "0", "0", "0", "0", "-"])
+        self.assertNotIn(("builder-lite", "first"), rows)
+
+    def test_a_maker_no_reviewer_names_is_unlinked(self):
+        fx = FixtureRoot(self)
+        rung_agent(fx, "b1", "builder", 0, "Build on `feat/alpha`.")
+        rung_agent(fx, "r1", "reviewer", 100, "Review `feat/beta`.", "Verdict: pass.")
+        self.assertEqual(rung_rows(self.report(fx))[("builder", "first")][:2], ["1", "0"])
+
+    def test_a_reviewer_in_another_session_is_not_linked(self):
+        fx = FixtureRoot(self)
+        rung_agent(fx, "b1", "builder", 0, "Build on `feat/alpha`.")
+        rung_agent(fx, "r1", "reviewer", 100, "Review `feat/alpha`.", "Verdict: pass.", session="other")
+        self.assertEqual(rung_rows(self.report(fx))[("builder", "first")][:2], ["1", "0"])
+
+    def test_a_reviewer_before_the_maker_is_not_linked(self):
+        fx = FixtureRoot(self)
+        rung_agent(fx, "r1", "reviewer", 0, "Review `feat/alpha`.", "Verdict: pass.")
+        rung_agent(fx, "b1", "builder", 100, "Build on `feat/alpha`.")
+        self.assertEqual(rung_rows(self.report(fx))[("builder", "first")][:2], ["1", "0"])
+
+    def test_a_shared_base_branch_does_not_tie_makers_to_one_reviewer(self):
+        fx = FixtureRoot(self)
+        rung_agent(fx, "a", "builder", 0, "Build on `feat/slice-1`, based on `feat/trend`.")
+        rung_agent(fx, "b", "builder-lite", 10, "Build on `feat/slice-2`, based on `feat/trend`.")
+        rung_agent(fx, "ra", "reviewer", 100, "Review `feat/slice-1` against `feat/trend`.", "Verdict: FAIL.")
+        rung_agent(fx, "rb", "reviewer", 110, "Review `feat/slice-2` against `feat/trend`.", "Verdict: pass.")
+        rows = rung_rows(self.report(fx))
+        self.assertEqual(rows[("builder", "first")][:8], ["1", "1", "0", "0", "0", "1", "0", "100%"])
+        self.assertEqual(rows[("builder-lite", "first")][:8], ["1", "1", "1", "0", "0", "0", "0", "0%"])
+        self.assertNotIn(("builder-lite", "later"), rows)
+
+    def test_a_later_round_is_later_and_links_to_the_next_reviewer_after_it_ends(self):
+        fx = FixtureRoot(self)
+        rung_agent(fx, "a", "builder", 0, "Build on `feat/slice-1`, based on `feat/trend`.")
+        rung_agent(fx, "b", "builder", 10, "Build on `feat/slice-2`, based on `feat/trend`.")
+        rung_agent(fx, "ra", "reviewer", 100, "Review `feat/slice-1`.", "Verdict: FAIL.")
+        rung_agent(fx, "a2", "builder", 200, "Fix `feat/slice-1`, based on `feat/trend`.")
+        rung_agent(fx, "ra2", "reviewer", 300, "Review `feat/slice-1` again.", "Verdict: pass.")
+        rows = rung_rows(self.report(fx))
+        self.assertEqual(rows[("builder", "later")][:8], ["1", "1", "1", "0", "0", "0", "0", "0%"])
+        self.assertEqual(rows[("builder", "first")][:2], ["2", "1"])
+        self.assertEqual(rows[("builder", "first")][5], "1")
+
+    def test_worktree_makers_of_one_branch_are_linked_and_the_fix_round_is_later(self):
+        # Each agent's worktree branch is unique, so counted with the handoff's branches it would always be
+        # the least shared and hide the branch the two rounds share.
+        fx = FixtureRoot(self)
+        rung_agent(fx, "a", "builder", 0, "Build on `feat/slice-1`.", worktree_branch="worktree-agent-a")
+        rung_agent(fx, "ra", "reviewer", 100, "Review `feat/slice-1`.", "Verdict: FAIL.")
+        rung_agent(fx, "a2", "builder", 200, "Fix `feat/slice-1`.", worktree_branch="worktree-agent-a2")
+        rung_agent(fx, "ra2", "reviewer", 300, "Review `feat/slice-1` again.", "Verdict: pass.")
+        rows = rung_rows(self.report(fx))
+        self.assertEqual(rows[("builder", "first")][:2], ["1", "1"])
+        self.assertEqual(rows[("builder", "first")][5], "1")
+        self.assertEqual(rows[("builder", "later")][:3], ["1", "1", "1"])
+
+    def test_a_reviewer_that_started_before_the_maker_finished_is_not_linked(self):
+        fx = FixtureRoot(self)
+        at = ts_str(BASE)
+        late = ts_str(BASE + timedelta(seconds=200))
+        fx.subagent(session="sess1", agent="b1", agent_type="builder", entries=[
+            user_text(at, "Build on `feat/alpha`."),
+            assistant("s1", at, usage(input_tokens=1000), []),
+            assistant("s2", late, usage(input_tokens=1000), [])])
+        rung_agent(fx, "r1", "reviewer", 100, "Review `feat/alpha`.", "Verdict: pass.")
+        self.assertEqual(rung_rows(self.report(fx))[("builder", "first")][:2], ["1", "0"])
+
+    def test_the_worktree_branch_in_the_meta_links_a_maker(self):
+        fx = FixtureRoot(self)
+        rung_agent(fx, "b1", "builder", 0, "Build it.", worktree_branch="worktree-agent-1")
+        rung_agent(fx, "r1", "reviewer", 100, "Review `worktree-agent-1/tip`.", "Verdict: pass.")
+        rung_agent(fx, "r2", "reviewer", 110, "Review worktree-agent-1 here.", "Verdict: pass.",
+                   worktree_branch="worktree-agent-1")
+        self.assertEqual(rung_rows(self.report(fx))[("builder", "first")][:3], ["1", "1", "1"])
+
+    def test_a_window_with_no_makers_has_no_section(self):
+        fx = FixtureRoot(self)
+        rung_agent(fx, "r1", "reviewer", 0, "Review `feat/alpha`.", "Verdict: pass.")
+        loaded = ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
+        self.assertNotIn("Review by rung", ac.build_report(loaded, 12))
+
+    def test_the_section_is_in_the_default_report_after_the_scorecard(self):
+        self.assertIn("review-by-rung", ac.DEFAULT_SECTIONS)
+        names = ac.SECTION_NAMES
+        self.assertEqual(names.index("review-by-rung"), names.index("rule-scorecard") + 1)
+        self.assertEqual(ac.resolve_sections("review-by-rung"), ["review-by-rung"])
+
+
+class BranchesNamedTests(unittest.TestCase):
+    def test_paths_and_remote_refs_are_not_branches(self):
+        text = "See `path/to/file.py` and `origin/main`, and `a/b/c/d/e`."
+        self.assertEqual(ac.branches_named(text), set())
+
+    def test_backticked_and_bare_branches_and_the_meta_branch_are_found(self):
+        text = "Work on `feat/x` and then fix/y-1 please; ignore `docs`."
+        self.assertEqual(ac.branches_named(text, "worktree-z"), {"feat/x", "fix/y-1", "worktree-z"})
+
+    def test_bare_paths_are_not_branches_but_bare_branches_are(self):
+        text = "Edit docs/Plan/x.md, test/fixtures/cart.json and fix/thing.py; branch fix/cart-total."
+        self.assertEqual(ac.branches_named(text), {"fix/cart-total"})

@@ -141,7 +141,7 @@ def bash_class(cmd):
 
 
 def stage_class(c):
-    if re.search(r"\bswift (test|build)\b|xcodebuild", c): return "bash: raw swift build/test"
+    if re.search(r"\bswift (test|build)\b|xcodebuild", c): return "bash: swift build/test"
     if re.search(r"^(npm|pnpm|yarn|bun) (run )?(test|build)\b", c): return "bash: build/test"
     if re.search(r"^cargo (build|test)\b", c): return "bash: build/test"
     if re.search(r"^go (build|test)\b", c): return "bash: build/test"
@@ -362,15 +362,22 @@ def contexts_for_transcript(path):
     return out
 
 
+def meta_of(path, kind):
+    """A subagent's `.meta.json` as a dict; empty for a main session or a file that is missing or unreadable."""
+    if kind == "main":
+        return {}
+    try:
+        with open(path[:-len(".jsonl")] + ".meta.json", encoding="utf-8") as f:
+            meta = json.load(f)
+        return meta if isinstance(meta, dict) else {}
+    except Exception:
+        return {}
+
+
 def agent_type_of(path, kind):
     if kind == "main":
         return "main"
-    meta_path = path[:-len(".jsonl")] + ".meta.json"
-    try:
-        with open(meta_path, encoding="utf-8") as f:
-            return json.load(f).get("agentType") or "unknown"
-    except Exception:
-        return "unknown"
+    return meta_of(path, kind).get("agentType") or "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -385,11 +392,14 @@ class Context:
         self.session_id = session_id
         self.agent_id = agent_id
         self.agent_type = agent_type_of(path, kind)
+        self.worktree_branch = meta_of(path, kind).get("worktreeBranch") or None
+        self.first_prompt = ""   # the text of the first prompt the context was given
         self.turns = []       # list of dict(ts, ctx, usage, model, n_tools, tools, cats)
         self.events = []      # list of (turn_index, category, chars) turn_index = len(turns) at event time
         self.versions = set()
         self.start = None     # fixed-start composition dict, filled from attachments before first turn
         self.hand_back_nudge_turn = None   # len(turns) when the budget hook first asked it to hand back
+        self.first_edit_turn = None        # index into turns of the first turn that called an edit tool
         self.handback_report = None        # the last SubagentHandback call's message, if it made one
         self.prompted_after_handback = False   # a prompt arrived after a SubagentHandback call
 
@@ -397,6 +407,8 @@ class Context:
 # The budget hook's hand-back words (the 150k tier, or the 200k one for a context that jumped past it),
 # as a hook attachment records them. Matched on attachment entries only: a file read that quotes the
 # hook is a tool result, not the hook speaking.
+EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
+
 HAND_BACK_NUDGE = re.compile(r"Context budget: this agent's context is now \d+k tokens"
                              r".*?(?:Finish only the item in hand|Stop here, even mid-item)")
 
@@ -480,6 +492,7 @@ def load_context(kind, path, project_dir, session_id, agent_id):
             txt = text_of(c) if not isinstance(c, str) else c
             if txt and start["first_prompt_chars"] == 0:
                 start["first_prompt_chars"] = len(txt)
+                ctx.first_prompt = txt
 
         if etype == "assistant":
             u = m.get("usage") or {}
@@ -523,6 +536,8 @@ def load_context(kind, path, project_dir, session_id, agent_id):
                             ctx.turns[-1]["n_tools"] += 1
                             ctx.turns[-1]["cats"].append(turn_shape_category(cat, b.get("input") or {}))
                             ctx.turns[-1]["tools"][b.get("name") or "?"] += 1
+                            if ctx.first_edit_turn is None and b.get("name") in EDIT_TOOLS:
+                                ctx.first_edit_turn = len(ctx.turns) - 1
                     ctx.events.append((len(ctx.turns), "assistant: tool-call inputs (edits, commands)", len(json.dumps(b.get("input")))))
                 elif b.get("type") == "text":
                     ctx.events.append((len(ctx.turns), "assistant: text", len(b.get("text", ""))))
@@ -826,9 +841,12 @@ READ_ONLY_CATEGORIES = frozenset({
 
 
 # Commands that the categories above file as looking but that change something: an in-place sed, a
-# redirect into a file, tee, and the git subcommands that move refs or worktrees.
+# redirect into a file, tee, the git subcommands that move refs, the index or the worktree, `git branch`
+# given a name (a listing flag or none stays a read), and a standalone rm.
 WRITES = re.compile(r"\bsed\b[^|;&]*\s-i|(?<![0-9&>])>>?(?!&)\s*(?!/dev/null)[^\s&|;]|\btee\b"
-                    r"|\bgit (branch -[dDmM]|worktree (add|remove|move|prune)|fetch|tag)\b")
+                    r"|\bgit (branch -[dDmM]|worktree (add|remove|move|prune)|fetch|tag)\b"
+                    r"|\bgit (checkout|switch|reset|stash|commit|merge|rebase|push|pull|cherry-pick|add|rm|mv|restore|clean)(?![\w-])"
+                    r"|\bgit branch\s+(?![0-9]*>)[^-\s|;&]|(?:^|[;&(\n])\s*rm\s")
 
 
 def turn_shape_category(cat, inp):
@@ -1200,6 +1218,7 @@ def section_fixed_start(out, loaded):
 BASELINE_TOP_DECILE_SHARE = 45.0    # % of subagent spend in the longest-running 10% of subagents
 BASELINE_SINGLE_CALL_SHARE = 70.0   # % of subagent turns that made a single tool call
 BASELINE_COLD_SHARE = 7.5           # % of subagent spend on cold turns
+MAKER_TYPES = ("builder", "builder-lite", "mechanic")   # the agent types that edit, as folded_type names them
 
 MODEL_FAMILIES = ("haiku", "sonnet", "opus", "fable")  # lowest first, as the model-ceiling hook ranks them
 
@@ -1272,6 +1291,93 @@ def judgement(value, baseline):
     return "holds" if value <= baseline else "not holding"
 
 
+# Review by rung: which model rung's work fails review. A maker and a reviewer are linked by the maker's
+# least-shared branch name, which the reviewer's handoff also states and which the reviewer started after the
+# maker finished. That is a heuristic: a handoff that names no branch, or a reviewer given a different
+# spelling of it, leaves the maker unlinked.
+MAKER_TYPES = ("builder", "builder-lite", "mechanic")
+BACKTICKED_BRANCH = re.compile(r"`([A-Za-z0-9][\w.-]*/[\w./-]*[\w-])`")
+BARE_BRANCH = re.compile(r"\b((?:feat|fix|chore|review|round|refactor|perf)/[\w./-]*[\w-])")
+FILE_EXTENSION = re.compile(r"\.[a-z]{1,5}$")
+
+
+def branches_named(text, worktree_branch=None):
+    """The branch names a handoff states: backticked `a/b` tokens that are not file paths or remote refs,
+    bare feat/, fix/ and similar prefixed words that are not file paths, and the branch of the worktree the
+    agent ran in."""
+    found = set()
+    for token in BACKTICKED_BRANCH.findall(text or ""):
+        if FILE_EXTENSION.search(token) or token.count("/") > 3 or token.startswith("origin/"):
+            continue
+        found.add(token)
+    found.update(t for t in BARE_BRANCH.findall(text or "") if not FILE_EXTENSION.search(t))
+    if worktree_branch:
+        found.add(worktree_branch)
+    return found
+
+
+def rung_links(loaded):
+    """[(maker Loaded, round, reviewer Loaded or None)] for every maker in the window. Within one session,
+    subagents are ordered by their first turn. A maker's own branches are the ones the fewest makers of the
+    session name in their handoffs, so a base branch every handoff names does not tie makers together, plus
+    the maker's own worktree branch, which is left out of that count: it is unique to each agent, so counted
+    it would always be the fewest and crowd out the branch a fix round shares. A maker links to the
+    first reviewer whose first turn is at or after the maker's last turn and which names one of those, and
+    is a later round if an earlier maker of the session shares one."""
+    sessions = collections.defaultdict(list)
+    for l in loaded:
+        if l.ctx.kind == "subagent":
+            sessions[(l.ctx.project_dir, l.ctx.session_id)].append(l)
+    links = []
+    for group in sessions.values():
+        group.sort(key=lambda l: l.ctx.turns[0]["ts"])
+        branches = {id(l): branches_named(l.ctx.first_prompt, l.ctx.worktree_branch) for l in group}
+        handoff = {id(l): branches_named(l.ctx.first_prompt) for l in group}
+        named_by = collections.Counter(t for l in group if folded_type(l) in MAKER_TYPES for t in handoff[id(l)])
+        seen = set()
+        for i, l in enumerate(group):
+            if folded_type(l) not in MAKER_TYPES:
+                continue
+            tokens = handoff[id(l)]
+            fewest = min((named_by[t] for t in tokens), default=0)
+            mine = {t for t in tokens if named_by[t] == fewest} | branches[id(l)] - tokens
+            finished = l.ctx.turns[-1]["ts"]
+            reviewer = next((r for r in group[i + 1:] if folded_type(r) == "reviewer"
+                             and r.ctx.turns[0]["ts"] >= finished and mine & branches[id(r)]), None)
+            links.append((l, "later" if mine & seen else "first", reviewer))
+            seen |= mine
+    return links
+
+
+def section_review_by_rung(out, loaded):
+    links = rung_links(loaded)
+    if not links:
+        return
+    out.append("=== Review by rung ===")
+    out.append("  makers linked to a review by the maker's least-shared branch, from a reviewer that started after the"
+               " maker finished; a reviewer covering several branches gives each the same verdict")
+    out.append(f"  {'rung':13} {'round':6} {'makers':>7} {'linked':>7} {'pass':>5} {'lows':>5} {'after-fixes':>12}"
+               f" {'fail':>5} {'unclass':>8} {'fail%':>6} {'avg input-eq':>13}")
+    for rung in MAKER_TYPES:
+        for rnd in ("first", "later"):
+            rows = [(l, r) for l, k, r in links if folded_type(l) == rung and k == rnd]
+            if not rows:
+                continue
+            verdicts = collections.Counter(reviewer_verdict(r.ctx.handback_report) for _, r in rows if r)
+            linked = sum(verdicts.values())
+            judged = linked - verdicts["unclassified"]
+            fail_pct = f"{100 * verdicts['fail'] / judged:.0f}%" if judged else "-"
+            avg = sum(t["ie"] for l, _ in rows for t in l.window_turns) / len(rows)
+            out.append(f"  {rung:13} {rnd:6} {len(rows):7} {linked:7} {verdicts['pass']:5} {verdicts['pass with lows']:5}"
+                       f" {verdicts['pass after fixes']:12} {verdicts['fail']:5} {verdicts['unclassified']:8}"
+                       f" {fail_pct:>6} {fmt_tok(avg):>13}")
+    out.append("  (a heuristic: a branch is a backticked name, a feat/ or fix/ style word, or the worktree's own branch;"
+               " the link uses the maker's least-shared branch and a reviewer that started after the maker finished."
+               " A reviewer outside the window, or one that names no such branch, leaves its maker unlinked; a fix round"
+               " whose handoff leaves out the base branch can make that base the least shared.)")
+    out.append("")
+
+
 def section_rule_scorecard(out, loaded):
     """One line per rule the plugin states: the metric that measures it in this window, the measured
     baseline where there is one, and whether the rule holds. Run over two windows it is the before and
@@ -1300,6 +1406,20 @@ def section_rule_scorecard(out, loaded):
     line("one job per agent, budget tiers", "top 10% of subagents' share of subagent spend",
          (f"{share:.1f}%" if decile else "n/a (under 10 subagents)") + f" ({tiers})",
          f"{BASELINE_TOP_DECILE_SHARE:.0f}%", judgement(share, BASELINE_TOP_DECILE_SHARE))
+
+    # handoffs carry the code: what makers spend finding it before their first edit. "Before" is counted
+    # against the whole context, and only its turns in this window are summed.
+    makers = [l for l in subs if folded_type(l) in MAKER_TYPES]
+    edited = [l for l in makers if l.ctx.first_edit_turn is not None]
+    edited_ie = sum(t["ie"] for l in edited for t in l.window_turns)
+    before_ie = 0
+    for l in edited:
+        in_window = {id(t) for t in l.window_turns}
+        before_ie += sum(t["ie"] for t in l.ctx.turns[:l.ctx.first_edit_turn] if id(t) in in_window)
+    before = f"{100 * before_ie / edited_ie:.1f}%" if edited_ie else "n/a"
+    line("handoffs carry the code", "maker spend before the first edit",
+         f"{before} ({len(edited)} of {len(makers)} makers edited)" if makers else "n/a", None,
+         "no baseline" if edited_ie else "n/a")
 
     # a fresh agent per round
     handed = [l for l in subs if l.ctx.handback_report is not None]
@@ -1407,6 +1527,7 @@ SECTIONS = (
      lambda out, loaded, top_n: section_fills_context(out, loaded)),
     ("fixed-start", "Fixed start", lambda out, loaded, top_n: section_fixed_start(out, loaded)),
     ("rule-scorecard", "Rule scorecard", lambda out, loaded, top_n: section_rule_scorecard(out, loaded)),
+    ("review-by-rung", "Review by rung", lambda out, loaded, top_n: section_review_by_rung(out, loaded)),
     ("largest-contexts", "Largest contexts", section_largest),
     ("tools-called", "Tools called", lambda out, loaded, top_n: section_tools(out, loaded)),
 )

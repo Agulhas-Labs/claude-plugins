@@ -38,7 +38,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/agent_cost.py" [--since X] [--until X] [--p
   `.jsonl` file; any other name is refused before it is read.
 - `--sections NAMES` prints only those sections, comma-separated, each named by any prefix of it:
   `totals, spend-by-type, per-day, main-sessions, concentration, turn-shape, cold-cache, what-fills-the-context,
-  fixed-start, rule-scorecard, largest-contexts, tools-called`. An unknown name fails before any transcript is read
+  fixed-start, rule-scorecard, review-by-rung, largest-contexts, tools-called`. An unknown name fails before any transcript is read
   and lists the ones that exist.
 - **Ask for the sections the question needs.** The full report is about 200 lines and every line of it
   lands in the context. "Why was yesterday expensive?" is `--sections totals,per-day,main-sessions`,
@@ -114,7 +114,18 @@ spend is all in their own sessions.
   subagent: the difference is that a subagent pays it again for every agent started.
 - **Rule scorecard** — one line per rule the `delegate` plugin states, with the metric that measures it in
   the window, the measured baseline where there is one (a target for the model ceiling), and `holds` or
-  `not holding`.
+  `not holding`. Its `handoffs carry the code` line is the share of builder and mechanic spend before
+  their first edit: a high share means handoffs aren't carrying the code the job touches, so quote it in
+  the handoff, or send a scout first. An edit made through Bash (`sed -i`, a heredoc) is not counted, so
+  such a maker reads as never edited.
+- **Review by rung** — per maker type (`builder`, `builder-lite`, `mechanic`) and round (first, or later
+  when an earlier maker in the session shares a branch), how many makers a later reviewer in the same
+  session passed, passed with lows or after fixes, or failed, the fail share of the classified reviews, and
+  the mean input-eq per maker. The link is a heuristic: a branch name both handoffs state (backticked, a
+  `feat/`-style word, or the worktree's own branch); a maker no reviewer names, or whose reviewer falls
+  outside the window, counts as unlinked. **Action**: if the cheaper rung's fail share is no higher than
+  the dearer one's in the same round, route more of that work to it; compare first rounds with first
+  rounds, since the cheaper rung is mostly used for fix rounds.
 - **Largest contexts** — the worst individual offenders, for a closer look with `--transcript`.
 
 ## Caveats (the report states these too)

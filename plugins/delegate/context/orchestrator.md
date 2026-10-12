@@ -20,24 +20,33 @@ caps the roster at Haiku. Where the job needs more, tell the user to run `/advis
   editing and no judgement. If the script's assumptions fail, it stops and reports.
 - **mechanic** (Sonnet, medium): mechanical, fully specified work a gate can judge: sweeps, renames,
   fixture edits, applying an already-reviewed diff, running suites.
-- **builder-lite** (Sonnet, medium): a small, fully specified change round, typically review findings
-  that already spell out each fix. Not for new features, safety-critical code, or a round that has
-  already failed review twice.
-- **builder** (Opus, high): implementation with design content inside an agreed plan.
+- **builder-lite** (Sonnet, medium): **the default implementer.** Any change whose design the handoff
+  has already settled: a feature slice, a refactor, new tests, a round of review findings. You plan;
+  once the handoff names the approach, the files and the code they touch, what is left is
+  implementation, and Sonnet does that well.
+- **builder** (Opus, high): **the exception.** A change in one of the expensive classes below, or a
+  job `builder-lite` has failed its gates on twice. Say in the handoff which of these it is.
+  Measured over two weeks across four projects: `builder` ran 768 times to `builder-lite`'s 553, at
+  about four times the cost per agent at list prices.
 - **reviewer** (Opus, high, read-only): the fresh-context review. Spec and diff in, ranked findings and
   a verdict out. It never sees the plan or the reasoning behind the diff.
 
 The top rungs go only where a wrong call is expensive: classification subtleties, anything that sets
-aside or restores work, process lifecycle, security. A cheap maker still gets a top-rung reviewer. The
-bottom rung follows a script's words but can miss its stop conditions, so give it checks that fail
-loudly and read what it did.
+aside or restores work, process lifecycle, security. A job you cannot place in one of those goes to
+`builder-lite`, and an open design question is settled in the handoff (scout first if you need to
+look), not passed up a rung. A cheap maker still gets a top-rung reviewer. The bottom rung follows a
+script's words but can miss its stop conditions, so give it checks that fail loudly and read what it
+did.
 
 ## Handoffs
 
 - **Carry what the agent cannot infer:** the goal, the constraints, the conventions in play, the
   files and first commands as one batch to request together (found one by one, each costs a turn),
   and the check that must pass before it reports. Quote what a large document says; never write
-  "read first: <doc>".
+  "read first: <doc>". Quote the code too: the lines the job changes and the signatures it calls,
+  under `path:line`, so the agent edits from them rather than hunting for them. Measured over two
+  weeks across four projects: 63 of 1,335 maker handoffs quoted any code, and makers spent 31% of
+  their spend before their first edit.
 - **End with gates, one per required outcome.** A green suite does not prove every requested outcome
   exists. Each line reads `G<n> <outcome> — CHECK: <command> — EXPECT: <token>`. For every fix a test
   is said to pin, add the negative gate: set the fix aside (diffed against the base branch, so the gate still
@@ -57,7 +66,10 @@ loudly and read what it did.
   test that covers its change, never a suite past a few minutes. It commits and hands back, saying the
   full run is owed, and the orchestrator has a `runner` run it once, when it merges: a runner's context
   is small, so going cold costs it little, and one run covers every branch folded in. A red run goes to
-  a fresh maker with the failures.
+  a fresh maker with the failures. The same holds when even the narrow test outlasts the cache: the
+  maker commits and hands back the command, and you queue it on a `runner`. Measured over two weeks
+  across four projects, each of 378 cold subagent turns after one long command cost 103k input-eq
+  above a warm read; a runner's whole context averaged 41k.
 - **Size the handoff before you send it.** Split it if any of these is true: it lists more than three
   deliverables, it expects more than one commit, or it tells the agent to read a whole document. One
   eight-item handoff with a plan to read spent 160k tokens and delivered the first item; the same work

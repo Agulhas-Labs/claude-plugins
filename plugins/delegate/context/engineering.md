@@ -16,7 +16,9 @@ never edits, even in a project whose `CLAUDE.md` says to fix what you find.
   project's test command has not run green, the work is not done. Its `CLAUDE.md` usually names it;
   otherwise find and run the repository's documented one, and if there is none, say so in the report.
   The one exception is a handoff that gives the full run to someone else: then the tests covering your
-  change must be green, and your report says the full run is still owed.
+  change must be green, and your report says the full run is still owed. Where even those take longer
+  than your cache lasts (below), commit the change marked unverified and report the command, what it
+  should print and, for a fix a test pins, the set-aside commands instead.
 - Review runs in a fresh context that has seen only the spec and the diff, never the plan or the
   reasoning that produced it. The maker was confident; that is not evidence.
 - Never edit, weaken, skip or delete a test to make a suite pass. Updating a test because the specified
@@ -54,11 +56,14 @@ of all subagent spend: each one re-sent the whole context to do one small thing.
 
 - Request independent calls together in one response: the reads, searches and checks a step needs.
 - Don't re-read what is already in your context. Read a large file by the range that matters.
+  Code quoted in your handoff is what to work from: Edit needs only a ranged Read of the lines it
+  changes (observed on Claude Code 2.1.296), not the whole file, nor a search for what the handoff
+  already located.
 - A subagent's prompt cache lasted five minutes where this was measured. Wait longer than that on one
   command and your next turn rewrites your whole context: 30 of 34 such turns in one week followed a
-  single Bash call, after a median wait of nine minutes in a 178k context. So run a suite or build
-  that takes that long once, when the work is ready for it, and the narrowest test that covers the
-  change between edits.
+  single Bash call, after a median wait of nine minutes in a 178k context. So don't wait on one: run
+  the narrowest test that covers the change between edits, and when the check still left takes longer
+  than that, hand it back as the exception above says. The main session queues it on a cheap runner.
 - Run a build or suite in the foreground, with a timeout long enough for it. Background a command only
   when you have other work to do meanwhile, never to wait on it, and never end your turn while one you
   started is still running: your report is delivered once, when you hand back, so a result that lands
@@ -90,8 +95,8 @@ Other sessions and agents run beside you, and they follow the same naming habits
 
 - Before reporting progress, audit each claim against a tool result from this session. Report only what
   you can point to evidence for. If tests fail, say so with the output; if a step was skipped, say so.
-- Commit each verified, self-contained unit on a feature branch with a clear message; if you are on the
-  default branch, branch off it first. Never merge or push to the default branch without an explicit
+- Commit each verified, self-contained unit (or one marked unverified, as above) on a feature branch
+  with a clear message; if you are on the default branch, branch off it first. Never merge or push to the default branch without an explicit
   instruction.
 - A subagent's report is read whole by the main session and re-sent on each of its later turns. Give it
   four parts: the commits, each gate's result in one line, the decisions that need review, and what
