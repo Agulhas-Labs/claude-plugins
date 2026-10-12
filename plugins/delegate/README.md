@@ -18,7 +18,7 @@ Start a new session and work as you normally would. There's nothing to configure
 
 ## What changes in your session
 
-Say you ask for a fix. Your session writes a handoff for `builder`, and the handoff ends in gates: one
+Say you ask for a fix. Your session writes a handoff for `builder-lite`, and the handoff ends in gates: one
 command per outcome, with the output to expect.
 
 | Gate | Check | Expect |
@@ -107,8 +107,8 @@ Your numbers will differ; `agent-cost` shows you yours.
 | your session | yours (Sonnet, Opus or Fable) | Plans, picks the agent for each job, writes the handoff, re-runs the gates. |
 | `runner` | Haiku | A scripted list of commands whose output is the answer. It edits nothing. |
 | `mechanic` | Sonnet | Bulky, fully specified changes: sweeps, renames, fixtures, running suites. |
-| `builder-lite` | Sonnet | A small round of fixes a review has already spelled out. |
-| `builder` | Opus, or your session's model if lower | Implementation inside an agreed plan, where decisions remain. |
+| `builder-lite` | Sonnet | The default implementer: any change whose design the handoff has settled, from a feature slice to a round of review fixes. |
+| `builder` | Opus, or your session's model if lower | The exception: design calls the handoff can't settle, safety-critical code, or a round `builder-lite` failed twice. |
 | `reviewer` | Opus, or your session's model if lower | Sees the spec and the diff, never the reasoning that produced them. |
 
 The agents are namespaced (`delegate:runner` and so on). The plugin never changes your session's
