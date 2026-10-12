@@ -1447,6 +1447,7 @@ SECTION_HEADINGS = {
     "what-fills-the-context": "=== What fills the context ===",
     "fixed-start": "=== Fixed start ===",
     "rule-scorecard": "=== Rule scorecard ===",
+    "review-by-rung": "=== Review by rung ===",
     "largest-contexts": "=== Largest contexts",
     "tools-called": "=== Tools called",
 }
@@ -1949,10 +1950,11 @@ class RuleScorecardTests(unittest.TestCase):
         report = ac.build_report(loaded, 12, sections=["rule-scorecard"])
         self.assertEqual(section_body(report, "Rule scorecard").splitlines()[0].strip(), "none in this window")
 
-    def test_in_the_default_report_just_before_largest_contexts(self):
+    def test_in_the_default_report_just_before_review_by_rung_and_largest_contexts(self):
         _, loaded = rule_tree(self)
         headings = [l for l in ac.build_report(loaded, 12).splitlines() if l.startswith("=== ")]
-        self.assertEqual(headings[-2], "=== Rule scorecard ===")
+        self.assertEqual(headings[-3], "=== Rule scorecard ===")
+        self.assertEqual(headings[-2], "=== Review by rung ===")
         self.assertTrue(headings[-1].startswith("=== Largest contexts"))
 
     def test_asked_for_alone_with_sections(self):
@@ -2045,3 +2047,94 @@ class VerdictLabelFormTests(unittest.TestCase):
         report = "Final verdict: merge-ready.\nThe Windows path is not ready yet; file it."
         self.assertEqual(ac.reviewer_verdict(report), "pass")
         self.assertEqual(ac.reviewer_verdict("Verdict: not ready to merge."), "fail")
+
+
+# ---------------------------------------------------------------------------
+# review by rung
+# ---------------------------------------------------------------------------
+
+def rung_agent(fx, agent, agent_type, secs, prompt, report=None, session="sess1", worktree_branch=None):
+    """A subagent whose first prompt is `prompt`, starting `secs` after BASE and handing back `report`."""
+    at = ts_str(BASE + timedelta(seconds=secs))
+    turn = assistant("s1", at, usage(input_tokens=1000),
+                     [handback("h1", report)] if report is not None else [])
+    path = fx.subagent(session=session, agent=agent, agent_type=agent_type,
+                       entries=[user_text(at, prompt), turn])
+    if worktree_branch:
+        with open(path[:-len(".jsonl")] + ".meta.json", "w") as f:
+            json.dump({"agentType": agent_type, "worktreeBranch": worktree_branch}, f)
+
+
+def rung_rows(report):
+    """The section's rows keyed by (rung, round), each a list of the numeric cells that follow."""
+    rows = {}
+    for raw in section_body(report, "Review by rung").splitlines():
+        m = re.match(r"\s+(builder-lite|builder|mechanic)\s+(first|later)\s+(.*)$", raw)
+        if m:
+            rows[(m.group(1), m.group(2))] = m.group(3).split()
+    return rows
+
+
+class ReviewByRungTests(unittest.TestCase):
+    def report(self, fx):
+        loaded = ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
+        return ac.build_report(loaded, 12, sections=["review-by-rung"])
+
+    def test_a_failed_review_counts_against_the_first_round_builder_and_a_later_lite_is_later_round(self):
+        fx = FixtureRoot(self)
+        rung_agent(fx, "b1", "delegate:builder", 0, "Build it on `feat/widget`.")
+        rung_agent(fx, "r1", "delegate:reviewer", 100, "Review `feat/widget`.", "Verdict: FAIL. One blocker.")
+        rung_agent(fx, "l1", "delegate:builder-lite", 200, "Fix round on feat/widget.")
+        rows = rung_rows(self.report(fx))
+        # makers, linked, pass, lows, after-fixes, fail, unclass, fail%, avg
+        self.assertEqual(rows[("builder", "first")][:8], ["1", "1", "0", "0", "0", "1", "0", "100%"])
+        self.assertEqual(rows[("builder-lite", "later")][:8], ["1", "0", "0", "0", "0", "0", "0", "-"])
+        self.assertNotIn(("builder-lite", "first"), rows)
+
+    def test_a_maker_no_reviewer_names_is_unlinked(self):
+        fx = FixtureRoot(self)
+        rung_agent(fx, "b1", "builder", 0, "Build on `feat/alpha`.")
+        rung_agent(fx, "r1", "reviewer", 100, "Review `feat/beta`.", "Verdict: pass.")
+        self.assertEqual(rung_rows(self.report(fx))[("builder", "first")][:2], ["1", "0"])
+
+    def test_a_reviewer_in_another_session_is_not_linked(self):
+        fx = FixtureRoot(self)
+        rung_agent(fx, "b1", "builder", 0, "Build on `feat/alpha`.")
+        rung_agent(fx, "r1", "reviewer", 100, "Review `feat/alpha`.", "Verdict: pass.", session="other")
+        self.assertEqual(rung_rows(self.report(fx))[("builder", "first")][:2], ["1", "0"])
+
+    def test_a_reviewer_before_the_maker_is_not_linked(self):
+        fx = FixtureRoot(self)
+        rung_agent(fx, "r1", "reviewer", 0, "Review `feat/alpha`.", "Verdict: pass.")
+        rung_agent(fx, "b1", "builder", 100, "Build on `feat/alpha`.")
+        self.assertEqual(rung_rows(self.report(fx))[("builder", "first")][:2], ["1", "0"])
+
+    def test_the_worktree_branch_in_the_meta_links_a_maker(self):
+        fx = FixtureRoot(self)
+        rung_agent(fx, "b1", "builder", 0, "Build it.", worktree_branch="worktree-agent-1")
+        rung_agent(fx, "r1", "reviewer", 100, "Review `worktree-agent-1/tip`.", "Verdict: pass.")
+        rung_agent(fx, "r2", "reviewer", 110, "Review worktree-agent-1 here.", "Verdict: pass.",
+                   worktree_branch="worktree-agent-1")
+        self.assertEqual(rung_rows(self.report(fx))[("builder", "first")][:3], ["1", "1", "1"])
+
+    def test_a_window_with_no_makers_has_no_section(self):
+        fx = FixtureRoot(self)
+        rung_agent(fx, "r1", "reviewer", 0, "Review `feat/alpha`.", "Verdict: pass.")
+        loaded = ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
+        self.assertNotIn("Review by rung", ac.build_report(loaded, 12))
+
+    def test_the_section_is_in_the_default_report_after_the_scorecard(self):
+        self.assertIn("review-by-rung", ac.DEFAULT_SECTIONS)
+        names = ac.SECTION_NAMES
+        self.assertEqual(names.index("review-by-rung"), names.index("rule-scorecard") + 1)
+        self.assertEqual(ac.resolve_sections("review-by-rung"), ["review-by-rung"])
+
+
+class BranchesNamedTests(unittest.TestCase):
+    def test_paths_and_remote_refs_are_not_branches(self):
+        text = "See `path/to/file.py` and `origin/main`, and `a/b/c/d/e`."
+        self.assertEqual(ac.branches_named(text), set())
+
+    def test_backticked_and_bare_branches_and_the_meta_branch_are_found(self):
+        text = "Work on `feat/x` and then fix/y-1 please; ignore `docs`."
+        self.assertEqual(ac.branches_named(text, "worktree-z"), {"feat/x", "fix/y-1", "worktree-z"})
