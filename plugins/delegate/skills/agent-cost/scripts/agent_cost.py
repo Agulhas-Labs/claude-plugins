@@ -141,7 +141,7 @@ def bash_class(cmd):
 
 
 def stage_class(c):
-    if re.search(r"\bswift (test|build)\b|xcodebuild", c): return "bash: raw swift build/test"
+    if re.search(r"\bswift (test|build)\b|xcodebuild", c): return "bash: swift build/test"
     if re.search(r"^(npm|pnpm|yarn|bun) (run )?(test|build)\b", c): return "bash: build/test"
     if re.search(r"^cargo (build|test)\b", c): return "bash: build/test"
     if re.search(r"^go (build|test)\b", c): return "bash: build/test"

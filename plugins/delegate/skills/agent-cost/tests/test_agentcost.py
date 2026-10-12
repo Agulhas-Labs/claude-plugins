@@ -316,7 +316,7 @@ def seq_loaded(kind, specs, agent="s0"):
     return ac.Loaded(c, BASE - timedelta(minutes=1), BASE + timedelta(minutes=1))
 
 
-R, G, E, B = ["Read (ranged)"], ["Grep/Glob tool"], ["Edit/Write"], ["bash: raw swift build/test"]
+R, G, E, B = ["Read (ranged)"], ["Grep/Glob tool"], ["Edit/Write"], ["bash: swift build/test"]
 
 
 def followon_idx(*cat_lists, n_tools=None):
@@ -840,7 +840,7 @@ class ClassifyMcpNameTests(unittest.TestCase):
 
 class BashClassTests(unittest.TestCase):
     def test_cases(self):
-        self.assertEqual(ac.bash_class("swift test --package-path ."), "bash: raw swift build/test")
+        self.assertEqual(ac.bash_class("swift test --package-path ."), "bash: swift build/test")
         self.assertEqual(ac.bash_class("git status"), "bash: git log/status/etc")
         self.assertEqual(ac.bash_class("git commit -m 'x'"), "bash: git mutate")
         self.assertEqual(ac.bash_class("grep -rn Foo Sources/"), "bash: grep")
@@ -853,8 +853,13 @@ class BashClassTests(unittest.TestCase):
         self.assertEqual(ac.bash_class("cargo build"), "bash: build/test")
         self.assertEqual(ac.bash_class("cargo clippy"), "bash: lint/format/gates")
 
+    def test_a_build_run_through_a_wrapper_gets_the_same_class_as_a_bare_one(self):
+        # the label names the command, not how it was run: a wrapped build is no bypass
+        self.assertEqual(ac.bash_class("runtool run -- xcodebuild test -scheme X"), "bash: swift build/test")
+        self.assertEqual(ac.bash_class("xcodebuild test -scheme X"), "bash: swift build/test")
+
     def test_a_pipeline_is_classified_by_the_stage_that_feeds_its_filters(self):
-        self.assertEqual(ac.bash_class("swift build 2>&1 | grep -E 'error|warning'"), "bash: raw swift build/test")
+        self.assertEqual(ac.bash_class("swift build 2>&1 | grep -E 'error|warning'"), "bash: swift build/test")
         self.assertEqual(ac.bash_class("npm test | tail -20"), "bash: build/test")
         self.assertEqual(ac.bash_class("cd pkg && cargo test 2>&1 | grep FAILED | head -5"), "bash: build/test")
         self.assertEqual(ac.bash_class("git log --oneline | grep fix"), "bash: git log/status/etc")
@@ -1131,7 +1136,7 @@ class SubagentColdBreakdownTests(unittest.TestCase):
         a_prev = self._turn(t0, {"Bash": 1}, usage(input_tokens=0, cache_read=50000))
         a_cold = self._turn(t0 + timedelta(seconds=300), {},
                             usage(input_tokens=50000, cache_read=0, cache_creation=0))
-        self.ctx_a = self._context([a_prev, a_cold], [(1, "bash: raw swift build/test", 500)])
+        self.ctx_a = self._context([a_prev, a_cold], [(1, "bash: swift build/test", 500)])
 
         # Context D: two cold turns, both following Bash, gaps 600s/900s, prev_ctx 100000/150000,
         # extras 90000/135000 — exercises the "two or more" grouping.
@@ -1142,7 +1147,7 @@ class SubagentColdBreakdownTests(unittest.TestCase):
         d3 = self._turn(t0 + timedelta(seconds=1600), {},
                         usage(input_tokens=150000, cache_read=0, cache_creation=0))
         self.ctx_d = self._context([d0, d1, d2, d3],
-                                    [(1, "bash: grep", 500), (3, "bash: raw swift build/test", 500)])
+                                    [(1, "bash: grep", 500), (3, "bash: swift build/test", 500)])
 
         # Context B: one cold turn following a Read (a tool, but not Bash). prev_ctx 20000, extra 18000.
         b_prev = self._turn(t0, {"Read": 1}, usage(input_tokens=0, cache_read=20000))
@@ -1176,7 +1181,7 @@ class SubagentColdBreakdownTests(unittest.TestCase):
     def test_by_command_top_categories(self):
         bd = ac.subagent_cold_breakdown(self.records_by_context)
         by_command = {cat: (av, n) for cat, av, n in bd["by_command"]}
-        self.assertEqual(by_command["bash: raw swift build/test"], (45000 + 135000, 2))
+        self.assertEqual(by_command["bash: swift build/test"], (45000 + 135000, 2))
         self.assertEqual(by_command["bash: grep"], (90000, 1))
 
     def test_contexts_with_cold_and_two_or_more_share(self):
@@ -1203,7 +1208,7 @@ class SubagentColdBreakdownTests(unittest.TestCase):
         t_cold = BASE - timedelta(hours=1)
         prev = self._turn(t_early, {"Bash": 1}, usage(input_tokens=0, cache_read=50000))
         cold = self._turn(t_cold, {}, usage(input_tokens=50000, cache_read=0, cache_creation=0))
-        ctx_outside = self._context([prev, cold], [(1, "bash: raw swift build/test", 500)])
+        ctx_outside = self._context([prev, cold], [(1, "bash: swift build/test", 500)])
 
         loaded = [ac.Loaded(ctx, BASE - timedelta(minutes=1), BASE + timedelta(hours=1))
                   for ctx in (self.ctx_a, self.ctx_b, self.ctx_c, self.ctx_d)]
