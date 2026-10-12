@@ -116,7 +116,8 @@ spend is all in their own sessions.
   the window, the measured baseline where there is one (a target for the model ceiling), and `holds` or
   `not holding`. Its `handoffs carry the code` line is the share of builder and mechanic spend before
   their first edit: a high share means handoffs aren't carrying the code the job touches, so quote it in
-  the handoff, or send a scout first.
+  the handoff, or send a scout first. An edit made through Bash (`sed -i`, a heredoc) is not counted, so
+  such a maker reads as never edited.
 - **Largest contexts** — the worst individual offenders, for a closer look with `--transcript`.
 
 ## Caveats (the report states these too)

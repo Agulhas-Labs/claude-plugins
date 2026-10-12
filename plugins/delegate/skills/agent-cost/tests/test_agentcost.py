@@ -1830,7 +1830,7 @@ class RuleScorecardTests(unittest.TestCase):
                          "median 4 turns after the hand-back nudge, 1 nudged); baseline 45%: not holding")
         # the builder and the ten mechanics made no edit, so there is no share to give
         self.assertEqual(lines["handoffs carry the code"],
-                         "maker spend before the first edit: n/a (0 makers, 11 never edited); n/a")
+                         "maker spend before the first edit: n/a (0 of 11 makers edited); n/a")
         # the builder was prompted again after handing back; the reviewer's hook feedback is no prompt
         self.assertEqual(lines["a fresh agent per round"],
                          "subagents prompted again after their hand-back: 1 of 3 that handed back; no baseline")
@@ -2016,12 +2016,12 @@ class MakerSpendBeforeFirstEditTests(unittest.TestCase):
         # the builder's 1k + 2k of 10k; the mechanic is in the never-edited count, not the share; the
         # reviewer's 9k before its Write is not a maker's
         self.assertEqual(self._line(BASE - timedelta(hours=1)),
-                         "maker spend before the first edit: 30.0% (1 makers, 1 never edited); no baseline")
+                         "maker spend before the first edit: 30.0% (1 of 2 makers edited); no baseline")
 
     def test_a_window_that_starts_after_the_first_edit_has_nothing_before_it(self):
         # only the builder's 4k check is in the window; its first edit is still turn 2 of the context
         self.assertEqual(self._line(BASE + timedelta(seconds=25)),
-                         "maker spend before the first edit: 0.0% (1 makers, 0 never edited); no baseline")
+                         "maker spend before the first edit: 0.0% (1 of 1 makers edited); no baseline")
 
     def test_no_makers_reads_n_a(self):
         loaded = [typed_loaded("subagent", "reviewer", [1000], "r")]

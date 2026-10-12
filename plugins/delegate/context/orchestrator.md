@@ -60,10 +60,9 @@ loudly and read what it did.
   test that covers its change, never a suite past a few minutes. It commits and hands back, saying the
   full run is owed, and the orchestrator has a `runner` run it once, when it merges: a runner's context
   is small, so going cold costs it little, and one run covers every branch folded in. A red run goes to
-  a fresh maker with the failures. Makers on one machine also queue behind each other's builds:
-  measured on the same project, 86 cold turns after a median ten-minute wait, while builders polled
-  77 times for another agent's build to finish. Where the narrowest check is a multi-minute build,
-  run fewer makers at once than the cap.
+  a fresh maker with the failures. Makers on one machine also queue behind each other's builds: on
+  the project measured under Handoffs above, builders polled 77 times for another agent's build to
+  finish. Where the narrowest check is a multi-minute build, run fewer makers at once than the cap.
 - **Size the handoff before you send it.** Split it if any of these is true: it lists more than three
   deliverables, it expects more than one commit, or it tells the agent to read a whole document. One
   eight-item handoff with a plan to read spent 160k tokens and delivered the first item; the same work

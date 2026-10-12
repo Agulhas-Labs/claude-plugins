@@ -1318,7 +1318,7 @@ def section_rule_scorecard(out, loaded):
         before_ie += sum(t["ie"] for t in l.ctx.turns[:l.ctx.first_edit_turn] if id(t) in in_window)
     before = f"{100 * before_ie / edited_ie:.1f}%" if edited_ie else "n/a"
     line("handoffs carry the code", "maker spend before the first edit",
-         f"{before} ({len(edited)} makers, {len(makers) - len(edited)} never edited)" if makers else "n/a", None,
+         f"{before} ({len(edited)} of {len(makers)} makers edited)" if makers else "n/a", None,
          "no baseline" if edited_ie else "n/a")
 
     # a fresh agent per round
