@@ -81,6 +81,11 @@ on one machine over eight days, 79 of 84 cold subagent turns followed a single B
 wait of nine minutes; cold turns were 2.6% of subagent spend, and agents that went cold twice or more
 held 74% of it, so the first cold wait predicts the next.
 
+A third single read-only call in a row also gets one "Batch your reads" line, once per run, because the
+rule to request independent calls together has not held: across four projects on one machine, five days,
+85.7% of subagent turns made exactly one tool call (the target is 70%), and a read-only call straight
+after another one was 29.1% of subagent turns and 24.8% of subagent spend.
+
 The plugin once also held a subagent's stop while a command it had backgrounded still ran. Measured on
 Claude Code 2.1.293, the harness re-invokes the agent when the command exits and a report is delivered
 once, so the hold changed nothing the parent receives and was retired.
@@ -152,6 +157,8 @@ isn't a positive integer means the default.
 `DELEGATE_SUBAGENT_CACHE_SECONDS` (default 300) is set the same way: how long a subagent's tool call may
 run before the budget hook says the prompt cache has expired. Set it to match your cache lifetime;
 anything that isn't a positive integer means the default.
+
+`DELEGATE_BATCH_NUDGE=0` switches off the "Batch your reads" line; any other value leaves it on.
 
 To let agents run above your session's model, for instance Opus builders under a Sonnet session, switch
 the ceiling hook off the same way:

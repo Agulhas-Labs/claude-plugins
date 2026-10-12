@@ -15,9 +15,9 @@ budget = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(budget)
 
 
-def assistant(mid, context, *tool_ids, timestamp=None):
+def assistant(mid, context, *tool_ids, timestamp=None, command=None):
     usage = {"input_tokens": 2, "cache_read_input_tokens": context - 2, "cache_creation_input_tokens": 0}
-    content = [{"type": "tool_use", "id": t, "name": "Bash", "input": {}} for t in tool_ids]
+    content = [{"type": "tool_use", "id": t, "name": "Bash", "input": {} if command is None else {"command": command}} for t in tool_ids]
     entry = {"type": "assistant", "message": {"id": mid, "usage": usage, "content": content}}
     if timestamp is not None:
         entry["timestamp"] = timestamp
@@ -117,6 +117,63 @@ class BudgetTests(unittest.TestCase):
         self.write(assistant("m1", 125_000, "t1"), m2a, m2b)
         self.assertIsNotNone(self.advise("t2"))
         self.assertIsNone(self.advise("t3"))
+
+    def reads(self, *commands, context=50_000):
+        """One single-call Bash turn per command, calls named t1, t2, ..."""
+        self.write(*(assistant(f"m{i}", context, f"t{i}", command=c) for i, c in enumerate(commands, 1)))
+
+    def test_the_third_single_read_only_turn_in_a_row_is_told_to_batch(self):
+        self.reads("grep a x", "cat y", "ls z")
+        said = self.advise("t3")
+        self.assertIn("Batch your reads", said)
+        self.assertIn("50k", said)
+
+    def test_two_in_a_row_are_not_told(self):
+        self.reads("grep a x", "cat y")
+        self.assertIsNone(self.advise("t2"))
+
+    def test_the_fourth_in_a_run_is_not_told(self):
+        self.reads("grep a x", "cat y", "ls z", "wc -l z")
+        self.assertIn("Batch your reads", self.advise("t3"))
+        self.assertIsNone(self.advise("t4"))
+
+    def test_a_two_call_turn_breaks_the_run(self):
+        self.write(
+            assistant("m1", 50_000, "t1", command="ls"), assistant("m2", 50_000, "t2", command="ls"),
+            assistant("m3", 50_000, "t3a", "t3b", command="ls"), assistant("m4", 50_000, "t4", command="ls"),
+            assistant("m5", 50_000, "t5", command="ls"), assistant("m6", 50_000, "t6", command="ls"),
+        )
+        for call in ("t1", "t2", "t3a", "t4", "t5"):
+            self.assertIsNone(self.advise(call), call)
+        self.assertIn("Batch your reads", self.advise("t6"))
+
+    def test_writes_are_not_read_only(self):
+        for command in ("sed -i s/a/b/ f", "cat x > y", "git fetch origin", "ls | tee out"):
+            self.assertFalse(budget.read_only("Bash", {"command": command}), command)
+        self.assertFalse(budget.read_only("Edit", {}))
+        self.assertFalse(budget.read_only("Bash", {}))
+        self.reads("grep a x", "cat x > y", "ls z")
+        self.assertIsNone(self.advise("t3"))
+
+    def test_leading_cd_is_dropped_before_matching(self):
+        self.assertTrue(budget.read_only("Bash", {"command": "cd /x && git log --oneline"}))
+        self.assertTrue(budget.read_only("Bash", {"command": "cd /x; cd y && ls"}))
+        self.assertFalse(budget.read_only("Bash", {"command": "cd /x && make"}))
+        for tool in ("Read", "Grep", "Glob"):
+            self.assertTrue(budget.read_only(tool, {}))
+
+    def test_the_batch_nudge_can_be_switched_off(self):
+        self.reads("grep a x", "cat y", "ls z")
+        self.assertIsNone(self.advise("t3", env={"DELEGATE_BATCH_NUDGE": "0"}))
+        self.assertIn("Batch your reads", self.advise("t3", env={"DELEGATE_BATCH_NUDGE": "1"}))
+
+    def test_the_tier_line_comes_before_the_batch_line(self):
+        self.write(
+            assistant("m1", 110_000, "t1", command="ls"), assistant("m2", 115_000, "t2", command="ls"),
+            assistant("m3", 121_000, "t3", command="ls"),
+        )
+        said = self.advise("t3")
+        self.assertLess(said.index("Scope freeze"), said.index("Batch your reads"))
 
     def test_main_session_is_never_told(self):
         self.write(assistant("m1", 125_000, "t1"), assistant("m2", 151_000, "t2"))
