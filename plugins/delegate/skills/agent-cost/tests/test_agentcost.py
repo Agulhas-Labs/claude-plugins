@@ -2109,6 +2109,40 @@ class ReviewByRungTests(unittest.TestCase):
         rung_agent(fx, "b1", "builder", 100, "Build on `feat/alpha`.")
         self.assertEqual(rung_rows(self.report(fx))[("builder", "first")][:2], ["1", "0"])
 
+    def test_a_shared_base_branch_does_not_tie_makers_to_one_reviewer(self):
+        fx = FixtureRoot(self)
+        rung_agent(fx, "a", "builder", 0, "Build on `feat/slice-1`, based on `feat/trend`.")
+        rung_agent(fx, "b", "builder-lite", 10, "Build on `feat/slice-2`, based on `feat/trend`.")
+        rung_agent(fx, "ra", "reviewer", 100, "Review `feat/slice-1` against `feat/trend`.", "Verdict: FAIL.")
+        rung_agent(fx, "rb", "reviewer", 110, "Review `feat/slice-2` against `feat/trend`.", "Verdict: pass.")
+        rows = rung_rows(self.report(fx))
+        self.assertEqual(rows[("builder", "first")][:8], ["1", "1", "0", "0", "0", "1", "0", "100%"])
+        self.assertEqual(rows[("builder-lite", "first")][:8], ["1", "1", "1", "0", "0", "0", "0", "0%"])
+        self.assertNotIn(("builder-lite", "later"), rows)
+
+    def test_a_later_round_is_later_and_links_to_the_next_reviewer_after_it_ends(self):
+        fx = FixtureRoot(self)
+        rung_agent(fx, "a", "builder", 0, "Build on `feat/slice-1`, based on `feat/trend`.")
+        rung_agent(fx, "b", "builder", 10, "Build on `feat/slice-2`, based on `feat/trend`.")
+        rung_agent(fx, "ra", "reviewer", 100, "Review `feat/slice-1`.", "Verdict: FAIL.")
+        rung_agent(fx, "a2", "builder", 200, "Fix `feat/slice-1`, based on `feat/trend`.")
+        rung_agent(fx, "ra2", "reviewer", 300, "Review `feat/slice-1` again.", "Verdict: pass.")
+        rows = rung_rows(self.report(fx))
+        self.assertEqual(rows[("builder", "later")][:8], ["1", "1", "1", "0", "0", "0", "0", "0%"])
+        self.assertEqual(rows[("builder", "first")][:2], ["2", "1"])
+        self.assertEqual(rows[("builder", "first")][5], "1")
+
+    def test_a_reviewer_that_started_before_the_maker_finished_is_not_linked(self):
+        fx = FixtureRoot(self)
+        at = ts_str(BASE)
+        late = ts_str(BASE + timedelta(seconds=200))
+        fx.subagent(session="sess1", agent="b1", agent_type="builder", entries=[
+            user_text(at, "Build on `feat/alpha`."),
+            assistant("s1", at, usage(input_tokens=1000), []),
+            assistant("s2", late, usage(input_tokens=1000), [])])
+        rung_agent(fx, "r1", "reviewer", 100, "Review `feat/alpha`.", "Verdict: pass.")
+        self.assertEqual(rung_rows(self.report(fx))[("builder", "first")][:2], ["1", "0"])
+
     def test_the_worktree_branch_in_the_meta_links_a_maker(self):
         fx = FixtureRoot(self)
         rung_agent(fx, "b1", "builder", 0, "Build it.", worktree_branch="worktree-agent-1")
@@ -2138,3 +2172,7 @@ class BranchesNamedTests(unittest.TestCase):
     def test_backticked_and_bare_branches_and_the_meta_branch_are_found(self):
         text = "Work on `feat/x` and then fix/y-1 please; ignore `docs`."
         self.assertEqual(ac.branches_named(text, "worktree-z"), {"feat/x", "fix/y-1", "worktree-z"})
+
+    def test_bare_paths_are_not_branches_but_bare_branches_are(self):
+        text = "Edit docs/Plan/x.md, test/fixtures/cart.json and fix/thing.py; branch fix/cart-total."
+        self.assertEqual(ac.branches_named(text), {"fix/cart-total"})
