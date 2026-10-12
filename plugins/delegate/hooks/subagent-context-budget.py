@@ -27,7 +27,7 @@ and report rather than run another long command. `DELEGATE_SUBAGENT_CACHE_SECOND
 300-second lifetime.
 
 A run of single read-only calls gets a "batch your reads" line. Measured across four projects on one
-machine, five days: 85.7% of subagent turns made exactly one tool call (the target is 70%), and a
+machine, five days: 85.7% of subagent turns made exactly one tool call (the baseline is 70%), and a
 read-only call straight after another one was 29.1% of subagent turns and 24.8% of subagent spend.
 The prose rule to request independent calls together did not change that, so the line says it at the
 moment it happens: on the third turn in a row that made one read-only call, once, not on a fourth or
@@ -49,7 +49,7 @@ FREEZE = 120_000
 HAND_BACK = 150_000
 STOP = 200_000
 STEP = 50_000  # beyond STOP, the stop tier repeats at each step as a backstop
-TAIL = 1024 * 1024  # enough of the transcript's end to hold its last two assistant turns
+TAIL = 1024 * 1024  # enough of the transcript's end to hold its last four assistant turns, which the batch check reads
 CACHE_SECONDS = 300  # a subagent's prompt cache lifetime; DELEGATE_SUBAGENT_CACHE_SECONDS overrides
 
 
@@ -166,28 +166,121 @@ def cold(seconds, size):
     )
 
 
-# Mirrors agent-cost's READ_ONLY_CATEGORIES and WRITES (skills/agent-cost/scripts/agent_cost.py); keep
-# the two in step with them.
-READ_ONLY_TOOLS = frozenset({"Read", "Grep", "Glob"})
-LOOKING = re.compile(r"\b(grep|rg|git grep)\b|^(cat|sed|head|tail|nl|awk|ls|find|wc)\b|\|\s*(sed|head|tail)"
-                     r"|\bgit (diff|show|log|status|branch|rev-parse|merge-base|ls-remote|cherry)\b")
+# Copied verbatim from agent-cost (skills/agent-cost/scripts/agent_cost.py), so a call counts as
+# read-only here exactly when it does in its turn-shape metric; keep the two in step with it. The
+# agreement test in tests/ fails when they drift. `classify` keeps only the tools this hook meets.
+PURE_FILTER = re.compile(r"^(grep|rg|tail|head|sed|awk|sort|uniq|wc|tee)\b")
+
+
+# A loop that sleeps until a log shows a verdict line. What it costs is the wait on the run it watches,
+# whatever it greps for meanwhile. The loop word opens a statement, so prose in a quoted message is not
+# one; a `for` loop must `break`, or it is only pacing its own work.
+WAIT_LOOP = re.compile(r"(?:^|[;&|\n(]\s*|\b(?:do|then)\s+)(for|while|until)\b([\s\S]*)\bdone\b")
+SLEEPS = re.compile(r"\b(sleep|caffeinate -t)\b")
+
+
+def is_wait_loop(c):
+    m = WAIT_LOOP.search(c)
+    if not m or not SLEEPS.search(m.group(2)):
+        return False
+    return m.group(1) != "for" or re.search(r"\bbreak\b", m.group(2)) is not None
+
+
+def pipeline_stages(c):
+    """Split on `|` outside quotes; `||` is not a pipe."""
+    stages, start, quote, i = [], 0, None, 0
+    while i < len(c):
+        ch = c[i]
+        if quote:
+            if ch == "\\" and quote == '"': i += 1
+            elif ch == quote: quote = None
+        elif ch in "'\"": quote = ch
+        elif ch == "\\": i += 1
+        elif ch == "|":
+            if c[i + 1:i + 2] == "|": i += 1
+            else:
+                stages.append(c[start:i]); start = i + 1
+        i += 1
+    stages.append(c[start:])
+    return stages
+
+
+def bash_class(cmd):
+    c = cmd.strip()
+    c = re.sub(r"^(cd [^;&\n]+(&&|;|\n)\s*)+", "", c)
+    if is_wait_loop(c): return "bash: wait loop (polling a run)"
+    for stage in pipeline_stages(c):
+        stage = stage.strip()
+        if stage and not PURE_FILTER.match(stage):
+            found = stage_class(stage)
+            if found != "bash: other": return found
+            break
+    return stage_class(c)
+
+
+def stage_class(c):
+    if re.search(r"\bswift (test|build)\b|xcodebuild", c): return "bash: swift build/test"
+    if re.search(r"^(npm|pnpm|yarn|bun) (run )?(test|build)\b", c): return "bash: build/test"
+    if re.search(r"^cargo (build|test)\b", c): return "bash: build/test"
+    if re.search(r"^go (build|test)\b", c): return "bash: build/test"
+    if re.search(r"^(pytest|python3? -m pytest)\b", c): return "bash: build/test"
+    if re.search(r"^dotnet (build|test)\b", c): return "bash: build/test"
+    if re.search(r"^(\./)?gradlew\b|^(gradle|mvn)\b", c): return "bash: build/test"
+    if re.search(r"^make\b", c): return "bash: build/test"
+    if re.search(r"swiftlint|swiftformat", c): return "bash: lint/format/gates"
+    if re.search(r"^(npx )?(eslint|tsc|ruff|mypy|black|prettier)\b", c): return "bash: lint/format/gates"
+    if re.search(r"^cargo clippy\b", c): return "bash: lint/format/gates"
+    if re.search(r"^go vet\b", c): return "bash: lint/format/gates"
+    if re.search(r"^(npm|pnpm|yarn|bun) (run )?lint\b", c): return "bash: lint/format/gates"
+    if re.search(r"\bgit (diff|show)\b", c): return "bash: git diff/show"
+    if re.search(r"\bgit (log|status|branch|rev-parse|merge-base|ls-remote|worktree|fetch|cherry)", c): return "bash: git log/status/etc"
+    if re.search(r"\bgit (commit|push|rebase|merge|checkout|switch|add|reset|stash|cherry-pick)", c): return "bash: git mutate"
+    if re.search(r"\bgh\b", c): return "bash: gh"
+    if re.search(r"\b(grep|rg|git grep)\b", c): return "bash: grep"
+    if re.search(r"^(cat|sed|head|tail|nl|awk)\b|\|\s*(sed|head|tail)", c): return "bash: cat/sed/head window"
+    if re.search(r"python3?|jq\b", c): return "bash: python/jq"
+    return "bash: other"
+
+
+def classify(name, inp):
+    if name == "Bash": return bash_class(inp.get("command", ""))
+    if name == "Read":
+        return "Read (ranged)" if inp.get("offset") or inp.get("limit") else "Read (whole file)"
+    if name in ("Grep", "Glob"): return "Grep/Glob tool"
+    return name
+
+
+# Categories that only look: a run of single-call turns made of these could have been one request.
+# MCP tools and "bash: other" are left out because they may write, so some reads go uncounted; and a
+# read may have needed the one before it, so not every counted turn could have been saved.
+READ_ONLY_CATEGORIES = frozenset({
+    "Read (ranged)", "Read (whole file)", "Grep/Glob tool", "bash: grep",
+    "bash: cat/sed/head window", "bash: git diff/show", "bash: git log/status/etc",
+})
+
+
+# Commands that the categories above file as looking but that change something: an in-place sed, a
+# redirect into a file, tee, the git subcommands that move refs, the index or the worktree, `git branch`
+# given a name (a listing flag or none stays a read), and a standalone rm.
 WRITES = re.compile(r"\bsed\b[^|;&]*\s-i|(?<![0-9&>])>>?(?!&)\s*(?!/dev/null)[^\s&|;]|\btee\b"
-                    r"|\bgit (branch -[dDmM]|worktree (add|remove|move|prune)|fetch|tag)\b")
-LEADING_CD = re.compile(r"^\s*cd\b[^;&]*(&&|;)\s*")
+                    r"|\bgit (branch -[dDmM]|worktree (add|remove|move|prune)|fetch|tag)\b"
+                    r"|\bgit (checkout|switch|reset|stash|commit|merge|rebase|push|pull|cherry-pick|add|rm|mv|restore|clean)\b"
+                    r"|\bgit branch\s+(?![0-9]*>)[^-\s|;&]|(?:^|[;&|(\n])\s*rm\b")
 
 
+def turn_shape_category(cat, inp):
+    """A call's category for the turn shape: a looking category is kept only when the command writes
+    nothing, so a sed -i or a heredoc into a file never counts as a read."""
+    if cat in READ_ONLY_CATEGORIES and cat.startswith("bash: ") and WRITES.search(inp.get("command", "")):
+        return "bash: writes"
+    return cat
 def read_only(name, tool_input):
-    """Whether one call only looks: a looking tool, or a Bash command that looks and does not write."""
-    if name in READ_ONLY_TOOLS:
-        return True
-    if name != "Bash":
+    """Whether one call only looks, by agent-cost's rule: its category is a looking one and the command writes nothing."""
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+    if not isinstance(tool_input.get("command", ""), str):
         return False
-    command = (tool_input or {}).get("command") if isinstance(tool_input, dict) else None
-    if not isinstance(command, str):
-        return False
-    while LEADING_CD.match(command):
-        command = LEADING_CD.sub("", command, count=1)
-    return bool(LOOKING.search(command)) and not WRITES.search(command)
+    return turn_shape_category(classify(name, tool_input), tool_input) in READ_ONLY_CATEGORIES
 
 
 def qualifies(turn):

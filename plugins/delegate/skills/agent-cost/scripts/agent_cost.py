@@ -841,9 +841,12 @@ READ_ONLY_CATEGORIES = frozenset({
 
 
 # Commands that the categories above file as looking but that change something: an in-place sed, a
-# redirect into a file, tee, and the git subcommands that move refs or worktrees.
+# redirect into a file, tee, the git subcommands that move refs, the index or the worktree, `git branch`
+# given a name (a listing flag or none stays a read), and a standalone rm.
 WRITES = re.compile(r"\bsed\b[^|;&]*\s-i|(?<![0-9&>])>>?(?!&)\s*(?!/dev/null)[^\s&|;]|\btee\b"
-                    r"|\bgit (branch -[dDmM]|worktree (add|remove|move|prune)|fetch|tag)\b")
+                    r"|\bgit (branch -[dDmM]|worktree (add|remove|move|prune)|fetch|tag)\b"
+                    r"|\bgit (checkout|switch|reset|stash|commit|merge|rebase|push|pull|cherry-pick|add|rm|mv|restore|clean)\b"
+                    r"|\bgit branch\s+(?![0-9]*>)[^-\s|;&]|(?:^|[;&|(\n])\s*rm\b")
 
 
 def turn_shape_category(cat, inp):
