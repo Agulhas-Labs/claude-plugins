@@ -38,9 +38,9 @@ loudly and read what it did.
   files and first commands as one batch to request together (found one by one, each costs a turn),
   and the check that must pass before it reports. Quote what a large document says; never write
   "read first: <doc>". Quote the code too: the lines the job changes and the signatures it calls,
-  under `path:line`, so the agent edits from them rather than hunting for them. Measured on one
-  project over two weeks: 5 of 79 builder handoffs quoted code, and builders spent 37% of their cost
-  before their first edit, mostly on windowed reads and searches of source.
+  under `path:line`, so the agent edits from them rather than hunting for them. Measured over two
+  weeks across four projects: 63 of 1,335 maker handoffs quoted any code, and makers spent 31% of
+  their spend before their first edit.
 - **End with gates, one per required outcome.** A green suite does not prove every requested outcome
   exists. Each line reads `G<n> <outcome> — CHECK: <command> — EXPECT: <token>`. For every fix a test
   is said to pin, add the negative gate: set the fix aside (diffed against the base branch, so the gate still
@@ -60,9 +60,10 @@ loudly and read what it did.
   test that covers its change, never a suite past a few minutes. It commits and hands back, saying the
   full run is owed, and the orchestrator has a `runner` run it once, when it merges: a runner's context
   is small, so going cold costs it little, and one run covers every branch folded in. A red run goes to
-  a fresh maker with the failures. Makers on one machine also queue behind each other's builds: on
-  the project measured under Handoffs above, builders polled 77 times for another agent's build to
-  finish. Where the narrowest check is a multi-minute build, run fewer makers at once than the cap.
+  a fresh maker with the failures. The same holds when even the narrow test outlasts the cache: the
+  maker commits and hands back the command, and you queue it on a `runner`. Measured over two weeks
+  across four projects, each of 378 cold subagent turns after one long command cost 103k input-eq
+  above a warm read; a runner's whole context averaged 41k.
 - **Size the handoff before you send it.** Split it if any of these is true: it lists more than three
   deliverables, it expects more than one commit, or it tells the agent to read a whole document. One
   eight-item handoff with a plan to read spent 160k tokens and delivered the first item; the same work

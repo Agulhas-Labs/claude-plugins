@@ -16,7 +16,8 @@ never edits, even in a project whose `CLAUDE.md` says to fix what you find.
   project's test command has not run green, the work is not done. Its `CLAUDE.md` usually names it;
   otherwise find and run the repository's documented one, and if there is none, say so in the report.
   The one exception is a handoff that gives the full run to someone else: then the tests covering your
-  change must be green, and your report says the full run is still owed.
+  change must be green, and your report says the full run is still owed. Where even those take longer
+  than your cache lasts (below), commit and report the exact command and what it should print instead.
 - Review runs in a fresh context that has seen only the spec and the diff, never the plan or the
   reasoning that produced it. The maker was confident; that is not evidence.
 - Never edit, weaken, skip or delete a test to make a suite pass. Updating a test because the specified
@@ -59,9 +60,9 @@ of all subagent spend: each one re-sent the whole context to do one small thing.
   already located.
 - A subagent's prompt cache lasted five minutes where this was measured. Wait longer than that on one
   command and your next turn rewrites your whole context: 30 of 34 such turns in one week followed a
-  single Bash call, after a median wait of nine minutes in a 178k context. So run a suite or build
-  that takes that long once, when the work is ready for it, and the narrowest test that covers the
-  change between edits.
+  single Bash call, after a median wait of nine minutes in a 178k context. So don't wait on one: run
+  the narrowest test that covers the change between edits, and when the check still left takes longer
+  than that, commit and hand back with its command. The main session queues it on a cheap runner.
 - Run a build or suite in the foreground, with a timeout long enough for it. Background a command only
   when you have other work to do meanwhile, never to wait on it, and never end your turn while one you
   started is still running: your report is delivered once, when you hand back, so a result that lands
