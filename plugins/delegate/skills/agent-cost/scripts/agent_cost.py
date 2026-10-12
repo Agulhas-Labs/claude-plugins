@@ -1288,24 +1288,26 @@ def judgement(value, baseline):
     return "holds" if value <= baseline else "not holding"
 
 
-# Review by rung: which model rung's work fails review. A maker and a reviewer are linked by a branch name
-# both handoffs state, which is a heuristic: a handoff that names no branch, or a reviewer given a different
+# Review by rung: which model rung's work fails review. A maker and a reviewer are linked by the maker's
+# least-shared branch name, which the reviewer's handoff also states and which the reviewer started after the
+# maker finished. That is a heuristic: a handoff that names no branch, or a reviewer given a different
 # spelling of it, leaves the maker unlinked.
 MAKER_TYPES = ("builder", "builder-lite", "mechanic")
 BACKTICKED_BRANCH = re.compile(r"`([A-Za-z0-9][\w.-]*/[\w./-]*[\w-])`")
-BARE_BRANCH = re.compile(r"\b((?:feat|fix|chore|review|round|refactor|docs|test|perf)/[\w./-]*[\w-])")
+BARE_BRANCH = re.compile(r"\b((?:feat|fix|chore|review|round|refactor|perf)/[\w./-]*[\w-])")
 FILE_EXTENSION = re.compile(r"\.[a-z]{1,5}$")
 
 
 def branches_named(text, worktree_branch=None):
     """The branch names a handoff states: backticked `a/b` tokens that are not file paths or remote refs,
-    bare feat/, fix/ and similar prefixed words, and the branch of the worktree the agent ran in."""
+    bare feat/, fix/ and similar prefixed words that are not file paths, and the branch of the worktree the
+    agent ran in."""
     found = set()
     for token in BACKTICKED_BRANCH.findall(text or ""):
         if FILE_EXTENSION.search(token) or token.count("/") > 3 or token.startswith("origin/"):
             continue
         found.add(token)
-    found.update(BARE_BRANCH.findall(text or ""))
+    found.update(t for t in BARE_BRANCH.findall(text or "") if not FILE_EXTENSION.search(t))
     if worktree_branch:
         found.add(worktree_branch)
     return found
@@ -1313,8 +1315,10 @@ def branches_named(text, worktree_branch=None):
 
 def rung_links(loaded):
     """[(maker Loaded, round, reviewer Loaded or None)] for every maker in the window. Within one session,
-    subagents are ordered by their first turn; a maker links to the first later reviewer sharing a branch,
-    and is a later round if an earlier maker of the session shares one."""
+    subagents are ordered by their first turn. A maker's own branches are the ones the fewest makers of the
+    session name, so a base branch every handoff names does not tie makers together. A maker links to the
+    first reviewer whose first turn is at or after the maker's last turn and which names one of those, and
+    is a later round if an earlier maker of the session shares one."""
     sessions = collections.defaultdict(list)
     for l in loaded:
         if l.ctx.kind == "subagent":
@@ -1323,12 +1327,17 @@ def rung_links(loaded):
     for group in sessions.values():
         group.sort(key=lambda l: l.ctx.turns[0]["ts"])
         branches = {id(l): branches_named(l.ctx.first_prompt, l.ctx.worktree_branch) for l in group}
+        named_by = collections.Counter(t for l in group if folded_type(l) in MAKER_TYPES for t in branches[id(l)])
         seen = set()
         for i, l in enumerate(group):
             if folded_type(l) not in MAKER_TYPES:
                 continue
-            mine = branches[id(l)]
-            reviewer = next((r for r in group[i + 1:] if folded_type(r) == "reviewer" and mine & branches[id(r)]), None)
+            tokens = branches[id(l)]
+            fewest = min((named_by[t] for t in tokens), default=0)
+            mine = {t for t in tokens if named_by[t] == fewest}
+            finished = l.ctx.turns[-1]["ts"]
+            reviewer = next((r for r in group[i + 1:] if folded_type(r) == "reviewer"
+                             and r.ctx.turns[0]["ts"] >= finished and mine & branches[id(r)]), None)
             links.append((l, "later" if mine & seen else "first", reviewer))
             seen |= mine
     return links
@@ -1339,8 +1348,8 @@ def section_review_by_rung(out, loaded):
     if not links:
         return
     out.append("=== Review by rung ===")
-    out.append("  makers linked to a later review by a branch both handoffs name; a reviewer covering several"
-               " branches gives each the same verdict")
+    out.append("  makers linked to a review by the maker's least-shared branch, from a reviewer that started after the"
+               " maker finished; a reviewer covering several branches gives each the same verdict")
     out.append(f"  {'rung':13} {'round':6} {'makers':>7} {'linked':>7} {'pass':>5} {'lows':>5} {'after-fixes':>12}"
                f" {'fail':>5} {'unclass':>8} {'fail%':>6} {'avg input-eq':>13}")
     for rung in MAKER_TYPES:
@@ -1356,8 +1365,9 @@ def section_review_by_rung(out, loaded):
             out.append(f"  {rung:13} {rnd:6} {len(rows):7} {linked:7} {verdicts['pass']:5} {verdicts['pass with lows']:5}"
                        f" {verdicts['pass after fixes']:12} {verdicts['fail']:5} {verdicts['unclassified']:8}"
                        f" {fail_pct:>6} {fmt_tok(avg):>13}")
-    out.append("  (a heuristic: a branch is a backticked name, a feat/ or fix/ style word, or the worktree's own branch."
-               " A reviewer outside the window, or one that names no shared branch, leaves its maker unlinked.)")
+    out.append("  (a heuristic: a branch is a backticked name, a feat/ or fix/ style word, or the worktree's own branch;"
+               " the link uses the maker's least-shared branch and a reviewer that started after the maker finished."
+               " A reviewer outside the window, or one that names no such branch, leaves its maker unlinked.)")
     out.append("")
 
 
