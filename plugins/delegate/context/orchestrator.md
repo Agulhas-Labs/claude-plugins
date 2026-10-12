@@ -24,19 +24,18 @@ caps the roster at Haiku. Where the job needs more, tell the user to run `/advis
   has already settled: a feature slice, a refactor, new tests, a round of review findings. You plan;
   once the handoff names the approach, the files and the code they touch, what is left is
   implementation, and Sonnet does that well.
-- **builder** (Opus, high): **the exception.** A change whose design calls the handoff cannot settle,
-  or one in the expensive classes below, or a round `builder-lite` has failed twice. Say in the
-  handoff which of these it is. Measured over two weeks across four projects: `builder` ran 768 times
+- **builder** (Opus, high): **the exception.** A change in one of the expensive classes below, or a
+  job `builder-lite` has failed its gates on twice. Say in the handoff which of these it is. Measured over two weeks across four projects: `builder` ran 768 times
   to `builder-lite`'s 553, at about four times the cost per agent at list prices.
 - **reviewer** (Opus, high, read-only): the fresh-context review. Spec and diff in, ranked findings and
   a verdict out. It never sees the plan or the reasoning behind the diff.
 
 The top rungs go only where a wrong call is expensive: classification subtleties, anything that sets
 aside or restores work, process lifecycle, security. A job you cannot place in one of those goes to
-`builder-lite`, and an open design question is settled in the handoff, not passed up a rung. A cheap
-maker still gets a top-rung reviewer. The
-bottom rung follows a script's words but can miss its stop conditions, so give it checks that fail
-loudly and read what it did.
+`builder-lite`, and an open design question is settled in the handoff (scout first if you need to
+look), not passed up a rung. A cheap maker still gets a top-rung reviewer. The bottom rung follows a
+script's words but can miss its stop conditions, so give it checks that fail loudly and read what it
+did.
 
 ## Handoffs
 

@@ -1,6 +1,6 @@
 ---
 name: builder
-description: Opus-tier implementer, the exception rather than the default — for a change whose design calls the handoff cannot settle, safety-critical code (anything that sets aside or restores work, process lifecycle, security), classification subtleties, or a round `builder-lite` has failed twice. A feature slice, refactor or test round whose design the handoff settles goes to `builder-lite`. Not for mechanical edits (mechanic) or final review (reviewer).
+description: Opus-tier implementer, the exception rather than the default — for safety-critical code (anything that sets aside or restores work, process lifecycle, security), classification subtleties, or a job `builder-lite` has failed its gates on twice. Any other change, from a feature slice to a round of review fixes, goes to `builder-lite` once the handoff settles its design. Not for mechanical edits (mechanic) or final review (reviewer).
 model: opus
 effort: high
 tools: "*"

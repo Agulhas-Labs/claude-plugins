@@ -113,7 +113,7 @@ Your numbers will differ; `agent-cost` shows you yours.
 | `runner` | Haiku | A scripted list of commands whose output is the answer. It edits nothing. |
 | `mechanic` | Sonnet | Bulky, fully specified changes: sweeps, renames, fixtures, running suites. |
 | `builder-lite` | Sonnet | The default implementer: any change whose design the handoff has settled, from a feature slice to a round of review fixes. |
-| `builder` | Opus, or your session's model if lower | The exception: design calls the handoff can't settle, safety-critical code, or a round `builder-lite` failed twice. |
+| `builder` | Opus, or your session's model if lower | The exception: safety-critical code, classification subtleties, or a job `builder-lite` failed its gates on twice. |
 | `reviewer` | Opus, or your session's model if lower | Sees the spec and the diff, never the reasoning that produced them. |
 
 The agents are namespaced (`delegate:runner` and so on). The plugin never changes your session's

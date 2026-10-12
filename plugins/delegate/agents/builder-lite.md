@@ -1,6 +1,6 @@
 ---
 name: builder-lite
-description: Sonnet, medium effort — the default implementer. Use proactively for any change whose design the handoff has already settled — a feature slice, a refactor, new tests, a round of review findings — where the judgement left is local. Cheaper than `builder`, and allowed small calls a `mechanic` must stop on. Not for safety-critical code (anything that sets aside or restores work, process lifecycle, security), a design call the handoff leaves open, or a round that has already failed review twice — escalate those to `builder`.
+description: Sonnet, medium effort — the default implementer. Use proactively for any change whose design the handoff has already settled — a feature slice, a refactor, new tests, a round of review findings — where the judgement left is local. Cheaper than `builder`, and allowed small calls a `mechanic` must stop on. Not for safety-critical code (anything that sets aside or restores work, process lifecycle, security), classification subtleties, or a job that has failed its gates twice — escalate those to `builder`. A design question the handoff left open goes back to the orchestrator, not up a rung.
 model: sonnet
 effort: medium
 tools: "*"
