@@ -390,6 +390,7 @@ class Context:
         self.versions = set()
         self.start = None     # fixed-start composition dict, filled from attachments before first turn
         self.hand_back_nudge_turn = None   # len(turns) when the budget hook first asked it to hand back
+        self.first_edit_turn = None        # index into turns of the first turn that called an edit tool
         self.handback_report = None        # the last SubagentHandback call's message, if it made one
         self.prompted_after_handback = False   # a prompt arrived after a SubagentHandback call
 
@@ -397,6 +398,8 @@ class Context:
 # The budget hook's hand-back words (the 150k tier, or the 200k one for a context that jumped past it),
 # as a hook attachment records them. Matched on attachment entries only: a file read that quotes the
 # hook is a tool result, not the hook speaking.
+EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
+
 HAND_BACK_NUDGE = re.compile(r"Context budget: this agent's context is now \d+k tokens"
                              r".*?(?:Finish only the item in hand|Stop here, even mid-item)")
 
@@ -523,6 +526,8 @@ def load_context(kind, path, project_dir, session_id, agent_id):
                             ctx.turns[-1]["n_tools"] += 1
                             ctx.turns[-1]["cats"].append(turn_shape_category(cat, b.get("input") or {}))
                             ctx.turns[-1]["tools"][b.get("name") or "?"] += 1
+                            if ctx.first_edit_turn is None and b.get("name") in EDIT_TOOLS:
+                                ctx.first_edit_turn = len(ctx.turns) - 1
                     ctx.events.append((len(ctx.turns), "assistant: tool-call inputs (edits, commands)", len(json.dumps(b.get("input")))))
                 elif b.get("type") == "text":
                     ctx.events.append((len(ctx.turns), "assistant: text", len(b.get("text", ""))))
@@ -1200,6 +1205,7 @@ def section_fixed_start(out, loaded):
 BASELINE_TOP_DECILE_SHARE = 45.0    # % of subagent spend in the longest-running 10% of subagents
 BASELINE_SINGLE_CALL_SHARE = 70.0   # % of subagent turns that made a single tool call
 BASELINE_COLD_SHARE = 7.5           # % of subagent spend on cold turns
+MAKER_TYPES = ("builder", "builder-lite", "mechanic")   # the agent types that edit, as folded_type names them
 
 MODEL_FAMILIES = ("haiku", "sonnet", "opus", "fable")  # lowest first, as the model-ceiling hook ranks them
 
@@ -1300,6 +1306,20 @@ def section_rule_scorecard(out, loaded):
     line("one job per agent, budget tiers", "top 10% of subagents' share of subagent spend",
          (f"{share:.1f}%" if decile else "n/a (under 10 subagents)") + f" ({tiers})",
          f"{BASELINE_TOP_DECILE_SHARE:.0f}%", judgement(share, BASELINE_TOP_DECILE_SHARE))
+
+    # handoffs carry the code: what makers spend finding it before their first edit. "Before" is counted
+    # against the whole context, and only its turns in this window are summed.
+    makers = [l for l in subs if folded_type(l) in MAKER_TYPES]
+    edited = [l for l in makers if l.ctx.first_edit_turn is not None]
+    edited_ie = sum(t["ie"] for l in edited for t in l.window_turns)
+    before_ie = 0
+    for l in edited:
+        in_window = {id(t) for t in l.window_turns}
+        before_ie += sum(t["ie"] for t in l.ctx.turns[:l.ctx.first_edit_turn] if id(t) in in_window)
+    before = f"{100 * before_ie / edited_ie:.1f}%" if edited_ie else "n/a"
+    line("handoffs carry the code", "maker spend before the first edit",
+         f"{before} ({len(edited)} makers, {len(makers) - len(edited)} never edited)" if makers else "n/a", None,
+         "no baseline" if edited_ie else "n/a")
 
     # a fresh agent per round
     handed = [l for l in subs if l.ctx.handback_report is not None]

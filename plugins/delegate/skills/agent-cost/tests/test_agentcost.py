@@ -1799,7 +1799,8 @@ SECTIONS_BEFORE_SCORECARD = {
 def scorecard_lines(report):
     """The scorecard's rule lines, keyed by the rule's words."""
     body = section_body(report, "Rule scorecard")
-    rules = ("one job per agent, budget tiers", "a fresh agent per round", "calls requested together",
+    rules = ("one job per agent, budget tiers", "handoffs carry the code", "a fresh agent per round",
+             "calls requested together",
              "the slow check goes to a runner", "the model ceiling", "the reviewer pays")
     found = {}
     for raw in body.splitlines():
@@ -1821,12 +1822,15 @@ class RuleScorecardTests(unittest.TestCase):
     def test_each_rule_on_the_fixture(self):
         _, loaded = rule_tree(self)
         lines = scorecard_lines(ac.build_report(loaded, 12, sections=["rule-scorecard"]))
-        self.assertEqual(len(lines), 6, lines)
+        self.assertEqual(len(lines), 7, lines)
         # 13 subagents: the builder's 486k of 633k is the top 10%; it peaked at 205k and took 4 turns
         # after its nudge; the reviewer's quoted hook text in a tool result is no nudge
         self.assertEqual(lines["one job per agent, budget tiers"],
                          "top 10% of subagents' share of subagent spend: 76.8% (past 150k 1, past 200k 1, "
                          "median 4 turns after the hand-back nudge, 1 nudged); baseline 45%: not holding")
+        # the builder and the ten mechanics made no edit, so there is no share to give
+        self.assertEqual(lines["handoffs carry the code"],
+                         "maker spend before the first edit: n/a (0 makers, 11 never edited); n/a")
         # the builder was prompted again after handing back; the reviewer's hook feedback is no prompt
         self.assertEqual(lines["a fresh agent per round"],
                          "subagents prompted again after their hand-back: 1 of 3 that handed back; no baseline")
@@ -1959,7 +1963,70 @@ class RuleScorecardTests(unittest.TestCase):
                      "--until", ts_str(BASE + timedelta(hours=1)), "--sections", "rule-scorecard"])
         output = buf.getvalue()
         self.assertEqual([l for l in output.splitlines() if l.startswith("=== ")], ["=== Rule scorecard ==="])
-        self.assertEqual(len(scorecard_lines(output)), 6)
+        self.assertEqual(len(scorecard_lines(output)), 7)
+
+
+def edit_tree(case):
+    """A builder that reads and greps (1k, 2k) then edits (3k) and runs a check (4k); a mechanic that
+    never edits; and a reviewer whose only turn before an edit is its first. Each turn is Sonnet uncached
+    input, so its input-eq is its input tokens."""
+    fx = FixtureRoot(case)
+    at = lambda s: ts_str(BASE + timedelta(seconds=s))
+    fx.subagent(agent="b1", agent_type="delegate:builder", entries=[
+        assistant("s1", at(0), usage(input_tokens=1000), [tool_use_block("u1", "Read", {"file_path": "/a"})]),
+        user_tool_result(at(1), "u1", "text"),
+        assistant("s2", at(10), usage(input_tokens=2000), [tool_use_block("u2", "Grep", {"pattern": "x"})]),
+        user_tool_result(at(11), "u2", "hit"),
+        assistant("s3", at(20), usage(input_tokens=3000), [tool_use_block("u3", "Edit", {"file_path": "/a"})]),
+        user_tool_result(at(21), "u3", "ok"),
+        assistant("s4", at(30), usage(input_tokens=4000), [tool_use_block("u4", "Bash", {"command": "make test"})]),
+        user_tool_result(at(31), "u4", "ok"),
+    ])
+    fx.subagent(agent="m1", agent_type="mechanic", entries=[
+        assistant("s1", at(5), usage(input_tokens=5000), [tool_use_block("v1", "Grep", {"pattern": "y"})]),
+        user_tool_result(at(6), "v1", "hit"),
+    ])
+    fx.subagent(agent="r1", agent_type="delegate:reviewer", entries=[
+        assistant("s1", at(5), usage(input_tokens=9000), [tool_use_block("w1", "Read", {"file_path": "/a"})]),
+        user_tool_result(at(6), "w1", "text"),
+        assistant("s2", at(15), usage(input_tokens=1000), [tool_use_block("w2", "Write", {"file_path": "/b"})]),
+        user_tool_result(at(16), "w2", "ok"),
+    ])
+    return fx
+
+
+class MakerSpendBeforeFirstEditTests(unittest.TestCase):
+    """The scorecard's "handoffs carry the code" line: the share of an editing maker's in-window spend
+    that fell before its first edit, with the makers that never edited counted beside it."""
+
+    def _line(self, since):
+        fx = edit_tree(self)
+        loaded = ac.load_all(fx.root, None, since, BASE + timedelta(hours=1))
+        return scorecard_lines(ac.build_report(loaded, 12, sections=["rule-scorecard"]))["handoffs carry the code"]
+
+    def test_load_context_keeps_the_index_of_the_first_turn_that_edits(self):
+        fx = edit_tree(self)
+        by_agent = {l.ctx.agent_id: l.ctx for l in ac.load_all(fx.root, None, BASE - timedelta(hours=1),
+                                                               BASE + timedelta(hours=1))}
+        self.assertEqual(by_agent["b1"].first_edit_turn, 2)
+        self.assertEqual(by_agent["r1"].first_edit_turn, 1)   # Write counts as an edit
+        self.assertIsNone(by_agent["m1"].first_edit_turn)
+
+    def test_the_share_before_the_first_edit_counting_a_maker_that_never_edited_apart(self):
+        # the builder's 1k + 2k of 10k; the mechanic is in the never-edited count, not the share; the
+        # reviewer's 9k before its Write is not a maker's
+        self.assertEqual(self._line(BASE - timedelta(hours=1)),
+                         "maker spend before the first edit: 30.0% (1 makers, 1 never edited); no baseline")
+
+    def test_a_window_that_starts_after_the_first_edit_has_nothing_before_it(self):
+        # only the builder's 4k check is in the window; its first edit is still turn 2 of the context
+        self.assertEqual(self._line(BASE + timedelta(seconds=25)),
+                         "maker spend before the first edit: 0.0% (1 makers, 0 never edited); no baseline")
+
+    def test_no_makers_reads_n_a(self):
+        loaded = [typed_loaded("subagent", "reviewer", [1000], "r")]
+        lines = scorecard_lines(ac.build_report(loaded, 12, sections=["rule-scorecard"]))
+        self.assertEqual(lines["handoffs carry the code"], "maker spend before the first edit: n/a; n/a")
 
 
 if __name__ == "__main__":

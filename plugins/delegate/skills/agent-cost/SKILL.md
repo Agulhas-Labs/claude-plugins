@@ -114,7 +114,9 @@ spend is all in their own sessions.
   subagent: the difference is that a subagent pays it again for every agent started.
 - **Rule scorecard** — one line per rule the `delegate` plugin states, with the metric that measures it in
   the window, the measured baseline where there is one (a target for the model ceiling), and `holds` or
-  `not holding`.
+  `not holding`. Its `handoffs carry the code` line is the share of builder and mechanic spend before
+  their first edit: a high share means handoffs aren't carrying the code the job touches, so quote it in
+  the handoff, or send a scout first.
 - **Largest contexts** — the worst individual offenders, for a closer look with `--transcript`.
 
 ## Caveats (the report states these too)
