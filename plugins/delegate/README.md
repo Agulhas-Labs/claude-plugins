@@ -83,7 +83,7 @@ held 74% of it, so the first cold wait predicts the next.
 
 A third single read-only call in a row also gets one "Batch your reads" line, once per run, because the
 rule to request independent calls together has not held: across four projects on one machine, five days,
-85.7% of subagent turns made exactly one tool call (the target is 70%), and a read-only call straight
+85.7% of subagent turns made exactly one tool call (the baseline is 70%), and a read-only call straight
 after another one was 29.1% of subagent turns and 24.8% of subagent spend.
 
 The plugin once also held a subagent's stop while a command it had backgrounded still ran. Measured on
