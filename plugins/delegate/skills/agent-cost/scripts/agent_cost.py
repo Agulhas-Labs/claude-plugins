@@ -394,6 +394,8 @@ class Context:
         self.agent_type = agent_type_of(path, kind)
         self.worktree_branch = meta_of(path, kind).get("worktreeBranch") or None
         self.first_prompt = ""   # the text of the first prompt the context was given
+        self.handoff = ""        # a subagent's first prompt plus the text of the files it names
+        self.handoff_missing = 0   # how many of those named files were not on disk
         self.turns = []       # list of dict(ts, ctx, usage, model, n_tools, tools, cats)
         self.events = []      # list of (turn_index, category, chars) turn_index = len(turns) at event time
         self.versions = set()
@@ -408,6 +410,70 @@ class Context:
 # as a hook attachment records them. Matched on attachment entries only: a file read that quotes the
 # hook is a tool result, not the hook speaking.
 EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
+
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?(?:\n\s*\2(?=\s|$)|\Z)", re.S)
+QUOTED_TARGET = re.compile(r"(>>?\s*)([\"'])([^\"'\s]*)\2")
+QUOTED = re.compile(r"\"[^\"]*\"|'[^']*'")
+REDIRECT = re.compile(r"(?<![\d&<>])>>?\s*([^\s|;&<>()]+)")
+SED_PERL_INPLACE = re.compile(r"(?:^|[\s;&|(])(?:sed|perl)\s(?:[^\n;&|]*\s)?(?:-[A-Za-z]*i|--in-place)")
+GIT_APPLY = re.compile(r"\bgit\s+(?:-C\s+\S+\s+)?apply\b")
+GIT_APPLY_READONLY = re.compile(r"--(?:check|stat|numstat|summary)\b")
+PATCH_CMD = re.compile(r"(?:^|[;&|(])\s*patch\b")
+TEE_CMD = re.compile(r"(?:^|[;&|(])\s*tee\s+(?:-[a-z]+\s+)*([^\s|;&<>()-][^\s|;&<>()]*)")
+PYTHON_RUN = re.compile(r"(?:^|[\s;&|(])python[\d.]*\b")
+PYTHON_WRITE = re.compile(r"\bopen\s*\(.*?,\s*(?:mode\s*=\s*)?['\"][rwaxbt+U]*[wax][rwaxbt+U]*['\"]"
+                          r"|\.open\(\s*(?:mode\s*=\s*)?['\"][rwaxbt+U]*[wax][rwaxbt+U]*['\"]"
+                          r"|\.write_(?:text|bytes)\(")
+SCRATCH_PREFIXES = ("/dev/", "/tmp/", "/private/tmp/", "/var/folders/", "$TMPDIR", "${TMPDIR}")
+
+
+def writes_to_file(target):
+    """Whether a redirect or tee target is a real file rather than the null device or scratch space."""
+    return bool(target) and not target.startswith(SCRATCH_PREFIXES)
+
+
+def edits_files(command):
+    """Whether a Bash command edits a file: an in-place sed or perl, git apply that is not a dry run, patch,
+    tee or a redirect into a file outside scratch space, or a Python run that opens a file for writing or
+    calls write_text/write_bytes. Meant to be read as 'the maker started editing', not as a safety check."""
+    command = command or ""
+    if SED_PERL_INPLACE.search(command) or PATCH_CMD.search(command):
+        return True
+    if GIT_APPLY.search(command) and not GIT_APPLY_READONLY.search(command):
+        return True
+    if PYTHON_RUN.search(command) and PYTHON_WRITE.search(command):
+        return True
+    bare = HEREDOC.sub("", command)
+    if any(writes_to_file(t) for t in TEE_CMD.findall(bare)):
+        return True
+    bare = QUOTED.sub("Q", QUOTED_TARGET.sub(r"\1\3", bare))
+    return any(writes_to_file(t) for t in REDIRECT.findall(bare))
+
+
+HANDOFF_FILE = re.compile(r"(?<![\w.~/-])(?:~/|/)[\w./~+@-]*\.(?:md|txt)(?![\w/])")
+HANDOFF_FILE_LIMIT = 256 * 1024
+HANDOFF_FILES_PER_PROMPT = 5
+
+
+def read_handoff(prompt):
+    """(the prompt followed by the text of each file it names, how many named files were not on disk).
+    A named file is an absolute or ~/ path ending .md or .txt, at most five per prompt, read at most 256 KB
+    and only if it exists when the report runs."""
+    texts, missing, seen = [prompt or ""], 0, []
+    for token in HANDOFF_FILE.findall(prompt or ""):
+        if token not in seen:
+            seen.append(token)
+    for token in seen[:HANDOFF_FILES_PER_PROMPT]:
+        path = os.path.expanduser(token)
+        try:
+            if not os.path.isfile(path):
+                missing += 1
+            elif os.path.getsize(path) <= HANDOFF_FILE_LIMIT:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    texts.append(f.read())
+        except OSError:
+            missing += 1
+    return "\n".join(texts), missing
 
 HAND_BACK_NUDGE = re.compile(r"Context budget: this agent's context is now \d+k tokens"
                              r".*?(?:Finish only the item in hand|Stop here, even mid-item)")
@@ -536,7 +602,9 @@ def load_context(kind, path, project_dir, session_id, agent_id):
                             ctx.turns[-1]["n_tools"] += 1
                             ctx.turns[-1]["cats"].append(turn_shape_category(cat, b.get("input") or {}))
                             ctx.turns[-1]["tools"][b.get("name") or "?"] += 1
-                            if ctx.first_edit_turn is None and b.get("name") in EDIT_TOOLS:
+                            if ctx.first_edit_turn is None and (
+                                    b.get("name") in EDIT_TOOLS
+                                    or (b.get("name") == "Bash" and edits_files((b.get("input") or {}).get("command")))):
                                 ctx.first_edit_turn = len(ctx.turns) - 1
                     ctx.events.append((len(ctx.turns), "assistant: tool-call inputs (edits, commands)", len(json.dumps(b.get("input")))))
                 elif b.get("type") == "text":
@@ -555,6 +623,8 @@ def load_context(kind, path, project_dir, session_id, agent_id):
             elif isinstance(c, str) and first_turn_seen:
                 ctx.events.append((len(ctx.turns), "user/system text (prompt, reminders)", len(c)))
 
+    if kind == "subagent":
+        ctx.handoff, ctx.handoff_missing = read_handoff(ctx.first_prompt)
     return ctx
 
 
@@ -1331,8 +1401,8 @@ def rung_links(loaded):
     links = []
     for group in sessions.values():
         group.sort(key=lambda l: l.ctx.turns[0]["ts"])
-        branches = {id(l): branches_named(l.ctx.first_prompt, l.ctx.worktree_branch) for l in group}
-        handoff = {id(l): branches_named(l.ctx.first_prompt) for l in group}
+        branches = {id(l): branches_named(l.ctx.handoff, l.ctx.worktree_branch) for l in group}
+        handoff = {id(l): branches_named(l.ctx.handoff) for l in group}
         named_by = collections.Counter(t for l in group if folded_type(l) in MAKER_TYPES for t in handoff[id(l)])
         seen = set()
         for i, l in enumerate(group):
@@ -1378,6 +1448,9 @@ def section_review_by_rung(out, loaded):
     out.append("")
 
 
+GATE_LINE = re.compile(r"\bG\d+\b[^\n]*CHECK:")
+
+
 def section_rule_scorecard(out, loaded):
     """One line per rule the plugin states: the metric that measures it in this window, the measured
     baseline where there is one, and whether the rule holds. Run over two windows it is the before and
@@ -1420,6 +1493,13 @@ def section_rule_scorecard(out, loaded):
     line("handoffs carry the code", "maker spend before the first edit",
          f"{before} ({len(edited)} of {len(makers)} makers edited)" if makers else "n/a", None,
          "no baseline" if edited_ie else "n/a")
+
+    # handoffs carry gates
+    gated = [l for l in makers if GATE_LINE.search(l.ctx.handoff)]
+    gone = sum(l.ctx.handoff_missing > 0 for l in makers)
+    line("maker handoffs carry gates", "maker handoffs with a gate line",
+         (f"{len(gated)} of {len(makers)}" + (f" ({gone} named a file no longer on disk)" if gone else ""))
+         if makers else "n/a", None, "no baseline" if makers else "n/a")
 
     # a fresh agent per round
     handed = [l for l in subs if l.ctx.handback_report is not None]
