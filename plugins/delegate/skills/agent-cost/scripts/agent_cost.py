@@ -215,10 +215,12 @@ def input_equivalent(usage, model=None):
 # List input price in dollars per million tokens, by model family, in the order tried: the first key the
 # reduced model id contains wins, so `opus55` is tried before `opus`. Output is OUTPUT_MULTIPLIER times
 # input for every model here. Copied from INPUT_PRICES and OUTPUT_MULTIPLIER in the cache-guard plugin's
-# hooks/cache_guard.py; keep in step with it. A model this table cannot place has no price.
+# hooks/cache_guard.py; keep in step with it. A model this table cannot place has no price. Opus 4 and
+# 4.1 list at three times the later generations, so every 4.x after them needs a key ahead of `opus4`.
 INPUT_PRICES = (
     ("fable51", 10.00), ("fable", 10.00),
-    ("opus55", 4.00), ("opus", 5.00),
+    ("opus55", 4.00), ("opus47", 5.00), ("opus46", 5.00), ("opus45", 5.00),
+    ("opus41", 15.00), ("opus4", 15.00), ("opus", 5.00),
     ("sonnet5", 2.00), ("sonnet4", 3.00),
     ("haiku55", 0.10),  # the list price up to 100k tokens of prompt; past that it is $0.50
     ("haiku", 1.00),

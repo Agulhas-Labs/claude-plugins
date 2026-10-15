@@ -19,7 +19,7 @@ LARGE = 310_000
 SMALL = 40_000
 
 
-def assistant(when, size, split=None, sidechain=False, model="claude-opus-4"):
+def assistant(when, size, split=None, sidechain=False, model="claude-opus-4-5"):
     usage = {
         "input_tokens": 12,
         "cache_read_input_tokens": size - 12,
@@ -312,7 +312,7 @@ class EnvironmentTests(GuardTestCase):
 class SettingsChangeTests(GuardTestCase):
     """A model or effort change since the last turn rewrites the cache even while it is warm."""
 
-    def warm_turn(self, model="claude-opus-4", size=LARGE, split=None):
+    def warm_turn(self, model="claude-opus-4-5", size=LARGE, split=None):
         return assistant(NOW - timedelta(minutes=20), size, split or split_1h(), model=model)
 
     def test_a_model_change_since_the_last_turn_is_held_back_with_its_cost(self):
@@ -424,7 +424,7 @@ class CostTests(GuardTestCase):
 
     def test_a_five_minute_opus_cache_is_priced_at_the_smaller_write_multiplier(self):
         # 310,000 tokens: $6.25/MTok to write a 5m cache, $0.50/MTok to read it.
-        reason = self.cold("claude-opus-4", split=split_5m(), hours=1)
+        reason = self.cold("claude-opus-4-5", split=split_5m(), hours=1)
         self.assertIn("$1.94", reason)
         self.assertIn("$0.16", reason)
         self.assertIn("12.5x", reason)
@@ -445,19 +445,30 @@ class CostTests(GuardTestCase):
         self.assertAlmostEqual(write, 0.10 * cache_guard.WRITE_MULTIPLIER_5M)
         self.assertAlmostEqual(read, 0.01)
 
+    def test_opus_four_and_four_one_are_priced_at_three_times_the_later_generations(self):
+        for model, family, price in (("claude-opus-4-20250514", "opus4", 15.00), ("Opus 4.1", "opus41", 15.00),
+                                     ("claude-opus-4-1-20250805", "opus41", 15.00),
+                                     ("claude-opus-4-5-20251101", "opus45", 5.00), ("claude-opus-4-6", "opus46", 5.00),
+                                     ("Opus 4.7", "opus47", 5.00), ("claude-opus-5", "opus", 5.00)):
+            with self.subTest(model=model):
+                self.assertEqual(cache_guard.family_of(model), family)
+                write, read = cache_guard.prices(model, 300, {})
+                self.assertAlmostEqual(write, price * cache_guard.WRITE_MULTIPLIER_5M)
+                self.assertAlmostEqual(read, price * cache_guard.CACHE_READ_FRACTION)
+
     def test_a_model_with_no_published_price_is_warned_about_without_dollars(self):
         reason = self.cold("some-other-assistant-v2")
         self.assertNotIn("$", reason)
         self.assertIn("20x", reason)
 
     def test_the_cost_can_be_switched_off_and_the_multiplier_stays(self):
-        reason = self.cold("claude-opus-4", env={"CACHE_GUARD_SHOW_COST": "0"})
+        reason = self.cold("claude-opus-4-5", env={"CACHE_GUARD_SHOW_COST": "0"})
         self.assertNotIn("$", reason)
         self.assertIn("20x", reason)
 
     def test_the_input_price_can_be_overridden_when_list_prices_change(self):
         # 310,000 tokens at $3.00/MTok input: $6.00/MTok to write a 1h cache, $0.30/MTok to read it.
-        reason = self.cold("claude-opus-4", env={"CACHE_GUARD_INPUT_PRICE": "3"})
+        reason = self.cold("claude-opus-4-5", env={"CACHE_GUARD_INPUT_PRICE": "3"})
         self.assertIn("$1.86", reason)
         self.assertIn("$0.09", reason)
 
@@ -466,24 +477,24 @@ class CostTests(GuardTestCase):
             with self.subTest(value=bad):
                 # A fresh session each time: a warning already given is a confirmation, not a warning.
                 reason = self.cold(
-                    "claude-opus-4", env={"CACHE_GUARD_INPUT_PRICE": bad}, session=f"bad-{index}"
+                    "claude-opus-4-5", env={"CACHE_GUARD_INPUT_PRICE": bad}, session=f"bad-{index}"
                 )
                 self.assertIn("$3.10", reason)
 
     def test_the_cold_warning_says_what_compact_actually_does(self):
-        reason = self.cold("claude-opus-4")
+        reason = self.cold("claude-opus-4-5")
         self.assertIn("/compact pays for this cold context once", reason)
         self.assertNotIn("does not help", reason)
 
     def test_the_cold_warning_offers_the_handoff_that_costs_nothing_first(self):
-        reason = self.cold("claude-opus-4")
+        reason = self.cold("claude-opus-4-5")
         self.assertIn("send the single word `handoff`", reason)
         self.assertIn("without using this session's model", reason)
         self.assertLess(reason.index("handoff"), reason.index("/compact"))
 
     def test_the_way_out_comes_before_the_arithmetic(self):
         """The first sentence a reader stops at has to name what to type."""
-        reason = self.cold("claude-opus-4")
+        reason = self.cold("claude-opus-4-5")
         self.assertLess(reason.index("single word `handoff`"), reason.index("idle"))
         self.assertLess(reason.index("single word `handoff`"), reason.index("tokens"))
 
