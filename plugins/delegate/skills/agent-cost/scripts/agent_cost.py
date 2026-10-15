@@ -1388,6 +1388,10 @@ def section_fixed_start(out, loaded):
 BASELINE_TOP_DECILE_SHARE = 45.0    # % of subagent spend in the longest-running 10% of subagents
 BASELINE_COLD_SHARE = 7.5           # % of subagent spend on cold turns
 MAKER_TYPES = ("builder", "builder-lite", "mechanic")   # the agent types that edit, as folded_type names them
+# The maker run-up before the scout existed, measured on one machine over 14 days: the median list dollars of
+# the turns before a maker's first edit, per rung, and the text the scorecard prints for it.
+BASELINE_RUNUP = {"builder": 0.47, "builder-lite": 0.12}
+BASELINE_RUNUP_TEXT = "builder $0.47 over 13 turns, builder-lite $0.12 over 5"
 
 MODEL_FAMILIES = ("haiku", "sonnet", "opus", "fable")  # lowest first, as the model-ceiling hook ranks them
 
@@ -1560,6 +1564,26 @@ def section_review_by_rung(out, loaded):
 
 
 GATE_LINE = re.compile(r"\bG\d+\b[^\n]*CHECK:")
+# Copied from hooks/handoff-gates.py; it must match that file's CLASS_LINE.
+CLASS_LINE = re.compile(r"(?im)^[^\w\n]*Rung:[^\w\n]*builder(?![\w-])[^\w\n]*"
+                        r"(?:sets? aside|restores? work|process lifecycle|security|classification|builder-lite failed)")
+
+
+def briefed_makers(subs):
+    """The makers whose first prompt names a .md/.txt path that an earlier scout's first prompt in the same
+    session also names: the brief the scout wrote for them."""
+    scouts = [l for l in subs if folded_type(l) == "scout" and l.ctx.turns]
+    briefed = []
+    for l in subs:
+        if folded_type(l) not in MAKER_TYPES or not l.ctx.turns:
+            continue
+        mine = {os.path.expanduser(p) for p in HANDOFF_FILE.findall(l.ctx.first_prompt or "")}
+        if mine and any(s.ctx.turns[0]["ts"] < l.ctx.turns[0]["ts"]
+                        and (s.ctx.project_dir, s.ctx.session_id) == (l.ctx.project_dir, l.ctx.session_id)
+                        and mine & {os.path.expanduser(p) for p in HANDOFF_FILE.findall(s.ctx.first_prompt or "")}
+                        for s in scouts):
+            briefed.append(l)
+    return briefed
 
 
 def section_rule_scorecard(out, loaded):
@@ -1605,12 +1629,46 @@ def section_rule_scorecard(out, loaded):
          f"{before} ({len(edited)} of {len(makers)} makers edited)" if makers else "n/a", None,
          "no baseline" if edited_ie else "n/a")
 
+    # a scout before the makers: the run-up of a maker given a scout's brief against one without
+    briefed = {id(l) for l in briefed_makers(subs)}
+    parts, verdicts = [], []
+    for rung in ("builder", "builder-lite"):
+        cells = []
+        for name, group in (("briefed", [l for l in edited if id(l) in briefed and folded_type(l) == rung]),
+                            ("not briefed", [l for l in edited if id(l) not in briefed and folded_type(l) == rung])):
+            runs = [(sum_dollars(l.ctx.turns[:l.ctx.first_edit_turn]), l.ctx.first_edit_turn) for l in group]
+            runs = [(usd, n) for usd, n in runs if usd is not None]
+            if runs:
+                usd = median(u for u, _ in runs)
+                cells.append(f"{name} ${usd:.2f} over {median(n for _, n in runs):.0f} turns ({len(runs)})")
+                if name == "briefed":
+                    verdicts.append(usd <= BASELINE_RUNUP[rung])
+        if cells:
+            parts.append(f"{rung} " + ", ".join(cells))
+    scouts = [l for l in subs if folded_type(l) == "scout"]
+    scout_usd = [u for u in (sum_dollars(l.ctx.turns) for l in scouts) if u is not None]
+    parts.append(f"{len(scouts)} scouts" + (f", median ${median(scout_usd):.2f} per context" if scout_usd else ""))
+    line("a scout before the makers", "maker run-up to the first edit, median", "; ".join(parts),
+         BASELINE_RUNUP_TEXT, "n/a" if not verdicts else "holds" if all(verdicts) else "not holding")
+
     # handoffs carry gates
     gated = [l for l in makers if GATE_LINE.search(l.ctx.handoff)]
     gone = sum(l.ctx.handoff_missing > 0 for l in makers)
     line("maker handoffs carry gates", "maker handoffs with a gate line",
          (f"{len(gated)} of {len(makers)}" + (f" ({gone} named a file no longer on disk)" if gone else ""))
          if makers else "n/a", None, "no baseline" if makers else "n/a")
+
+    # builder handoffs name their class
+    builders = [l for l in subs if folded_type(l) == "builder"]
+    classed = [l for l in builders if CLASS_LINE.search(l.ctx.handoff)]
+    spend = {id(l): sum_dollars(l.window_turns) or 0 for l in builders}
+    total = sum(spend.values())
+    bare = sum(spend[id(l)] for l in builders if l not in classed)
+    held = (f" (the {len(builders) - len(classed)} without held {100 * bare / total:.0f}% of builder spend)"
+            if total and len(classed) < len(builders) else "")
+    line("builder handoffs name their class", "builder handoffs with a class line",
+         f"{len(classed)} of {len(builders)}{held}" if builders else "n/a", None,
+         "no baseline" if builders else "n/a")
 
     # a fresh agent per round
     handed = [l for l in subs if l.ctx.handback_report is not None]

@@ -127,7 +127,13 @@ spend is all in their own sessions.
   and `.build/`, and a Python run that writes a file. The `maker handoffs carry gates` line is the share
   of maker handoffs with a gate line, and how many named a handoff file no longer on disk. Handoff files a
   prompt names (absolute or `~/` `.md`/`.txt`, up to five, 256 KB each) are read when the report runs, for
-  the gate line and for Review by rung's branch links. `calls requested together` has no baseline verdict,
+  the gate line, the class line and for Review by rung's branch links. The `builder handoffs name their class`
+  line counts `builder` handoffs with a `Rung: builder — <class>` line and the share of builder spend held by
+  those without one; a low count means builders are chosen without saying why. The `a scout before the makers`
+  line sets the median spend and turns before the first edit of makers briefed by an earlier scout in the
+  session (a `.md`/`.txt` path both first prompts name) against those not briefed, with the scout count and
+  median spend; it holds when a briefed run-up is at or below the baseline measured before the scout existed,
+  and an unbriefed run-up well above a briefed one means a scout pays. `calls requested together` has no baseline verdict,
   since its 70% baseline was measured on earlier models. `the model ceiling` leaves out subagents whose
   call named its own model, which the hook leaves alone, and says how many.
 - **Review by rung** — per maker type (`builder`, `builder-lite`) and round (first, or later
