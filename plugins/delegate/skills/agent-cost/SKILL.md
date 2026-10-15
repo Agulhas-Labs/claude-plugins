@@ -57,12 +57,18 @@ hold: someone who has never started a subagent gets no subagent rows. Read the r
 holds the spend first, and give advice for that kind. Delegation advice means nothing to a person whose
 spend is all in their own sessions.
 
-- **Totals** (`/ by model`) — the top-line number, main and subagent each on its own row.
+- **Totals** (`/ by model`) — the top-line number, main and subagent each on its own row, with input-eq and
+  `list $` (see Spend by agent type).
 - **Spend by agent type** — one row per agent type (plugin prefix dropped, so a renamed plugin's types
   line up) and `main`: contexts, median turns and peak context, input-eq, its share and the average per
-  context (`avg/ctx`), output, and how many contexts peaked at 150k or 200k and over. **Action**: a rung
-  whose average cost per context (`avg/ctx`) is close to the rung above it is not a cheaper rung; a rung
-  with a handful of uses is one the orchestrator does not reach for.
+  context (`avg/ctx`), `list $` and `$/ctx`, output, and how many contexts peaked at 150k or 200k and over.
+  `list $` is input-eq priced at each model's list input price, plus output at five times it, from the
+  same price table as `cache-guard`: `-` for a model the table cannot place, Haiku 5.5 at its rate up to
+  100k tokens. It is a list-rate comparison, not a bill. Rows sort by `list $`. **Action**: compare rungs
+  on `$/ctx`; input-eq does not price one model against another, so an input-eq per context close to the
+  rung above says nothing about which is cheaper across models (measured over ten days on one machine:
+  `builder` $1.77 per context, `builder-lite` $0.60). A rung with a handful of uses is one the
+  orchestrator does not reach for.
   A subagent typed `main` or `total` gets its own `subagent:` row.
 - **Per day** — trend, with each day's main and subagent spend. A rising top-10% share or rising median
   turns over days means contexts are running longer, not that more work is happening. A day with under
@@ -114,16 +120,23 @@ spend is all in their own sessions.
   subagent: the difference is that a subagent pays it again for every agent started.
 - **Rule scorecard** — one line per rule the `delegate` plugin states, with the metric that measures it in
   the window, the measured baseline where there is one (a target for the model ceiling), and `holds` or
-  `not holding`. Its `handoffs carry the code` line is the share of builder and mechanic spend before
+  `not holding`. Its `handoffs carry the code` line is the share of builder spend before
   their first edit: a high share means handoffs aren't carrying the code the job touches, so quote it in
-  the handoff, or send a scout first. An edit made through Bash (`sed -i`, a heredoc) is not counted, so
-  such a maker reads as never edited.
-- **Review by rung** — per maker type (`builder`, `builder-lite`, `mechanic`) and round (first, or later
+  the handoff, or send a scout first. An edit made through Bash counts: in-place `sed` or `perl`, a
+  `git apply` that isn't a dry run, `patch`, `tee` or a redirect into a file outside scratch space, logs
+  and `.build/`, and a Python run that writes a file. The `maker handoffs carry gates` line is the share
+  of maker handoffs with a gate line, and how many named a handoff file no longer on disk. Handoff files a
+  prompt names (absolute or `~/` `.md`/`.txt`, up to five, 256 KB each) are read when the report runs, for
+  the gate line and for Review by rung's branch links. `calls requested together` has no baseline verdict,
+  since its 70% baseline was measured on earlier models. `the model ceiling` leaves out subagents whose
+  call named its own model, which the hook leaves alone, and says how many.
+- **Review by rung** — per maker type (`builder`, `builder-lite`) and round (first, or later
   when an earlier maker in the session shares a branch), how many makers a later reviewer in the same
   session passed, passed with lows or after fixes, or failed, the fail share of the classified reviews, and
   the mean input-eq per maker. The link is a heuristic: a branch name both handoffs state (backticked, a
   `feat/`-style word, or the worktree's own branch); a maker no reviewer names, or whose reviewer falls
-  outside the window, counts as unlinked. **Action**: if the cheaper rung's fail share is no higher than
+  outside the window, counts as unlinked. A reviewer that gave one verdict line per branch
+  (`Verdict (fix/name): …`) gives each maker the line naming its branch. **Action**: if the cheaper rung's fail share is no higher than
   the dearer one's in the same round, route more of that work to it; compare first rounds with first
   rounds, since the cheaper rung is mostly used for fix rounds.
 - **Largest contexts** — the worst individual offenders, for a closer look with `--transcript`.
@@ -134,6 +147,7 @@ spend is all in their own sessions.
   Claude Fable 5.1, whose published cache-read price is a fortieth of its input price;
   cache write 5-minute x1.25, cache write 1-hour x2, uncached x1) — it is **a price comparison, not a
   token count**. Output tokens are reported separately and never folded into it.
+- `list $` is a list-rate comparison, not a bill.
 - Figures marked `≈` are `chars/4` estimates, not exact token counts.
 - The transcript format is undocumented and has changed before; the report prints every harness
   `version` it read so a surprising number can be checked against the version that produced it.
