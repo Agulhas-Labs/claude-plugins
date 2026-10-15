@@ -406,6 +406,29 @@ class ReviewerTests(Fixture):
             with self.subTest(command=command):
                 self.assertFalse(self.refused(command))
 
+    def test_after_a_cd_that_may_fail_a_broken_chain_is_judged_from_the_directory_before_it_too(self):
+        s, typo = self.scratch, "/nonexistent-typo"
+        branch = git(self.checkout, "rev-parse", "--abbrev-ref", "HEAD")
+        for command in (f"git worktree add {s}/rv {branch}; cd {s}/rv; git checkout -b probe",
+                        f"git worktree add {s}/rv {branch}\ncd {s}/rv\ngit checkout -b probe",
+                        f"cd {typo}; git checkout main", f"cd {typo} || true; git reset --hard",
+                        f"cd {typo} & git checkout main", f"(cd {typo}; git checkout main)",
+                        f"cd {typo} && ls; git stash", f"cd {typo} && (ls); git checkout main",
+                        f"pushd {typo}; git checkout main", f"cd {typo} &&\nls\ngit checkout main"):
+            with self.subTest(command=command):
+                self.assertTrue(self.refused(command))
+        for command in (f"git worktree add {s}/wt HEAD --detach && cd {s}/wt && git checkout -b x",
+                        f"git worktree add {s}/wt HEAD --detach &&\ncd {s}/wt &&\ngit checkout -b x",
+                        f"mkdir -p {s}/m && cd {s}/m && git init -q && git commit -q --allow-empty -m x",
+                        f"cd {typo} && git checkout main", f"cd {typo} &>/dev/null && git checkout main",
+                        f"cd {typo} && ls | cat && git checkout main", f"cd {typo} && (ls; git checkout main)",
+                        f"cd {s}; git checkout main", f"(cd {typo}; ls); cd {s}; git checkout main",
+                        f"cd {typo}; cd {s}; git checkout main",
+                        # Either scratch (the first cd succeeded) or the checkout's parent (it failed): no checkout.
+                        f"cd {s}/missing; cd ..; git checkout main"):
+            with self.subTest(command=command):
+                self.assertFalse(self.refused(command))
+
     def test_list_forms_of_tag_and_stash_with_options_are_reads(self):
         for command in ("git tag -n5", "git tag -n 5", "git tag -n5 'v*'", "git stash -q list", "git stash --quiet show"):
             with self.subTest(command=command):
