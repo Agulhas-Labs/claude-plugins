@@ -24,14 +24,15 @@ command per outcome, with the output to expect.
 | Gate | Check | Expect |
 | --- | --- | --- |
 | G1 an empty cart returns a validation error | `pytest tests/test_cart.py -k empty` | `passed` |
-| G2 that test pins the fix | `git diff main -- src/cart > <scratch>/fix.patch && git apply -R <scratch>/fix.patch && pytest tests/test_cart.py -k empty; git apply <scratch>/fix.patch` | `1 failed` |
+| G2 that test pins the fix | `git diff main -- src/cart > <scratch>/fix-empty-cart.patch && git apply -R <scratch>/fix-empty-cart.patch && pytest tests/test_cart.py -k empty; git apply <scratch>/fix-empty-cart.patch` | `1 failed` |
 | G3 nothing else broke | `pytest` | `passed` |
 | G4 lint is clean | `ruff check .` | `All checks passed` |
 
 In the handoff itself each gate is one line: `G<n> <outcome> — CHECK: <command> — EXPECT: <token>`.
 
 G2 is the one people skip. It takes the fix out, runs the new test and expects it to fail, because a
-test that passes either way proves nothing.
+test that passes either way proves nothing. The patch is named after the agent's branch and diffed against the
+commit the agent started from, so agents working in parallel never overwrite each other's.
 
 The report that comes back is short:
 
@@ -81,10 +82,37 @@ on one machine over eight days, 79 of 84 cold subagent turns followed a single B
 wait of nine minutes; cold turns were 2.6% of subagent spend, and agents that went cold twice or more
 held 74% of it, so the first cold wait predicts the next.
 
-A third single read-only call in a row also gets one "Batch your reads" line, once per run, because the
-rule to request independent calls together has not held: across four projects on one machine, five days,
-85.6% of subagent turns made exactly one tool call (the baseline is 70%), and a read-only call straight
-after another one was 27.9% of subagent turns and 23.8% of subagent spend.
+A third hook, the long-run guard, acts before the wait rather than after it. When a subagent is about to
+repeat a build or test (the same command with the same arguments, whatever `cd`, wrappers or pipes surround
+it) that already outlasted the prompt cache in that agent, it refuses the call once, naming the earlier wait
+and the context size. Re-issuing the identical command runs it, a narrower run (a test filter, say) is not
+refused, and nothing but a build or test ever is. Measured on one machine over seven days: 268 cold subagent turns
+followed a Bash call, 193 of them a build or test, after a median wait of 9 minutes in a 72k context; the
+56 agents that went cold two or more times held 54% of the avoidable cost; and with only the after-the-fact
+line above, the cold share rose from 7.1% to 8.6% of subagent spend. `DELEGATE_LONG_RUN_GUARD=0` turns it
+off, and the line above stays.
+
+The same hook guards the reviewer: a `reviewer` cannot run git commands that move a checkout (checkout,
+switch, reset, stash, commit, merge and the like) that existed before it started, or that move refs every
+worktree of such a repository shares (forcing or deleting a branch, tags, push, the stash). Worktrees and
+repositories it made itself, where it builds and tests a revision, are its own. Observed once: a reviewer
+detached HEAD in the checkout other agents were using. `DELEGATE_REVIEWER_GUARD=0` turns it off.
+
+A fourth hook reads each handoff to a `builder` or `builder-lite`. One with no gate line
+(`G<n> <outcome> — CHECK: <command> — EXPECT: <token>`), in the prompt or in a `.md` or `.txt` file the
+prompt names by absolute or `~/` path, is refused once with the format; the identical call re-issued goes
+through. Measured on one machine over three days: 60% of `builder` and 42% of `builder-lite` prompts carried
+a gate line. `DELEGATE_HANDOFF_GATES=0` turns it off.
+
+Your own session gets a context-budget tier too: from 200k, and at each further 100k, it is told that
+every turn re-sends its context, and asked to suggest at the next natural break that you save a short note
+and start fresh (`/clear`), or `/compact`. Measured on one machine over seven days: 51 of 77 main sessions
+passed 200k, and main sessions were 31% of all spend. `DELEGATE_MAIN_BUDGET=0` turns it off.
+
+Claude Code's own helper agents (Explore, Plan, claude-code-guide and statusline-setup) get no conventions:
+they build and commit nothing.
+
+The plugin once also nudged a subagent to batch its reads after a third single read-only call in a row; on one machine over three days it fired 738 times and the turn after it made more than one call 9% of the time, below the 12% of all subagent turns, so it was retired, and the rule to request independent calls together stays in the conventions.
 
 The plugin once also held a subagent's stop while a command it had backgrounded still ran. Measured on
 Claude Code 2.1.293, the harness re-invokes the agent when the command exits and a report is delivered
@@ -110,17 +138,18 @@ Your numbers will differ; `agent-cost` shows you yours.
 | Agent | Model | Its work |
 | --- | --- | --- |
 | your session | yours (Sonnet, Opus or Fable) | Plans, picks the agent for each job, writes the handoff, re-runs the gates. |
-| `runner` | Haiku | A scripted list of commands whose output is the answer. It edits nothing. |
-| `mechanic` | Sonnet | Bulky, fully specified changes: sweeps, renames, fixtures, running suites. |
-| `builder-lite` | Sonnet | The default implementer: any change whose design the handoff has settled, from a feature slice to a round of review fixes. |
+| `runner` | Haiku | A scripted list of commands whose output is the answer, such as running suites. It edits nothing. |
+| `builder-lite` | Sonnet | The default implementer: any change whose design the handoff has settled, from a feature slice to a round of review fixes, and mechanical, fully specified work: sweeps, renames, fixture edits, applying a reviewed diff. |
 | `builder` | Opus, or your session's model if lower | The exception: safety-critical code, classification subtleties, or a job `builder-lite` failed its gates on twice. |
-| `reviewer` | Opus, or your session's model if lower | Sees the spec and the diff, never the reasoning that produced them. |
+| `reviewer` | Opus, or your session's model if lower | Sees the spec and the diff, never the reasoning that produced them. It ends with one line: `Verdict: merge-ready`, `merge-ready with lows`, `merge-ready after fixes` or `not merge-ready`, or one `Verdict (fix/name): …` line per branch when it reviewed several. |
+
+`mechanic` was retired in 2.0.0, its work folded into `builder-lite` and `runner`, and the report still shows its rows for transcripts from before.
 
 The agents are namespaced (`delegate:runner` and so on). The plugin never changes your session's
 model, only what the subagents run on, and it never runs one above your session's model. Where a pin is
 higher, a hook passes your session's model as a per-call override, so on Sonnet the `builder` and
-`reviewer` are Sonnet agents (still at high effort, which a call cannot change) and `builder-lite` or
-`mechanic` take whatever fits them. Start on Opus for the full ladder.
+`reviewer` are Sonnet agents (still at high effort, which a call cannot change) and `builder-lite`
+takes whatever fits it. Start on Opus for the full ladder.
 
 ## The model you start on is the ceiling
 
@@ -129,8 +158,8 @@ on `delegate:` rungs, read before each call: a call that names its own `model`, 
 another name, a machine without Python, or a model id the hook cannot place is not capped, and the
 first call after a model change can still be judged by the model before it. Start on Opus and the whole
 ladder is available. Start on Sonnet and a hook adds `model: "sonnet"` to any call whose agent is pinned higher, so `builder` and
-`reviewer` run on Sonnet (at their high effort, which a call cannot change) and `builder-lite` or
-`mechanic` take whatever fits them. Start on Haiku and everything runs on Haiku. The reviewer always
+`reviewer` run on Sonnet (at their high effort, which a call cannot change) and `builder-lite`
+takes whatever fits it. Start on Haiku and everything runs on Haiku. The reviewer always
 runs: it is the only reader that sees just the spec and the diff.
 
 The hook reads your session's model from its transcript before each `Agent` call to one of the plugin's
@@ -158,7 +187,13 @@ isn't a positive integer means the default.
 run before the budget hook says the prompt cache has expired. Set it to match your cache lifetime;
 anything that isn't a positive integer means the default.
 
-`DELEGATE_BATCH_NUDGE=0` switches off the "Batch your reads" line; any other value leaves it on.
+Four more switches turn a hook off when set to `0`; any other value leaves it on:
+
+- `DELEGATE_LONG_RUN_GUARD`: the refusal of a repeat of a build or test that already outlasted the cache.
+- `DELEGATE_REVIEWER_GUARD`: the block on a reviewer's git commands that move a checkout, or shared refs,
+  that existed before it started.
+- `DELEGATE_HANDOFF_GATES`: the refusal of a maker handoff with no gate line.
+- `DELEGATE_MAIN_BUDGET`: the context-budget tier for your own session.
 
 To let agents run above your session's model, for instance Opus builders under a Sonnet session, switch
 the ceiling hook off the same way:
@@ -170,8 +205,8 @@ the ceiling hook off the same way:
 ## Tailoring
 
 Don't edit the installed copy, because an update replaces it. Copy an agent file into
-`~/.claude/agents/` and edit that. It shows up under its bare name (`mechanic`) beside the plugin's
-`delegate:mechanic`, so tell your session to use yours.
+`~/.claude/agents/` and edit that. It shows up under its bare name (`builder-lite`) beside the plugin's
+`delegate:builder-lite`, so tell your session to use yours.
 
 ### Models
 
@@ -186,7 +221,9 @@ multiply the higher price.
 Every tool definition an agent carries is re-sent each turn, so the roster trims them. `runner` has a
 short `tools:` allowlist. The others get everything except the built-ins no coding job uses, listed in
 `disallowedTools`, and keep all your MCP servers, which load on demand. `reviewer` is also denied `Write`, `Edit`
-and `NotebookEdit`, but it keeps `Bash`, so part of its read-only rule lives only in its prompt.
+and `NotebookEdit`. It keeps `Bash` to build and test, and the reviewer guard (see
+[How it works](#how-it-works)) stops its git commands from moving a checkout, or a repository's shared
+refs, that existed before it started.
 
 Ask for the `agent-cost` report with `--tools` to see what each agent type actually called. To add a tool, take it out
 of `disallowedTools` (or add it to `runner`'s `tools:`); to drop one, add it there. MCP tools are named
@@ -224,8 +261,8 @@ back something like this (the figures here are made up for illustration):
 
 ```text
 === Totals ===
-  main       contexts     14  turns    1210  raw input   142.6M  input-eq    16.3M  output     1.1M
-  subagent   contexts     60  turns    5320  raw input   388.4M  input-eq    47.9M  output     2.4M
+  main       contexts     14  turns    1210  raw input   142.6M  input-eq    16.3M  output     1.1M  list $    $96
+  subagent   contexts     60  turns    5320  raw input   388.4M  input-eq    47.9M  output     2.4M  list $   $213
 
 === Turn shape ===
   main       turns carrying exactly one tool call:  61.2% of turns,  58.7% of input-eq spend
@@ -237,7 +274,8 @@ back something like this (the figures here are made up for illustration):
 Here the subagents hold most of the spend, and most of it goes on turns that made a single tool call,
 each one sending the whole context again to do one small thing. `raw input` is every input token
 before cache weighting (fresh, cache reads and cache writes added together), and `input-eq` is spend
-priced against the uncached input rate; [How the numbers work](#how-the-numbers-work) explains it.
+priced against the uncached input rate. `list $` prices the same turns at each model's list input price,
+plus output at five times it; [How the numbers work](#how-the-numbers-work) explains it.
 
 ### What's in the report
 
@@ -248,14 +286,14 @@ and each one says what to do about what it shows:
 
 | Section | What it tells you | What helps |
 | --- | --- | --- |
-| Spend by agent type | What each agent type cost, your own sessions as `main`: contexts, typical turns and peak context, share of spend, and how many contexts grew past 150k and 200k. | Not counting on a type as the cheap option when its cost per context is close to the type above it, and reconsidering a type that is hardly used. |
+| Spend by agent type | What each agent type cost, your own sessions as `main`: contexts, typical turns and peak context, input-eq, `list $` and `$/ctx` (list price per context), share of spend, and how many contexts grew past 150k and 200k. Rows sort by `list $`. | Comparing types on `$/ctx`, since input-eq does not price one model against another (measured over ten days on one machine: `builder` $1.77 per context, `builder-lite` $0.60), and reconsidering a type that is hardly used. |
 | Main sessions | Which projects and which of your own sessions cost the most, with each one's turns and peak context. | Ending a long session at a natural break: `/clear` and start the next piece of work from a short note, or `/compact`. |
 | Concentration, Turn shape | Whether a few long-running contexts, or turns that make one tool call each, are taking most of your spend. | In your own sessions: shorter sessions, and asking for independent lookups together. For subagents, the rest of this plugin: one job per agent, a context budget, calls requested together. |
 | Cold cache | How much went on messages sent into a large context after its prompt cache expired, and whether your sessions get the five-minute or the one-hour cache lifetime. | [`cache-guard`](../cache-guard/README.md), a sibling plugin, which warns you with the cost before that message is sent. |
 | What fills the context | Which kind of content you keep re-sending, with your sessions' share and subagents' share side by side. | Reading files by range, and a code index in place of `cat` and `grep`. |
 | Fixed start | What every context pays before any work: instruction files, MCP tool listings, the skill listing. | Trimming the instruction files every session loads (and every subagent loads again), and disconnecting servers a coding session never calls. |
-| Rule scorecard | One line per rule this plugin states: the metric that measures it in the window, the measured baseline where there is one (a target for the model ceiling), and whether it holds. Its `handoffs carry the code` line is the share of builder and mechanic spend before their first edit. | Running it over the windows before and after a change to see which rules your agents keep. A high share before the first edit means handoffs aren't carrying the code the job touches: quote it, or scout first. |
-| Review by rung | For each maker type (`builder`, `builder-lite`, `mechanic`) and round, how many makers a later reviewer passed or failed, linked by a branch name both handoffs state (a heuristic; unnamed or out-of-window reviews leave a maker unlinked), the fail share, and the mean input-eq per maker. | Choosing between the dearer and the cheaper builder: if the cheaper rung's fail share matches the dearer one's in the same round, send it more of that work. |
+| Rule scorecard | One line per rule this plugin states: the metric that measures it in the window, the measured baseline where there is one (a target for the model ceiling), and whether it holds. Its `handoffs carry the code` line is the share of maker spend (`builder`, `builder-lite`, and `mechanic` in older transcripts) before their first edit (an edit made through Bash counts), and `maker handoffs carry gates` is the share of maker handoffs with a gate line. | Running it over the windows before and after a change to see which rules your agents keep. A high share before the first edit means handoffs aren't carrying the code the job touches: quote it, or scout first. A low gates share means handoffs end without a check to run. |
+| Review by rung | For each maker type (`builder`, `builder-lite`) and round, how many makers a later reviewer passed or failed, linked by a branch name both handoffs state (a heuristic; unnamed or out-of-window reviews leave a maker unlinked), the fail share, and the mean input-eq per maker. A reviewer that gave one verdict line per branch gives each maker the line naming its branch. | Choosing between the dearer and the cheaper builder: if the cheaper rung's fail share matches the dearer one's in the same round, send it more of that work. |
 | Tools called (`--tools`) | The tools each agent type actually called. | Editing an agent definition's `tools:` or `disallowedTools:` line. |
 
 ### Asking for what you need
@@ -303,7 +341,9 @@ about fifty times over, before any work was done.
 
 Spend is weighted by price against the uncached input rate. A cache read counts a tenth (a fortieth on
 Fable 5.1, as published), a five-minute cache write 1.25 and a one-hour cache write 2. The figures are
-shares of cost, not raw token counts. Output tokens are reported separately, and figures marked `≈` are
+shares of cost, not raw token counts. `list $` prices each turn's input-eq at its model's list input price and its output at five times that price, from the same table as `cache-guard`; `-` marks a model the table can't place. It is a list-rate comparison, not a bill.
+
+Output tokens are reported separately, and figures marked `≈` are
 estimates from character counts.
 
 The transcript format is undocumented and has changed before. The report lists every Claude Code
@@ -319,9 +359,9 @@ run with `python3`; where that is missing (often on Windows), the skill runs it 
 It isn't tied to a language. Agents use whatever code intelligence you have, such as an LSP plugin or a
 code-index server, and plain search otherwise.
 
-The context hooks need a POSIX shell with `cat`, `sed`, `awk` and `tr`. The context-budget and model-ceiling hooks need Python 3 (standard library only) as `python3` or `python` (also `py` on
+The context hooks need a POSIX shell with `cat`, `sed`, `awk` and `tr`. The context-budget, model-ceiling, long-run, reviewer and handoff-gate hooks need Python 3 (standard library only) as `python3` or `python` (also `py` on
 Windows). Without it that hook is skipped silently and nothing else changes. The context-budget hook runs
-after every tool call, in your session too, where it exits at once. On Windows, hooks need
+after every tool call, in your session too, where it applies the main-session tier above. On Windows, hooks need
 Git Bash, Claude Code's usual setup; Windows is untested.
 
 To install for a whole team and keep it updated, see the

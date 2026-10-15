@@ -52,7 +52,7 @@ class ModelCeilingTests(unittest.TestCase):
 
     def test_a_haiku_session_caps_a_sonnet_rung_at_haiku(self):
         self.session("claude-haiku-4-5")
-        self.assertEqual(self.call("mechanic")["hookSpecificOutput"]["updatedInput"]["model"], "haiku")
+        self.assertEqual(self.call("builder-lite")["hookSpecificOutput"]["updatedInput"]["model"], "haiku")
 
     def test_an_opus_session_leaves_the_builder_alone(self):
         self.session(SONNET, OPUS)
@@ -138,7 +138,8 @@ class ModelCeilingTests(unittest.TestCase):
         with open(os.path.join(ROOT, "hooks", "hooks.json"), encoding="utf-8") as f:
             entries = json.load(f)["hooks"]["PreToolUse"]
         commands = [h["command"] for e in entries if e.get("matcher") == "Agent" for h in e["hooks"]]
-        self.assertEqual(commands, ['sh "${CLAUDE_PLUGIN_ROOT}/hooks/model-ceiling.sh"'])
+        self.assertEqual(commands, ['sh "${CLAUDE_PLUGIN_ROOT}/hooks/model-ceiling.sh"',
+                                    'sh "${CLAUDE_PLUGIN_ROOT}/hooks/handoff-gates.sh"'])
 
 
 if __name__ == "__main__":

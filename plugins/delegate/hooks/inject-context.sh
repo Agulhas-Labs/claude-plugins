@@ -13,8 +13,19 @@
 # conventions only, never the delegation rules: subagents don't delegate, and those rules would be
 # re-sent on every one of their turns.
 #
+# Claude Code's own helper agents are left out: the read-only Explore search, the Plan architect, the
+# documentation guide and the status-line setup build and commit nothing, so the conventions would only
+# be re-sent on every one of their turns. The payload names the agent in `agent_type`; it is matched with
+# its whitespace removed, so the JSON's spacing does not matter.
+#
 # A missing or empty file prints nothing and exits 0: it is never worth breaking a subagent start.
 set -eu
+
+payload="$(tr -d ' \t\r\n')"
+case "$payload" in
+  *'"agent_type":"Explore"'*|*'"agent_type":"Plan"'*|*'"agent_type":"claude-code-guide"'*|*'"agent_type":"statusline-setup"'*)
+    exit 0 ;;
+esac
 
 file="${1:-${CLAUDE_PLUGIN_ROOT:-}/context/engineering.md}"
 [ -n "$file" ] && [ -f "$file" ] && [ -r "$file" ] || exit 0

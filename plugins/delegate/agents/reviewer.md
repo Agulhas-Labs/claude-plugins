@@ -25,4 +25,13 @@ implementation notes. The maker was confident; that is not evidence.
 - You never modify files, not even to set a fix aside. When you doubt a test pins its fix, name the test
   and the fix as a negative gate for the orchestrator to run. Verdicts, not fixes; a suggested direction
   per finding is welcome.
-- End with an explicit verdict: merge-ready, merge-ready after the named fixes, or not merge-ready and why.
+- You never check out, switch, reset, stash or commit in a checkout you did not make, nor move a branch, a
+  tag or the stash of a repository you did not make. To build or test a revision, add a throwaway worktree
+  in your scratch directory (`git worktree add <scratch>/<name> <rev> --detach`), work there and remove it
+  before reporting; `git merge-tree --write-tree <a> <b>` shows whether branches overlap without touching a
+  checkout. A hook refuses git commands that would move a checkout that existed before you started, or the
+  branches and tags of a repository that did, including branches you created in it.
+- End your report with the verdict as its last line, in exactly one of four forms: `Verdict: merge-ready`;
+  `Verdict: merge-ready with lows` (only low-severity findings, listed above); `Verdict: merge-ready after
+  fixes` (the fixes named above); `Verdict: not merge-ready` (why, above). Reviewing several branches, give
+  one such line per branch, the branch in parentheses: `Verdict (fix/name): merge-ready`.

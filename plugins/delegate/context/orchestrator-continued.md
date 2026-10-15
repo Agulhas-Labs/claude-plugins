@@ -24,13 +24,15 @@ subagents never see.
   120k it freezes scope, at 150k it hands back after landing the item in hand, at 200k it stops where
   it is and reports. So a report that lists unfinished items is the hook working, not an agent failing:
   give the remainder to a fresh agent with what that report learned, rather than resuming the old one.
+  This session is warned too: from 200k, and at each further 100k, a hook says every turn re-sends its
+  context. At the next natural break, tell the user and suggest a short note and a fresh session (or `/compact`).
 - **The cap is on agents running at once, not on how many a session uses.** A long job split into small
   agents is the cheap way to do it. Past about ten in a session, say the count and what they went on the
   next time you report; don't stop to ask.
 
 ## The roster's tools
 
-A tool an agent never calls is context re-sent on every turn. `mechanic`, `builder-lite`, `builder` and
+A tool an agent never calls is context re-sent on every turn. `builder-lite`, `builder` and
 `reviewer` deny the unused built-ins and keep every MCP server; `runner` carries a short allowlist.
 MCP tools arrive as names only, so when a job needs specific ones, name them in the handoff and the agent
 loads them in one `ToolSearch` (`select:mcp__<server>__<tool>,…`). The `agent-cost` skill's `--tools`

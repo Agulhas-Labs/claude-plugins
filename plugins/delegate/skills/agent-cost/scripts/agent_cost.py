@@ -212,6 +212,53 @@ def input_equivalent(usage, model=None):
     return uncached * 1.0 + cache_read * cache_read_weight(model) + cache_write_eq
 
 
+# List input price in dollars per million tokens, by model family, in the order tried: the first key the
+# reduced model id contains wins, so `opus55` is tried before `opus`. Output is OUTPUT_MULTIPLIER times
+# input for every model here. Copied from INPUT_PRICES and OUTPUT_MULTIPLIER in the cache-guard plugin's
+# hooks/cache_guard.py; keep in step with it. A model this table cannot place has no price.
+INPUT_PRICES = (
+    ("fable51", 10.00), ("fable", 10.00),
+    ("opus55", 4.00), ("opus", 5.00),
+    ("sonnet5", 2.00), ("sonnet4", 3.00),
+    ("haiku55", 0.10),  # the list price up to 100k tokens of prompt; past that it is $0.50
+    ("haiku", 1.00),
+)
+OUTPUT_MULTIPLIER = 5.0
+
+
+def input_price(model):
+    name = "".join(ch for ch in str(model or "").lower() if ch.isalnum())
+    for family, price in INPUT_PRICES:
+        if family in name:
+            return price
+    return None
+
+
+def list_dollars(ie, output_tokens, model):
+    """One turn priced at list rates (`ie` already scales cache reads and writes against that model's
+    input price), or None when the model has no price."""
+    price = input_price(model)
+    if price is None:
+        return None
+    return price * (ie + OUTPUT_MULTIPLIER * output_tokens) / 1e6
+
+
+def sum_dollars(turns):
+    """List dollars over turns, counting the priced ones; None when none is priced."""
+    priced = [t["usd"] for t in turns if t.get("usd") is not None]
+    return sum(priced) if priced else None
+
+
+def fmt_usd(v):
+    if v is None:
+        return "-"
+    if v >= 1000:
+        return f"${v / 1000:.1f}k"
+    if v >= 10:
+        return f"${v:.0f}"
+    return f"${v:.2f}"
+
+
 def context_size(usage):
     return usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0) + usage.get("cache_creation_input_tokens", 0)
 
@@ -393,7 +440,11 @@ class Context:
         self.agent_id = agent_id
         self.agent_type = agent_type_of(path, kind)
         self.worktree_branch = meta_of(path, kind).get("worktreeBranch") or None
+        self.tool_use_id = meta_of(path, kind).get("toolUseId") or None   # the parent's Agent call that spawned it
+        self.agent_calls = {}              # Agent tool_use id -> the model that call named, or None
         self.first_prompt = ""   # the text of the first prompt the context was given
+        self.handoff = ""        # a subagent's first prompt plus the text of the files it names
+        self.handoff_missing = 0   # how many of those named files were not on disk
         self.turns = []       # list of dict(ts, ctx, usage, model, n_tools, tools, cats)
         self.events = []      # list of (turn_index, category, chars) turn_index = len(turns) at event time
         self.versions = set()
@@ -408,6 +459,73 @@ class Context:
 # as a hook attachment records them. Matched on attachment entries only: a file read that quotes the
 # hook is a tool result, not the hook speaking.
 EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
+
+HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?(?:\n\s*\2(?=\s|$)|\Z)", re.S)
+QUOTED_TARGET = re.compile(r"(>>?\s*)([\"'])([^\"'\s]*)\2")
+QUOTED = re.compile(r"\"[^\"]*\"|'[^']*'")
+REDIRECT = re.compile(r"(?<![\d&<>])>>?\s*([^\s|;&<>()]+)")
+SED_PERL_INPLACE = re.compile(r"(?:^|[\s;&|(])(?:sed|perl)\s(?:[^\n;&|]*\s)?(?:-[A-Za-z]*i|--in-place)")
+GIT_APPLY = re.compile(r"\bgit\s+(?:-C\s+\S+\s+)?apply\b")
+GIT_APPLY_READONLY = re.compile(r"--(?:check|stat|numstat|summary)\b")
+PATCH_CMD = re.compile(r"(?:^|[;&|(])\s*patch\b")
+TEE_CMD = re.compile(r"(?:^|[;&|(])\s*tee\s+(?:-[a-z]+\s+)*([^\s|;&<>()-][^\s|;&<>()]*)")
+PYTHON_RUN = re.compile(r"(?:^|[\s;&|(])python[\d.]*\b")
+PYTHON_WRITE = re.compile(r"\bopen\s*\(.*?,\s*(?:mode\s*=\s*)?['\"][rwaxbt+U]*[wax][rwaxbt+U]*['\"]"
+                          r"|\.open\(\s*(?:mode\s*=\s*)?['\"][rwaxbt+U]*[wax][rwaxbt+U]*['\"]"
+                          r"|\.write_(?:text|bytes)\(")
+SCRATCH_PREFIXES = ("/dev/", "/tmp/", "/private/tmp/", "/var/folders/", "$TMPDIR", "${TMPDIR}")
+
+
+def writes_to_file(target):
+    """Whether a redirect or tee target is a real file rather than the null device, scratch space, a log,
+    or a gitignored build directory: a build's output sent to `.build/x.log` is not an edit."""
+    if not target or target.startswith(SCRATCH_PREFIXES) or target.endswith(".log"):
+        return False
+    return not (target.startswith(".build/") or "/.build/" in target)
+
+
+def edits_files(command):
+    """Whether a Bash command edits a file: an in-place sed or perl, git apply that is not a dry run, patch,
+    tee or a redirect into a file outside scratch space, or a Python run that opens a file for writing or
+    calls write_text/write_bytes. Meant to be read as 'the maker started editing', not as a safety check."""
+    command = command or ""
+    if SED_PERL_INPLACE.search(command) or PATCH_CMD.search(command):
+        return True
+    if GIT_APPLY.search(command) and not GIT_APPLY_READONLY.search(command):
+        return True
+    if PYTHON_RUN.search(command) and PYTHON_WRITE.search(command):
+        return True
+    bare = HEREDOC.sub("", command)
+    if any(writes_to_file(t) for t in TEE_CMD.findall(bare)):
+        return True
+    bare = QUOTED.sub("Q", QUOTED_TARGET.sub(r"\1\3", bare))
+    return any(writes_to_file(t) for t in REDIRECT.findall(bare))
+
+
+HANDOFF_FILE = re.compile(r"(?<![\w.~/-])(?:~/|/)[\w./~+@-]*\.(?:md|txt)(?![\w/])")
+HANDOFF_FILE_LIMIT = 256 * 1024
+HANDOFF_FILES_PER_PROMPT = 5
+
+
+def read_handoff(prompt):
+    """(the prompt followed by the text of each file it names, how many named files were not on disk).
+    A named file is an absolute or ~/ path ending .md or .txt, at most five per prompt, read at most 256 KB
+    and only if it exists when the report runs."""
+    texts, missing, seen = [prompt or ""], 0, []
+    for token in HANDOFF_FILE.findall(prompt or ""):
+        if token not in seen:
+            seen.append(token)
+    for token in seen[:HANDOFF_FILES_PER_PROMPT]:
+        path = os.path.expanduser(token)
+        try:
+            if not os.path.isfile(path):
+                missing += 1
+            elif os.path.getsize(path) <= HANDOFF_FILE_LIMIT:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    texts.append(f.read())
+        except OSError:
+            missing += 1
+    return "\n".join(texts), missing
 
 HAND_BACK_NUDGE = re.compile(r"Context budget: this agent's context is now \d+k tokens"
                              r".*?(?:Finish only the item in hand|Stop here, even mid-item)")
@@ -526,6 +644,8 @@ def load_context(kind, path, project_dir, session_id, agent_id):
                 if not isinstance(b, dict):
                     continue
                 if b.get("type") == "tool_use":
+                    if b.get("name") == "Agent" and b.get("id"):
+                        ctx.agent_calls[b["id"]] = (b.get("input") or {}).get("model")
                     if b.get("name") == "SubagentHandback":
                         ctx.handback_report = (b.get("input") or {}).get("message") or ""
                     cat = classify(b.get("name", ""), b.get("input") or {})
@@ -536,7 +656,9 @@ def load_context(kind, path, project_dir, session_id, agent_id):
                             ctx.turns[-1]["n_tools"] += 1
                             ctx.turns[-1]["cats"].append(turn_shape_category(cat, b.get("input") or {}))
                             ctx.turns[-1]["tools"][b.get("name") or "?"] += 1
-                            if ctx.first_edit_turn is None and b.get("name") in EDIT_TOOLS:
+                            if ctx.first_edit_turn is None and (
+                                    b.get("name") in EDIT_TOOLS
+                                    or (b.get("name") == "Bash" and edits_files((b.get("input") or {}).get("command")))):
                                 ctx.first_edit_turn = len(ctx.turns) - 1
                     ctx.events.append((len(ctx.turns), "assistant: tool-call inputs (edits, commands)", len(json.dumps(b.get("input")))))
                 elif b.get("type") == "text":
@@ -555,6 +677,8 @@ def load_context(kind, path, project_dir, session_id, agent_id):
             elif isinstance(c, str) and first_turn_seen:
                 ctx.events.append((len(ctx.turns), "user/system text (prompt, reminders)", len(c)))
 
+    if kind == "subagent":
+        ctx.handoff, ctx.handoff_missing = read_handoff(ctx.first_prompt)
     return ctx
 
 
@@ -583,6 +707,7 @@ class Loaded:
         self.first_in_window = bool(ctx.turns) and since <= ctx.turns[0]["ts"] < until
         for t in self.window_turns:
             t["ie"] = input_equivalent(t["usage"], t.get("model"))
+            t["usd"] = list_dollars(t["ie"], t["usage"].get("output_tokens", 0), t.get("model"))
 
 
 def load_all(projects_dir, transcript, since, until, project=None):
@@ -635,7 +760,8 @@ def section_totals(out, loaded):
         raw = sum(t["ctx"] for l in group for t in l.window_turns)
         ie = sum(t["ie"] for l in group for t in l.window_turns)
         outp = sum(t["usage"].get("output_tokens", 0) for l in group for t in l.window_turns)
-        out.append(f"  {label:10} contexts {n_ctx:6}  turns {n_turns:7}  raw input {fmt_tok(raw):>8}  input-eq {fmt_tok(ie):>8}  output {fmt_tok(outp):>8}")
+        usd = sum_dollars([t for l in group for t in l.window_turns])
+        out.append(f"  {label:10} contexts {n_ctx:6}  turns {n_turns:7}  raw input {fmt_tok(raw):>8}  input-eq {fmt_tok(ie):>8}  output {fmt_tok(outp):>8}  list $ {fmt_usd(usd):>7}")
 
     out.append("")
     out.append("  by model:")
@@ -647,7 +773,8 @@ def section_totals(out, loaded):
     for model, group in sorted(by_model.items(), key=lambda kv: -sum(t["ie"] for l in kv[1] for t in l.window_turns)):
         ie = sum(t["ie"] for l in group for t in l.window_turns)
         starts = [l.ctx.turns[0]["ctx"] for l in group if l.first_in_window]
-        out.append(f"    {model:24} contexts {len(group):6}  input-eq {fmt_tok(ie):>8}  median start {fmt_tok(median(starts)):>8}")
+        usd = sum_dollars([t for l in group for t in l.window_turns])
+        out.append(f"    {model:24} contexts {len(group):6}  input-eq {fmt_tok(ie):>8}  list $ {fmt_usd(usd):>7}  median start {fmt_tok(median(starts)):>8}")
     out.append("")
 
 
@@ -678,7 +805,7 @@ def section_spend_by_type(out, loaded):
         return
     out.append("=== Spend by agent type ===")
     out.append(f"  {'type':20} {'contexts':>8} {'med turns':>9} {'med peak':>9} {'input-eq':>9} {'share':>6}"
-               f" {'avg/ctx':>8} {'output':>9} {'>=150k':>7} {'>=200k':>7}")
+               f" {'avg/ctx':>8} {'list $':>7} {'$/ctx':>7} {'output':>9} {'>=150k':>7} {'>=200k':>7}")
 
     def row(name, group, total_ie):
         peaks = [window_peak(l) for l in group]
@@ -686,16 +813,21 @@ def section_spend_by_type(out, loaded):
         outp = sum(t["usage"].get("output_tokens", 0) for l in group for t in l.window_turns)
         share = 100 * ie / total_ie if total_ie else 0
         med_turns = median(len(l.window_turns) for l in group)
-        return ie, (f"  {name_tail(name, 20):20} {len(group):8} {med_turns:9.0f} {fmt_tok(median(peaks)):>9}"
-                    f" {fmt_tok(ie):>9} {share:5.1f}% {fmt_tok(ie / len(group)):>8} {fmt_tok(outp):>9}"
+        usd = sum_dollars([t for l in group for t in l.window_turns])
+        per_ctx = None if usd is None else usd / len(group)
+        return (usd, ie), (f"  {name_tail(name, 20):20} {len(group):8} {med_turns:9.0f} {fmt_tok(median(peaks)):>9}"
+                    f" {fmt_tok(ie):>9} {share:5.1f}% {fmt_tok(ie / len(group)):>8}"
+                    f" {fmt_usd(usd):>7} {fmt_usd(per_ctx):>7} {fmt_tok(outp):>9}"
                     f" {sum(p >= 150_000 for p in peaks):7} {sum(p >= 200_000 for p in peaks):7}")
 
     every = [l for group in by_type.values() for l in group]
     total_ie = sum(t["ie"] for l in every for t in l.window_turns)
     rows = sorted((row(name, group, total_ie) + (name,) for name, group in by_type.items()),
-                  key=lambda r: (-r[0], r[2]))
+                  key=lambda r: (r[0][0] is None, -(r[0][0] if r[0][0] is not None else r[0][1]), r[2]))
     out.extend(line for _, line, _ in rows)
     out.append(row("total", every, total_ie)[1])
+    out.append("  list $ prices input-eq at each model's list input price and output at five times it; - where the")
+    out.append("  table has no price for the model. A price comparison at list rates, not a bill.")
     out.append("")
 
 
@@ -1216,7 +1348,6 @@ def section_fixed_start(out, loaded):
 # cold-turn share is the one its orchestrator conventions quote (the week it was measured in is not
 # recorded here); the model-ceiling line's baseline is a target, not a measurement.
 BASELINE_TOP_DECILE_SHARE = 45.0    # % of subagent spend in the longest-running 10% of subagents
-BASELINE_SINGLE_CALL_SHARE = 70.0   # % of subagent turns that made a single tool call
 BASELINE_COLD_SHARE = 7.5           # % of subagent spend on cold turns
 MAKER_TYPES = ("builder", "builder-lite", "mechanic")   # the agent types that edit, as folded_type names them
 
@@ -1231,13 +1362,13 @@ VERDICT_RULES = (
     ("pass after fixes", re.compile(r"pass(ed)? after|merge-ready after|mergeable after"
                                     r"|after (the|one|two|\d) (named )?fix"
                                     r"|(merge|publish|ship|ready) after (the |those |these )?(named )?fix")),
-    ("fail", re.compile(r"verdict\**(?:\s*\([^)\n]{0,20}\))?\s*[:—–-]?\**\s*\**fail|not merge-ready|not mergeable|do not merge"
+    ("fail", re.compile(r"verdict\**(?:\s*\([^)\n]{0,80}\))?\s*[:—–-]?\**\s*\**fail|not merge-ready|not mergeable|do not merge"
                         r"|fix first|fix(es)? (is |are )?needed before|not ready (to|for) merge|blocks? (the )?merge")),
-    ("pass", re.compile(r"verdict\**(?:\s*\([^)\n]{0,20}\))?\s*[:—–-]?\**\s*\**pass|merge-ready|mergeable|ready to merge")),
+    ("pass", re.compile(r"verdict\**(?:\s*\([^)\n]{0,80}\))?\s*[:—–-]?\**\s*\**pass|merge-ready|mergeable|ready to merge")),
 )
 # the whole line, label included; a word or two before the label ("Final verdict") and a short
 # parenthetical after it ("Verdict (A)") are still the label
-VERDICT_LINE = re.compile(r"(?im)^(\W*(?:\w+\W+){0,2}?verdict\**(?:\s*\([^)\n]{0,20}\))?\W*[:\u2014\u2013-]\s*.+)$")
+VERDICT_LINE = re.compile(r"(?im)^(\W*(?:\w+\W+){0,2}?verdict\**(?:\s*\([^)\n]{0,80}\))?\W*[:\u2014\u2013-]\s*.+)$")
 VERDICTS = tuple(name for name, _ in VERDICT_RULES) + ("unclassified",)
 
 
@@ -1249,15 +1380,20 @@ def model_rank(model):
 
 
 def above_ceiling(loaded):
-    """(subagents judged, subagents above their parent session's model), as Loaded lists. The parent is
+    """(subagents judged, subagents above their parent session's model, subagents left out), the first two as
+    Loaded lists. A subagent whose spawning Agent call named a model is left out and counted: the ceiling hook
+    leaves such a call alone. The parent is
     the main context of the same project and session in the window, its model the one its last turn at
     or before the subagent's first used, the model the ceiling hook would have read. A subagent whose
     parent is not in the window, or whose model or parent's names no family, is not judged."""
     parents = {(l.ctx.project_dir, l.ctx.session_id): l for l in loaded if l.ctx.kind == "main"}
-    judged, above = [], []
+    judged, above, skipped = [], [], 0
     for l in loaded:
         parent = parents.get((l.ctx.project_dir, l.ctx.session_id))
         if l.ctx.kind != "subagent" or parent is None:
+            continue
+        if parent.ctx.agent_calls.get(l.ctx.tool_use_id):
+            skipped += 1
             continue
         own = [(t["ts"], model_rank(t["model"])) for t in l.window_turns if model_rank(t["model"]) is not None]
         theirs = [(t["ts"], model_rank(t["model"])) for t in parent.ctx.turns if model_rank(t["model"]) is not None]
@@ -1269,15 +1405,22 @@ def above_ceiling(loaded):
         judged.append(l)
         if rank > parent_rank:
             above.append(l)
-    return judged, above
+    return judged, above, skipped
 
 
-def reviewer_verdict(report):
-    """One of VERDICTS for a reviewer's hand-back report; no report at all is unclassified."""
+def reviewer_verdict(report, branches=None):
+    """One of VERDICTS for a reviewer's hand-back report; no report at all is unclassified. Where a verdict
+    line's parenthetical names one of `branches`, the last such line is the one classified."""
     text = (report or "").lower()
     lines = VERDICT_LINE.findall(text)
     if lines:
         text = lines[-1]
+        for line in reversed(lines):
+            paren = re.match(r"\W*(?:\w+\W+){0,2}?verdict\**\s*\(([^)\n]*)\)", line)
+            if paren and any(re.search(r"(?<![\w./-])" + re.escape(b.lower()) + r"(?![\w./-])", paren.group(1))
+                          for b in branches or ()):
+                text = line
+                break
     for name, rule in VERDICT_RULES:
         if text and rule.search(text):
             return name
@@ -1317,7 +1460,7 @@ def branches_named(text, worktree_branch=None):
 
 
 def rung_links(loaded):
-    """[(maker Loaded, round, reviewer Loaded or None)] for every maker in the window. Within one session,
+    """[(maker Loaded, round, reviewer Loaded or None, the maker's own branches)] for every maker in the window. Within one session,
     subagents are ordered by their first turn. A maker's own branches are the ones the fewest makers of the
     session name in their handoffs, so a base branch every handoff names does not tie makers together, plus
     the maker's own worktree branch, which is left out of that count: it is unique to each agent, so counted
@@ -1331,8 +1474,8 @@ def rung_links(loaded):
     links = []
     for group in sessions.values():
         group.sort(key=lambda l: l.ctx.turns[0]["ts"])
-        branches = {id(l): branches_named(l.ctx.first_prompt, l.ctx.worktree_branch) for l in group}
-        handoff = {id(l): branches_named(l.ctx.first_prompt) for l in group}
+        branches = {id(l): branches_named(l.ctx.handoff, l.ctx.worktree_branch) for l in group}
+        handoff = {id(l): branches_named(l.ctx.handoff) for l in group}
         named_by = collections.Counter(t for l in group if folded_type(l) in MAKER_TYPES for t in handoff[id(l)])
         seen = set()
         for i, l in enumerate(group):
@@ -1344,7 +1487,7 @@ def rung_links(loaded):
             finished = l.ctx.turns[-1]["ts"]
             reviewer = next((r for r in group[i + 1:] if folded_type(r) == "reviewer"
                              and r.ctx.turns[0]["ts"] >= finished and mine & branches[id(r)]), None)
-            links.append((l, "later" if mine & seen else "first", reviewer))
+            links.append((l, "later" if mine & seen else "first", reviewer, mine))
             seen |= mine
     return links
 
@@ -1355,19 +1498,19 @@ def section_review_by_rung(out, loaded):
         return
     out.append("=== Review by rung ===")
     out.append("  makers linked to a review by the maker's least-shared branch, from a reviewer that started after the"
-               " maker finished; a reviewer covering several branches gives each the same verdict")
+               " maker finished; a reviewer covering several branches gives each maker the verdict line that names its branch, else its last verdict line")
     out.append(f"  {'rung':13} {'round':6} {'makers':>7} {'linked':>7} {'pass':>5} {'lows':>5} {'after-fixes':>12}"
                f" {'fail':>5} {'unclass':>8} {'fail%':>6} {'avg input-eq':>13}")
     for rung in MAKER_TYPES:
         for rnd in ("first", "later"):
-            rows = [(l, r) for l, k, r in links if folded_type(l) == rung and k == rnd]
+            rows = [(l, r, mine) for l, k, r, mine in links if folded_type(l) == rung and k == rnd]
             if not rows:
                 continue
-            verdicts = collections.Counter(reviewer_verdict(r.ctx.handback_report) for _, r in rows if r)
+            verdicts = collections.Counter(reviewer_verdict(r.ctx.handback_report, mine) for _, r, mine in rows if r)
             linked = sum(verdicts.values())
             judged = linked - verdicts["unclassified"]
             fail_pct = f"{100 * verdicts['fail'] / judged:.0f}%" if judged else "-"
-            avg = sum(t["ie"] for l, _ in rows for t in l.window_turns) / len(rows)
+            avg = sum(t["ie"] for l, _, _ in rows for t in l.window_turns) / len(rows)
             out.append(f"  {rung:13} {rnd:6} {len(rows):7} {linked:7} {verdicts['pass']:5} {verdicts['pass with lows']:5}"
                        f" {verdicts['pass after fixes']:12} {verdicts['fail']:5} {verdicts['unclassified']:8}"
                        f" {fail_pct:>6} {fmt_tok(avg):>13}")
@@ -1376,6 +1519,9 @@ def section_review_by_rung(out, loaded):
                " A reviewer outside the window, or one that names no such branch, leaves its maker unlinked; a fix round"
                " whose handoff leaves out the base branch can make that base the least shared.)")
     out.append("")
+
+
+GATE_LINE = re.compile(r"\bG\d+\b[^\n]*CHECK:")
 
 
 def section_rule_scorecard(out, loaded):
@@ -1421,6 +1567,13 @@ def section_rule_scorecard(out, loaded):
          f"{before} ({len(edited)} of {len(makers)} makers edited)" if makers else "n/a", None,
          "no baseline" if edited_ie else "n/a")
 
+    # handoffs carry gates
+    gated = [l for l in makers if GATE_LINE.search(l.ctx.handoff)]
+    gone = sum(l.ctx.handoff_missing > 0 for l in makers)
+    line("maker handoffs carry gates", "maker handoffs with a gate line",
+         (f"{len(gated)} of {len(makers)}" + (f" ({gone} named a file no longer on disk)" if gone else ""))
+         if makers else "n/a", None, "no baseline" if makers else "n/a")
+
     # a fresh agent per round
     handed = [l for l in subs if l.ctx.handback_report is not None]
     resumed = sum(l.ctx.prompted_after_handback for l in handed)
@@ -1434,7 +1587,7 @@ def section_rule_scorecard(out, loaded):
         single, _, batchable, _ = turn_shape_shares(loaded, "subagent")
     line("calls requested together", "single-tool-call share of subagent turns",
          f"{single:.1f}% (batchable {batchable:.1f}%)" if subs else "n/a",
-         f"{BASELINE_SINGLE_CALL_SHARE:.0f}%", judgement(single, BASELINE_SINGLE_CALL_SHARE))
+         None, "no baseline" if subs else "n/a")
 
     # the slow check goes to a runner: the cold turns that followed a Bash call
     cold = None
@@ -1446,7 +1599,7 @@ def section_rule_scorecard(out, loaded):
          judgement(cold, BASELINE_COLD_SHARE))
 
     # the model ceiling
-    judged, above = above_ceiling(loaded)
+    judged, above, skipped = above_ceiling(loaded)
     above_ie = sum(t["ie"] for l in above for t in l.window_turns)
     line("the model ceiling", "subagents above their parent session's model",
          f"{len(above)} of {len(judged)}, {100 * above_ie / (sub_ie or 1):.1f}% of subagent spend" if judged else "n/a",
@@ -1459,8 +1612,8 @@ def section_rule_scorecard(out, loaded):
     line("the reviewer pays", "reviewer verdicts from the hand-back report",
          f"{mix} of {sum(verdicts.values())}" if verdicts else "n/a", None,
          "no baseline" if verdicts else "n/a")
-    out.append("  note: the model ceiling counts every subagent, including calls that named their own model, which the"
-               " hook leaves alone")
+    out.append(f"  note: the model ceiling leaves out {skipped} subagent{'' if skipped == 1 else 's'} whose call named"
+               " its own model, which the hook leaves alone")
     out.append("  not scored: two review rounds at most, since the branch a transcript records is the one checked"
                " out where the agent ran, not the change it reviewed")
     out.append("")
