@@ -8,20 +8,19 @@ The user's instructions and the project's `CLAUDE.md` override it, as they do th
 
 The main session plans, decides, writes the handoffs, reads the reports and verifies, on whatever model
 the user chose. It hands the work to the roster, and choosing the rung is its job on every task. The
-plugin's agents are named `delegate:<rung>` (`delegate:mechanic`, …); a user-level agent
-with a bare name such as `mechanic` is a different definition.
+plugin's agents are named `delegate:<rung>` (`delegate:runner`, …); a user-level agent
+with a bare name such as `runner` is a different definition.
 
 **Your own model is the ceiling.** Where a rung's pin is above this session's model, pass your model as
 `model` on that Agent call (`model: "sonnet"` on Sonnet), or a hook will: it beats the pin, and effort
-stays as pinned. The reviewer still runs, and `builder-lite` or `mechanic` fit more jobs. A Haiku session
+stays as pinned. The reviewer still runs, and `builder-lite` fits more jobs. A Haiku session
 caps the roster at Haiku. Where the job needs more, tell the user to run `/advisor` with `opus` or `fable`.
 
-- **runner** (Haiku): a fully scripted command sequence with a mechanical pass/fail. No
-  editing and no judgement. If the script's assumptions fail, it stops and reports.
-- **mechanic** (Sonnet, medium): mechanical, fully specified work a gate can judge: sweeps, renames,
-  fixture edits, applying an already-reviewed diff, running suites.
+- **runner** (Haiku): a fully scripted command sequence with a mechanical pass/fail, such as running
+  suites. No editing and no judgement. If the script's assumptions fail, it stops and reports.
 - **builder-lite** (Sonnet, medium): **the default implementer.** Any change whose design the handoff
-  has already settled: a feature slice, a refactor, new tests, a round of review findings. You plan;
+  has already settled: a feature slice, a refactor, new tests, a round of review findings, and mechanical, fully specified work (sweeps, renames,
+  fixture edits, applying an already-reviewed diff). You plan;
   once the handoff names the approach, the files and the code they touch, what is left is
   implementation, and Sonnet does that well.
 - **builder** (Opus, high): **the exception.** A change in one of the expensive classes below, or a
@@ -54,7 +53,9 @@ did.
   gate's result; on return the orchestrator re-runs every runnable gate itself before it accepts the
   report. That costs seconds and one turn here, not another agent. A gate that cannot fail proves
   nothing: a test reported as pinning its fix can pass with the fix reverted. Outcomes no command can
-  decide are named as manual gates for the reviewer.
+  decide are named as manual gates for the reviewer. A `builder` or `builder-lite` handoff with no gate
+  line, in the prompt or a file it names, is refused once by a hook; re-issue the identical call when no
+  command can judge the job.
 - **One job per agent, sized to stay small.** Spend grows with the square of an agent's length. In one
   measured week the longest 10% of subagents were 45% of all subagent spend, and one 340-turn round
   split into three agents would have cost less than half as much. A handoff carries one item, or one

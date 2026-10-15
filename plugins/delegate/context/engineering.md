@@ -29,10 +29,12 @@ never edits, even in a project whose `CLAUDE.md` says to fix what you find.
   compliance instead.
 - A fix for a non-trivial correctness problem ships with a test that fails without it. Show that it
   fails in as few commands as possible: set the fix aside as a patch file in your scratch directory,
-  diffed against the branch you started from so it still works once the fix is committed
-  (`git diff <base> -- <the fix's paths, not the test's> > <scratch>/x.patch && git apply -R
-  <scratch>/x.patch`; `git add -N` new files first), run the test, restore with
-  `git apply <scratch>/x.patch`. A test that passes either way pins nothing. Set aside the fix's **own**
+  diffed against the commit you started from (`git merge-base HEAD <base branch>`, not a remote branch
+  that may move mid-task) so it still works once the fix is committed, and named after your own branch
+  with slashes replaced, since parallel makers can share a scratch directory and overwrite each other's
+  patch (`git diff <base> -- <the fix's paths, not the test's> > <scratch>/<branch>.patch && git apply -R
+  <scratch>/<branch>.patch`; `git add -N` new files first), run the test, restore with
+  `git apply <scratch>/<branch>.patch`. A test that passes either way pins nothing. Set aside the fix's **own**
   lines: breaking a neighbour, even one in the same file, proves nothing about the fix. In a compiled
   project, read the build line before believing any verdict — a set-aside that fails to compile can
   leave the previous build's products in place and be reported green — and rebuild after the last
@@ -64,6 +66,8 @@ of all subagent spend: each one re-sent the whole context to do one small thing.
   single Bash call, after a median wait of nine minutes in a 178k context. So don't wait on one: run
   the narrowest test that covers the change between edits, and when the check still left takes longer
   than that, hand it back as the exception above says. The main session queues it on a cheap runner.
+  A hook refuses once a command of the same kind as one that already outlasted the cache in this agent:
+  re-issue it unchanged if it is narrower or needed anyway, otherwise hand it back.
 - Run a build or suite in the foreground, with a timeout long enough for it. Background a command only
   when you have other work to do meanwhile, never to wait on it, and never end your turn while one you
   started is still running: your report is delivered once, when you hand back, so a result that lands

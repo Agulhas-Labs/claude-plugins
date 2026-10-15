@@ -52,7 +52,7 @@ class ModelCeilingTests(unittest.TestCase):
 
     def test_a_haiku_session_caps_a_sonnet_rung_at_haiku(self):
         self.session("claude-haiku-4-5")
-        self.assertEqual(self.call("mechanic")["hookSpecificOutput"]["updatedInput"]["model"], "haiku")
+        self.assertEqual(self.call("builder-lite")["hookSpecificOutput"]["updatedInput"]["model"], "haiku")
 
     def test_an_opus_session_leaves_the_builder_alone(self):
         self.session(SONNET, OPUS)
