@@ -44,10 +44,11 @@ however it spelled the path) is younger, and so is free.
   `cwd`, with `~`, `$HOME` and variables assigned earlier in the same command expanded. A `cd`, `pushd`,
   `popd` or assignment inside a subshell `( … )` or a substitution (`$( … )`, backticks) lasts until the
   group closes, nested groups included; one in a brace group `{ …; }` persists. `pushd` and `popd` keep a
-  directory stack for the line; `popd` on an empty stack stays put, and a rotation (`+N`, `-N`) makes the
-  directory unknown. A directory that still holds an unexpanded variable, or does not exist, is unknown
-  and allowed; so is one inside a repository or worktree that a `git init`, `git clone` or `git worktree
-  add` earlier in the same line creates (below).
+  directory stack for the line, known whole since each call starts a fresh shell, and follow bash: a
+  rotation (`+N`, `-N`) moves to the entry it names, and a call bash rejects (`popd` on an empty stack, an
+  index out of range) stays put. A directory that still holds an unexpanded variable, or does not exist, is
+  unknown and allowed; so is one inside a repository or worktree that a `git init`, `git clone` or `git
+  worktree add` earlier in the same line creates (below).
 - A git command that moves refs every worktree shares (branch -f/-d/-m/-c/-u, update-ref, symbolic-ref
   with two arguments, tag creating or deleting, push, stash, notes add/edit/remove/append/copy/merge/prune,
   worktree add -B, and worktree remove, move or prune of an older worktree) is refused when the
@@ -452,8 +453,10 @@ MOVES_CHECKOUT = {"checkout", "switch", "reset", "restore", "commit", "merge", "
                   "am", "pull", "clean", "rm", "mv", "add", "read-tree"}
 BRANCH_MOVES = {"-f", "--force", "-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy",
                 "-u", "--set-upstream-to", "--unset-upstream", "--edit-description"}
-TAG_LISTS = {"-l", "--list", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "-n", "--sort",
-             "--format", "--column", "-v", "--verify"}
+TAG_READS = {"-l", "--list", "-n", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "-v",
+             "--verify"}  # list and verify modes: nothing they name is created
+TAG_VALUE = {"-m", "--message", "-F", "--file", "--trailer", "--cleanup", "-u", "--local-user", "--contains",
+             "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"}
 NOTES_MOVES = {"add", "edit", "remove", "append", "copy", "merge", "prune"}
 WORKTREE_ADD_VALUE = {"-b", "-B", "--reason", "--orphan"}
 INIT_VALUE = {"--template", "--separate-git-dir", "-b", "--initial-branch", "--object-format", "--ref-format"}
@@ -578,6 +581,34 @@ def stash_moves(args):
     return first not in ("list", "show")
 
 
+def tag_moves(args):
+    """Whether a `git tag` creates or deletes a tag: it does with `-d`, or when it names a tag outside list
+    mode (`-l`, `-n`, a filter such as `--contains`) and verify mode (`-v`). An option's value, a separate
+    word or the rest of a short cluster (`-amx`), is not a name."""
+    seen, names, rest = set(), [], list(args)
+    while rest:
+        word = rest.pop(0)
+        if word == "--":
+            names += rest
+            break
+        if word.startswith("--"):
+            seen.add(word.split("=", 1)[0])
+            if word in TAG_VALUE and rest:
+                rest.pop(0)
+        elif word.startswith("-") and word != "-":
+            for at, letter in enumerate(word[1:], 2):
+                seen.add("-" + letter)
+                if letter in "mFun":  # the rest of the cluster is its value; for -m, -F and -u, else the next word
+                    if letter != "n" and at == len(word) and rest:
+                        rest.pop(0)
+                    break
+        else:
+            names.append(word)
+    if seen & {"-d", "--delete"}:
+        return True
+    return bool(names) and not seen & TAG_READS
+
+
 def moves_checkout(sub, args):
     """Whether a git subcommand moves HEAD, the index or the files of the checkout it runs in."""
     if sub == "checkout" and all(a in ("-q", "--quiet", "--progress", "--no-progress") for a in args):
@@ -604,7 +635,7 @@ def moves_refs(sub, args):
     if sub == "branch":
         return any(a.split("=", 1)[0] in BRANCH_MOVES for a in args)
     if sub == "tag":
-        return bool(args) and not any(a.split("=", 1)[0] in TAG_LISTS or re.fullmatch(r"-n\d+", a) for a in args)
+        return tag_moves(args)
     if sub == "symbolic-ref":
         return any(a in ("-d", "--delete") for a in args) or len(positionals(args, {"-m"})) >= 2
     if sub == "notes":
@@ -640,18 +671,43 @@ def git_call(words, cwd, names, env):
 
 
 def stacked(plain, cwd, stack, names, env):
-    """The directory after a `pushd` or `popd` (`plain`, its words), updating `stack` (the top last) in place.
-    A rotation by `+N`/`-N` is not followed: the directory becomes unknown."""
-    args = [w for w in plain[1:] if w != "--"]
-    if any(re.fullmatch(r"[+-]\d+", w) for w in args):
-        return None
-    keep = "-n" in args  # change the stack only, not the directory
-    target = next((w for w in args if not w.startswith("-")), None)
+    """The directory after a `pushd` or `popd` (`plain`, its words), updating `stack` (the top last) in place,
+    as bash does. In bash's `dirs` order, entry 0 the current directory then the stack from its top, `pushd +N`
+    rotates entry N to the front and changes to it (with `-n`, stays and drops it), `popd +N` removes entry N
+    and changes directory only for 0 (with `-n`, removes entry 1 instead and stays), and `-N` counts from the
+    right. A call bash rejects (an index out of range, `popd` with no stack, a bad option) stays put."""
+    keep, index, target, words = False, None, None, plain[1:]
+    while words:
+        word = words.pop(0)
+        if word == "-n":
+            keep = True  # change the stack only, not the directory
+        elif word == "--":
+            target = words[0] if words and plain[0] == "pushd" else None  # popd ignores what follows
+            break
+        elif re.fullmatch(r"[+-]\d+", word):
+            index = int(word[1:]) if word[0] == "+" else len(stack) - int(word[1:])  # entry `index` of `dirs`
+            if plain[0] == "pushd" and not 0 <= index <= len(stack):
+                return cwd  # pushd checks each index as it reads it
+        elif word == "-" and plain[0] == "pushd":
+            break  # kept as a bare pushd
+        elif word.startswith(("-", "+")):
+            return cwd
+        else:
+            target = word
+            break
     if plain[0] == "popd":
-        if not stack:
-            return cwd  # an empty stack: popd fails and the directory stays
+        if target is not None or not stack or not 0 <= (index or 0) <= len(stack):
+            return cwd  # popd takes no directory, and fails on an empty stack or an index out of range
+        if index:
+            del stack[len(stack) - index]
+            return cwd
         top = stack.pop()
         return cwd if keep else top
+    if index is not None:
+        entries = [cwd, *reversed(stack)]
+        entries = entries[index:] + entries[:index]
+        stack[:] = reversed(entries[1:])
+        return cwd if keep else entries[0]
     if target is None:  # a bare pushd swaps the directory with the top of the stack
         if not stack:
             return cwd

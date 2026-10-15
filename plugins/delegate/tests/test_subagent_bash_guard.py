@@ -357,6 +357,7 @@ class ReviewerTests(Fixture):
                             f"git clone -q {self.checkout} .build/rv{sep}cd .build/rv{sep}git reset --hard HEAD~1",
                             f"git clone -q {self.checkout} {leftover}{sep}git -C {leftover} branch -f main HEAD"):
                 self.assertTrue(self.refused(command), command)
+        os.makedirs(os.path.join(self.checkout, ".build", "new"))  # there and empty: git adds into it
         self.assertFalse(self.refused("git worktree add .build/new HEAD && cd .build/new && git checkout -b probe"))
 
     def test_a_new_repository_does_not_hold_an_older_checkout_nested_inside_it(self):
@@ -394,23 +395,34 @@ class ReviewerTests(Fixture):
         s, c = self.scratch, self.checkout
         for command in (f"(cd {s} && ls); git checkout main", f"x=$(cd {s}; pwd); git checkout main",
                         f"y=`cd {s}`; git reset --hard", f"pushd {s} && popd && git checkout main",
-                        f"(cd {s}; (cd /); ls) && git stash", f"x=$(cd {s}; y=`cd /; pwd`; pwd); git checkout main"):
+                        f"(cd {s}; (cd /); ls) && git stash", f"x=$(cd {s}; y=`cd /; pwd`; pwd); git checkout main",
+                        # The line's stack is known whole, so a rotation is followed as bash follows it.
+                        f"pushd {s} && pushd +1 && git checkout main", f"pushd {s} && pushd -0 && git checkout main",
+                        f"popd +0; git checkout main", f"pushd {s} && pushd {s} && popd +0 && popd +0 && git checkout main",
+                        f"cd {s} && pushd {c} && pushd -n +1 && git checkout main",
+                        f"pushd +1; git checkout main", f"cd {s} && pushd {c} -n && git checkout main"):
             with self.subTest(command=command):
                 self.assertTrue(self.refused(command))
         for command in (f"{{ cd {s}; }}; git checkout main", f"(cd {s} && git init -q n && cd n && git checkout -b x)",
                         f"pushd {s} && git checkout main", f"cd {s} && pushd {c} && popd && git checkout main",
                         f"(cd {c}; cd {s}; git checkout main)", f"popd; cd {s} && popd && git checkout main",
-                        f"pushd {s} && pushd +1 && git checkout main",
+                        f"pushd {s} && pushd {c} && pushd +1 && git checkout main",
+                        f"pushd {s} && popd +1 && git checkout main", f"pushd {s} && pushd {c} && popd -0 && popd && git checkout main",
                         # D is unknown once its group closes, so the cd target cannot be told: allowed, as before.
                         f"(D={s}); cd $D 2>/dev/null; git checkout main"):
             with self.subTest(command=command):
                 self.assertFalse(self.refused(command))
 
     def test_list_forms_of_tag_and_stash_with_options_are_reads(self):
-        for command in ("git tag -n5", "git tag -n 5", "git tag -n5 'v*'", "git stash -q list", "git stash --quiet show"):
+        for command in ("git tag -n5", "git tag -n 5", "git tag -n5 'v*'", "git stash -q list", "git stash --quiet show",
+                        "git tag --sort=-v:refname", "git tag --sort refname", "git tag --format='%(refname)'",
+                        "git tag --sort=refname -l 'v*'", "git tag --contains abc", "git tag -l -- v9", "git tag -n x"):
             with self.subTest(command=command):
                 self.assertFalse(self.refused(command))
-        for command in ("git stash -q", "git stash -q pop", "git stash -m list"):
+        for command in ("git stash -q", "git stash -q pop", "git stash -m list", "git tag --sort=refname newtag",
+                        "git tag --sort refname newtag", "git tag --format '%(refname)' newtag", "git tag -m x v2",
+                        "git tag -a -m x v2", "git tag -am x v2", "git tag -amx v2", "git tag -f v1 HEAD", "git tag -d v1",
+                        "git tag --column newtag", "git tag -m -l v2", "git tag -- v9", "git tag --color always"):
             with self.subTest(command=command):
                 self.assertTrue(self.refused(command))
 
