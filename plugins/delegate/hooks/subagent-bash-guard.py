@@ -41,11 +41,18 @@ however it spelled the path) is younger, and so is free.
   Its directory is `git -C`, else the last `cd` before it in the line, else the call's `cwd`, with `~`,
   `$HOME` and variables assigned earlier in the same command expanded. A directory that still holds an
   unexpanded variable, or does not exist, is unknown and allowed; so is one inside a repository or
-  worktree that a `git init`, `git clone` or `git worktree add` earlier in the same line creates.
+  worktree that a `git init`, `git clone` or `git worktree add` earlier in the same line creates (below).
 - A git command that moves refs every worktree shares (branch -f/-d/-m/-c/-u, update-ref, symbolic-ref
   with two arguments, tag creating or deleting, push, stash, notes add/edit/remove/append/copy/merge/prune,
   worktree add -B, and worktree remove, move or prune of an older worktree) is refused when the
-  repository (its common git directory) is older, from whatever directory it runs.
+  repository (its common git directory) is older, from whatever directory it runs; unless the directory
+  lies in a repository that a `git init` or `git clone` earlier in the same line creates.
+
+What a line creates: `git init` makes a repository in a directory with no `.git` entry, empty or not;
+`git clone` and `git worktree add` make one only in a directory that is missing or empty, since git
+refuses any other (and a line joined by `;` goes on into the older checkout). A call is in what the line
+created only if no `.git` lies between the two: a checkout already nested inside the new one is its own,
+older, repository.
 
 Creation time is `st_birthtime` where the platform keeps it. Elsewhere it is the oldest modification time
 among the `.git` entry and, for a directory, its immediate entries: a worktree's `.git` file is written
@@ -612,8 +619,17 @@ def walk(command, cwd, env):
     following `cd` and assignments."""
     found, names, new_checkouts, new_repos = [], {}, set(), set()
 
-    def fresh(path):
-        return path is not None and not os.path.lexists(os.path.join(path, ".git"))
+    def fresh(path, sub):
+        """Whether `sub` makes a new repository or worktree at `path`: git init does in any directory with no
+        `.git`; git clone and git worktree add refuse a directory that is there and not empty."""
+        if path is None or os.path.lexists(os.path.join(path, ".git")):
+            return False
+        if sub == "init" or not os.path.lexists(path):
+            return True
+        try:
+            return os.path.isdir(path) and not os.listdir(path)
+        except OSError:
+            return False
 
     for words in segments(command):
         plain = core(words)
@@ -641,13 +657,13 @@ def walk(command, cwd, env):
                 target = resolve(here, re.sub(r"\.git$", "", spots[0].rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1]), names, env)
             else:
                 target = None
-            if fresh(target):
+            if fresh(target, sub):
                 new_checkouts.add(target)
                 new_repos.add(target)
         elif here is not None and sub == "worktree" and args[:1] == ["add"]:
             target = next(iter(positionals(args[1:], WORKTREE_ADD_VALUE)), None)
             target = resolve(here, target, names, env) if target else None
-            if fresh(target):
+            if fresh(target, sub):
                 new_checkouts.add(target)
         found.append((here, sub, args, set(new_checkouts), set(new_repos), dict(names)))
     return found
@@ -670,6 +686,13 @@ def stale_worktrees(common):
     return stale
 
 
+def covers(root, here, entry):
+    """Whether what the line created at `root` holds a call in `here`, whose nearest `.git` is `entry`:
+    `here` is inside it, and that `.git` does not belong to a checkout nested strictly inside it."""
+    owner = os.path.dirname(entry)
+    return inside(here, root) and (owner == root or not inside(owner, root))
+
+
 def refusal(here, sub, args, new_checkouts, new_repos, start, names, env):
     """Why this git call must not run, or None."""
     if here is None or not os.path.isdir(here):
@@ -688,11 +711,11 @@ def refusal(here, sub, args, new_checkouts, new_repos, start, names, env):
         if common and any(older(admin, start) for admin in stale_worktrees(common)):
             return "worktree"
         return None
-    if moves_refs(sub, args) and not any(inside(here, r) for r in new_repos):
+    if moves_refs(sub, args) and not any(covers(r, here, entry) for r in new_repos):
         common = common_dir(entry)
         if common and older(common, start):
             return "refs"
-    if moves_checkout(sub, args) and not any(inside(here, c) for c in new_checkouts) and older(entry, start):
+    if moves_checkout(sub, args) and not any(covers(c, here, entry) for c in new_checkouts) and older(entry, start):
         return "checkout"
     return None
 

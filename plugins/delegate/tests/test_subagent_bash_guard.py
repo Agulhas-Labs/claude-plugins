@@ -66,11 +66,11 @@ class Fixture(unittest.TestCase):
             for e in entries:
                 f.write(json.dumps(e) + "\n")
 
-    def payload(self, command, agent_type=f"{NAME}:builder", agent="a1", background=False):
+    def payload(self, command, agent_type=f"{NAME}:builder", agent="a1", background=False, cwd=None):
         tool_input = {"command": command, "description": "run"}
         if background:
             tool_input["run_in_background"] = True
-        payload = {"session_id": "s", "transcript_path": self.parent, "cwd": self.checkout,
+        payload = {"session_id": "s", "transcript_path": self.parent, "cwd": cwd or self.checkout,
                    "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": tool_input,
                    "tool_use_id": "toolu_now", "agent_type": agent_type}
         if agent:
@@ -272,8 +272,8 @@ class ReviewerTests(Fixture):
             timespec="milliseconds").replace("+00:00", "Z"), "message": {"role": "user", "content": "Review"}}
         super().write(opening, *entries)
 
-    def refused(self, command, env=ENV):
-        said = self.reason(command, agent_type=self.REVIEWER, env=env)
+    def refused(self, command, env=ENV, cwd=None):
+        said = self.reason(command, agent_type=self.REVIEWER, env=env, cwd=cwd)
         return said is not None and guard.REVIEWER_TAG in said
 
     def test_commands_that_move_the_checkout_it_started_in_are_refused_anywhere_in_a_line(self):
@@ -346,6 +346,36 @@ class ReviewerTests(Fixture):
         later = os.path.join(self.checkout, ".build", "rv")
         os.makedirs(later)
         self.assertFalse(self.refused(f"S={self.checkout}/.build; git worktree add --detach $S/rv HEAD && cd $S/rv && git checkout -b probe"))
+
+    def test_a_failed_add_or_clone_into_a_directory_that_is_not_empty_makes_nothing(self):
+        leftover = os.path.join(self.checkout, ".build", "rv")
+        os.makedirs(leftover)
+        with open(os.path.join(leftover, "log"), "w", encoding="utf-8") as f:
+            f.write("x\n")  # git refuses to add or clone into it, and the line goes on in the older checkout
+        for sep in ("; ", "\n"):
+            for command in (f"git worktree add .build/rv HEAD{sep}cd .build/rv{sep}git checkout -b probe",
+                            f"git clone -q {self.checkout} .build/rv{sep}cd .build/rv{sep}git reset --hard HEAD~1",
+                            f"git clone -q {self.checkout} {leftover}{sep}git -C {leftover} branch -f main HEAD"):
+                self.assertTrue(self.refused(command), command)
+        self.assertFalse(self.refused("git worktree add .build/new HEAD && cd .build/new && git checkout -b probe"))
+
+    def test_a_new_repository_does_not_hold_an_older_checkout_nested_inside_it(self):
+        for command in (f"git init -q {self.root} && cd {self.checkout} && git checkout -b x",
+                        f"git init -q {self.root}; git -C {self.checkout} branch -f main HEAD",
+                        f"cd {self.root} && git init -q && cd sibling && git reset --hard"):
+            self.assertTrue(self.refused(command), command)
+
+    def test_an_add_or_init_where_a_git_entry_is_already_there_makes_nothing(self):
+        for command in ("git worktree add . && git checkout main", "git worktree add . HEAD; git checkout main",
+                        "git init -q . && git checkout main", "git init -q; git branch -f main HEAD"):
+            self.assertTrue(self.refused(command), command)
+
+    def test_git_dir_and_work_tree_name_the_directory_whatever_the_cwd(self):
+        for command in (f"git --git-dir={self.checkout}/.git --work-tree={self.checkout} checkout x",
+                        f"git --work-tree={self.checkout} --git-dir={self.checkout}/.git reset --hard",
+                        f"git --git-dir={self.checkout}/.git branch -f main HEAD",
+                        f"git --work-tree={self.sibling} reset --hard"):
+            self.assertTrue(self.refused(command, cwd=self.scratch), command)
 
     def test_a_nested_worktree_made_after_the_reviewer_started_is_its_own(self):
         nested = os.path.join(self.checkout, ".build", "rv")
