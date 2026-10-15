@@ -14,7 +14,8 @@ spec.loader.exec_module(gates)
 with open(os.path.join(ROOT, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
     NAME = json.load(f)["name"]
 ENV = {"CLAUDE_PLUGIN_ROOT": ROOT}
-GATED = "Do it.\nG1 it works — CHECK: `make test` — EXPECT: OK\n"
+GATES_ONLY = "Do it.\nG1 it works — CHECK: `make test` — EXPECT: OK\n"
+GATED = GATES_ONLY + "Rung: builder — security\n"
 BARE = "Do it, carefully, and tell me when done."
 
 
@@ -163,6 +164,47 @@ class HandoffGatesTests(unittest.TestCase):
     def test_the_switch_turns_it_off(self):
         self.assertIsNone(self.call(env=dict(ENV, DELEGATE_HANDOFF_GATES="0")))
         self.reason(self.call(env=dict(ENV, DELEGATE_HANDOFF_GATES="1")))
+
+    def test_a_builder_with_gates_and_no_class_line_is_denied(self):
+        reason = self.reason(self.call(GATES_ONLY))
+        self.assertIn("Rung: builder", reason)
+        self.assertIn("names no builder class", reason)
+        self.assertNotIn("no gate line", reason)
+
+    def test_each_accepted_class_spelling_is_allowed(self):
+        for line in ("Rung: builder — security", "- **Rung:** builder - process lifecycle",
+                     "Rung: builder: Classification", "Rung: builder — builder-lite failed its gates twice",
+                     "Rung: builder — sets aside work", "Rung: builder — restores work"):
+            self.assertIsNone(self.call(GATES_ONLY + line + "\n"), line)
+
+    def test_a_class_line_in_a_named_file_counts(self):
+        path = self.file("handoff.md", GATED)
+        self.assertIsNone(self.call(f"Read {path} and do it."))
+
+    def test_neither_is_refused_once_naming_both(self):
+        reason = self.reason(self.call())
+        self.assertIn("no gate line and names no builder class", reason)
+        self.assertIn("Rung: builder", reason)
+        self.write([use("t1", f"{NAME}:builder", BARE), result("t1", reason)])
+        self.assertIsNone(self.call())
+
+    def test_the_class_check_skips_lite_a_named_model_and_the_switch(self):
+        self.assertIsNone(self.call(GATES_ONLY, rung="builder-lite"))
+        payload = {"transcript_path": self.transcript, "tool_name": "Agent",
+                   "tool_input": {"prompt": GATES_ONLY, "subagent_type": f"{NAME}:builder", "model": "opus"}}
+        self.assertIsNone(gates.decision(payload, ENV))
+        self.assertIsNone(self.call(GATES_ONLY, env=dict(ENV, DELEGATE_BUILDER_CLASS="0")))
+
+    def test_a_wrong_rung_or_a_set_aside_gate_is_not_a_class(self):
+        self.reason(self.call(GATES_ONLY + "Rung: builder-lite — security\n"))
+        self.reason(self.call(GATES_ONLY + "Rung: builder\nRung: builder — because it is hard\n"))
+        self.reason(self.call("G1 the fix is set aside — CHECK: `git apply -R p` — EXPECT: FAILED\n"
+                              "G2 negative: set the fix aside — CHECK: `make` — EXPECT: red\n"))
+
+    def test_with_the_class_check_off_a_gateless_builder_gets_the_gates_only_reason(self):
+        reason = self.reason(self.call(env=dict(ENV, DELEGATE_BUILDER_CLASS="0")))
+        self.assertEqual(reason, self.reason(self.call(rung="builder-lite")).replace(f"{NAME}:builder-lite", f"{NAME}:builder"))
+        self.assertNotIn("class", reason)
 
     def test_it_is_registered_after_model_ceiling_on_agent(self):
         with open(os.path.join(ROOT, "hooks", "hooks.json"), encoding="utf-8") as f:
