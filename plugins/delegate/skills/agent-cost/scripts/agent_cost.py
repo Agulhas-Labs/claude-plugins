@@ -215,10 +215,12 @@ def input_equivalent(usage, model=None):
 # List input price in dollars per million tokens, by model family, in the order tried: the first key the
 # reduced model id contains wins, so `opus55` is tried before `opus`. Output is OUTPUT_MULTIPLIER times
 # input for every model here. Copied from INPUT_PRICES and OUTPUT_MULTIPLIER in the cache-guard plugin's
-# hooks/cache_guard.py; keep in step with it. A model this table cannot place has no price.
+# hooks/cache_guard.py; keep in step with it. A model this table cannot place has no price. Opus 3, 4 and
+# 4.1 list at three times the later generations, so every 4.x after them needs a key ahead of `opus4`.
 INPUT_PRICES = (
     ("fable51", 10.00), ("fable", 10.00),
-    ("opus55", 4.00), ("opus", 5.00),
+    ("opus55", 4.00), ("opus47", 5.00), ("opus46", 5.00), ("opus45", 5.00),
+    ("opus41", 15.00), ("opus4", 15.00), ("3opus", 15.00), ("opus", 5.00),
     ("sonnet5", 2.00), ("sonnet4", 3.00),
     ("haiku55", 0.10),  # the list price up to 100k tokens of prompt; past that it is $0.50
     ("haiku", 1.00),
@@ -460,20 +462,28 @@ class Context:
 # hook is a tool result, not the hook speaking.
 EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
 
-HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?(?:\n\s*\2(?=\s|$)|\Z)", re.S)
-QUOTED_TARGET = re.compile(r"(>>?\s*)([\"'])([^\"'\s]*)\2")
+HEREDOC = re.compile(r"(<<-?\s*(['\"]?)(\w+)\2[^\n]*\n).*?(?:\n\s*\3(?=\s|$)|\Z)", re.S)   # keeps the opening line
+UNQUOTE = re.compile(r"(>>?\s*|\bcd\s+|\btee\s+(?:-\w+\s+)*|\b\w+=)([\"'])([^\"'\s]*)\2")
 QUOTED = re.compile(r"\"[^\"]*\"|'[^']*'")
-REDIRECT = re.compile(r"(?<![\d&<>])>>?\s*([^\s|;&<>()]+)")
-SED_PERL_INPLACE = re.compile(r"(?:^|[\s;&|(])(?:sed|perl)\s(?:[^\n;&|]*\s)?(?:-[A-Za-z]*i|--in-place)")
+ARITHMETIC = re.compile(r"\(\(.*?\)\)", re.S)
+# What the one command does to shell state, in order: a variable assignment, a cd, a tee or a redirect.
+SHELL_EVENT = re.compile(r"(?:^|(?<=[\s;&|(]))(?P<name>[A-Za-z_]\w*)=(?P<val>[^\s;&|()<>]*)"
+                         r"|(?:^|[;&|(\n]|\b(?:then|do|else)(?=\s))\s*cd\s+(?P<dir>[^\s;&|()<>]+)"
+                         r"|(?:^|[;&|(\n]|\b(?:then|do|else)(?=\s))\s*tee\s+(?:-[a-z]+\s+)*(?P<tee>[^\s|;&<>()-][^\s|;&<>()]*)"
+                         r"|(?<![\d&<>])>>?\s*(?P<redir>[^\s|;&<>()]+)")
+SHELL_VAR = re.compile(r"\$(\w+)|\$\{(\w+)\}")
+# perl's -M, -m and -I take the rest of the word as a value, so the letters after them are not flags.
+SED_PERL_INPLACE = re.compile(r"(?:^|[\s;&|(])(?:sed|perl)\s(?:[^\n;&|]*\s)?(?:-[A-HJ-LN-Za-ln-z]*i|--in-place)")
 GIT_APPLY = re.compile(r"\bgit\s+(?:-C\s+\S+\s+)?apply\b")
 GIT_APPLY_READONLY = re.compile(r"--(?:check|stat|numstat|summary)\b")
-PATCH_CMD = re.compile(r"(?:^|[;&|(])\s*patch\b")
-TEE_CMD = re.compile(r"(?:^|[;&|(])\s*tee\s+(?:-[a-z]+\s+)*([^\s|;&<>()-][^\s|;&<>()]*)")
-PYTHON_RUN = re.compile(r"(?:^|[\s;&|(])python[\d.]*\b")
-PYTHON_WRITE = re.compile(r"\bopen\s*\(.*?,\s*(?:mode\s*=\s*)?['\"][rwaxbt+U]*[wax][rwaxbt+U]*['\"]"
-                          r"|\.open\(\s*(?:mode\s*=\s*)?['\"][rwaxbt+U]*[wax][rwaxbt+U]*['\"]"
+PATCH_CMD = re.compile(r"(?:^|[;&|(])\s*patch\b", re.M)
+PYTHON_RUN = re.compile(r"(?:^|[\s;&|(/])python[\d.]*\b")
+_MODE = r"['\"][rwaxbt+U]*[wax][rwaxbt+U]*['\"]"
+PYTHON_WRITE = re.compile(r"\bopen\s*\((?:[^()]|\([^()]*\))*?,\s*(?:mode\s*=\s*)?" + _MODE +
+                          r"|\.open\(\s*(?:mode\s*=\s*)?" + _MODE +
                           r"|\.write_(?:text|bytes)\(")
-SCRATCH_PREFIXES = ("/dev/", "/tmp/", "/private/tmp/", "/var/folders/", "$TMPDIR", "${TMPDIR}")
+SCRATCH_PREFIXES = ("/dev/", "/tmp/", "/private/tmp/", "/var/folders/", "$TMPDIR", "${TMPDIR}",
+                    "~/Library/Caches/", "$HOME/Library/Caches/", "${HOME}/Library/Caches/")
 
 
 def writes_to_file(target):
@@ -487,45 +497,72 @@ def writes_to_file(target):
 def edits_files(command):
     """Whether a Bash command edits a file: an in-place sed or perl, git apply that is not a dry run, patch,
     tee or a redirect into a file outside scratch space, or a Python run that opens a file for writing or
-    calls write_text/write_bytes. Meant to be read as 'the maker started editing', not as a safety check."""
+    calls write_text/write_bytes. Shell state does not persist between Bash calls, so a variable assigned
+    or a cd made earlier in the same command is resolved before the scratch test, and an unresolved
+    variable target counts as an edit. Meant to be read as 'the maker started editing', not as a safety
+    check."""
     command = command or ""
-    if SED_PERL_INPLACE.search(command) or PATCH_CMD.search(command):
+    if PATCH_CMD.search(command):
         return True
     if GIT_APPLY.search(command) and not GIT_APPLY_READONLY.search(command):
         return True
     if PYTHON_RUN.search(command) and PYTHON_WRITE.search(command):
         return True
-    bare = HEREDOC.sub("", command)
-    if any(writes_to_file(t) for t in TEE_CMD.findall(bare)):
+    bare = QUOTED.sub("Q", UNQUOTE.sub(r"\1\3", HEREDOC.sub(r"\1", command)))
+    if SED_PERL_INPLACE.search(bare):
         return True
-    bare = QUOTED.sub("Q", QUOTED_TARGET.sub(r"\1\3", bare))
-    return any(writes_to_file(t) for t in REDIRECT.findall(bare))
+    env, in_scratch = {}, False
+    expand = lambda text: SHELL_VAR.sub(lambda m: env.get(m.group(1) or m.group(2), m.group(0)), text)
+    for m in SHELL_EVENT.finditer(ARITHMETIC.sub(" ", bare)):
+        if m.group("name"):
+            env[m.group("name")] = expand(m.group("val"))
+        elif m.group("dir"):
+            d = expand(m.group("dir"))
+            if d.startswith(("/", "~", "$")):
+                in_scratch = not writes_to_file(d + "/")
+            else:
+                in_scratch = in_scratch and ".." not in d.split("/") and d != "-"
+        else:
+            t = expand(m.group("tee") or m.group("redir"))
+            relative = not t.startswith(("/", "~", "$")) and ".." not in t.split("/")
+            if writes_to_file(t) and not (in_scratch and relative):
+                return True
+    return False
 
 
-HANDOFF_FILE = re.compile(r"(?<![\w.~/-])(?:~/|/)[\w./~+@-]*\.(?:md|txt)(?![\w/])")
+# Copied from hooks/handoff-gates.py (PATH, FILE_MAX, FILES_MAX); they must stay in step with it.
+HANDOFF_FILE = re.compile(r"(?<![\w.:/~-])(?:~/|/)[^\s`'\"()\[\]<>]*?\.(?:md|txt)(?![\w/-])")
 HANDOFF_FILE_LIMIT = 256 * 1024
 HANDOFF_FILES_PER_PROMPT = 5
 
 
 def read_handoff(prompt):
     """(the prompt followed by the text of each file it names, how many named files were not on disk).
-    A named file is an absolute or ~/ path ending .md or .txt, at most five per prompt, read at most 256 KB
-    and only if it exists when the report runs."""
-    texts, missing, seen = [prompt or ""], 0, []
+    The same rule as handoff() in hooks/handoff-gates.py: a named file is an absolute or ~/ path ending .md
+    or .txt (not one inside a URL), deduplicated by expanded path; a file that is not on disk or is over
+    256 KB is skipped without using up the allowance of five files read. The count of files not on disk
+    covers every distinct named path, past the five."""
+    texts, missing, seen, gone = [prompt or ""], 0, [], []
     for token in HANDOFF_FILE.findall(prompt or ""):
-        if token not in seen:
-            seen.append(token)
-    for token in seen[:HANDOFF_FILES_PER_PROMPT]:
         path = os.path.expanduser(token)
+        if path in seen or path in gone:
+            continue
         try:
             if not os.path.isfile(path):
+                gone.append(path)
                 missing += 1
-            elif os.path.getsize(path) <= HANDOFF_FILE_LIMIT:
-                with open(path, encoding="utf-8", errors="replace") as f:
-                    texts.append(f.read())
+                continue
+            if os.path.getsize(path) > HANDOFF_FILE_LIMIT:
+                continue
+            seen.append(path)
+            if len(seen) > HANDOFF_FILES_PER_PROMPT:
+                continue
+            with open(path, encoding="utf-8", errors="replace") as f:
+                texts.append(f.read())
         except OSError:
-            missing += 1
+            continue
     return "\n".join(texts), missing
+
 
 HAND_BACK_NUDGE = re.compile(r"Context budget: this agent's context is now \d+k tokens"
                              r".*?(?:Finish only the item in hand|Stop here, even mid-item)")

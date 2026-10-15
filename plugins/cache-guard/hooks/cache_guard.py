@@ -93,6 +93,12 @@ INPUT_PRICES = {
     "fable51": 10.00,
     "fable": 10.00,
     "opus55": 4.00,
+    "opus47": 5.00,
+    "opus46": 5.00,
+    "opus45": 5.00,
+    "opus41": 15.00,  # Opus 4 and 4.1 list at three times the later generations, so every 4.x after
+    "opus4": 15.00,   # them needs a row ahead of these two
+    "3opus": 15.00,   # Claude 3 Opus, whose id puts the generation before the family
     "opus": 5.00,
     "sonnet5": 2.00,
     "sonnet4": 3.00,

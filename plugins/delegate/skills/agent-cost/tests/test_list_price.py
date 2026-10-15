@@ -31,10 +31,17 @@ def pure(input_tokens, output_tokens=0):
 class PriceLookupTests(unittest.TestCase):
     def test_the_more_specific_family_wins_and_dated_ids_match(self):
         self.assertEqual(ac.input_price("claude-opus-5-5"), 4.00)
-        self.assertEqual(ac.input_price("claude-opus-4-1-20250805"), 5.00)
         self.assertEqual(ac.input_price("claude-sonnet-5-5"), 2.00)
         self.assertEqual(ac.input_price("claude-haiku-5-5"), 0.10)
         self.assertEqual(ac.input_price("claude-fable-5-1"), 10.00)
+
+    def test_opus_four_and_four_one_list_at_three_times_the_later_generations(self):
+        for model, price in (("claude-opus-4-20250514", 15.00), ("claude-opus-4-1-20250805", 15.00),
+                             ("claude-3-opus-20240229", 15.00),
+                             ("claude-opus-4-5-20251101", 5.00), ("claude-opus-4-6", 5.00),
+                             ("claude-opus-4-7", 5.00), ("claude-opus-5", 5.00), ("claude-opus-5-5", 4.00)):
+            with self.subTest(model=model):
+                self.assertEqual(ac.input_price(model), price)
 
     def test_an_unplaceable_model_has_no_price(self):
         self.assertIsNone(ac.input_price("mystery-model"))
@@ -44,6 +51,20 @@ class PriceLookupTests(unittest.TestCase):
     def test_a_turn_costs_input_eq_plus_five_times_output_at_the_input_price(self):
         self.assertAlmostEqual(ac.list_dollars(M, 0, "claude-opus-5-5"), 4.00)
         self.assertAlmostEqual(ac.list_dollars(0, M, "claude-sonnet-5-5"), 10.00)
+
+    def test_cache_reads_and_writes_are_priced_as_input_eq_not_as_raw_context(self):
+        sonnet = {"input_tokens": 100_000, "cache_read_input_tokens": M, "cache_creation_input_tokens": 200_000,
+                  "output_tokens": 10_000}
+        opus = {"input_tokens": 0, "cache_read_input_tokens": 2 * M, "output_tokens": 0,
+                "cache_creation": {"ephemeral_5m_input_tokens": 400_000, "ephemeral_1h_input_tokens": 0}}
+        loaded = loaded_for("subagent", "builder", "c", [("claude-sonnet-5-5", sonnet), ("claude-opus-5-5", opus)])
+        # Sonnet 5.5: 100k + 1M read at a tenth + 200k written at 1.25 = 450k at $2, plus 10k output at $10.
+        # Opus 5.5: 2M read at a twentieth + 400k written at 1.25 = 600k at $4. Raw context would be $5.70 more.
+        self.assertAlmostEqual(loaded.window_turns[0]["usd"], 1.00)
+        self.assertAlmostEqual(loaded.window_turns[1]["usd"], 2.40)
+        out = []
+        ac.section_totals(out, [loaded])
+        self.assertIn("list $   $3.40", next(l for l in out if l.startswith("  subagent")))
 
     def test_dollars_format_compactly(self):
         self.assertEqual([ac.fmt_usd(v) for v in (1234, 85.4, 0.4, None)], ["$1.2k", "$85", "$0.40", "-"])
