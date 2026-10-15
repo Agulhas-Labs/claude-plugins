@@ -66,8 +66,8 @@ of all subagent spend: each one re-sent the whole context to do one small thing.
   single Bash call, after a median wait of nine minutes in a 178k context. So don't wait on one: run
   the narrowest test that covers the change between edits, and when the check still left takes longer
   than that, hand it back as the exception above says. The main session queues it on a cheap runner.
-  The first time you start a command of the same kind as one that already outlasted the cache here, a
-  hook refuses it: re-issue it unchanged if it is narrower or needed anyway, otherwise hand it back.
+  The first time you repeat a build or test that already outlasted the cache here, a hook refuses it:
+  run a narrower one, re-issue it unchanged if it is needed anyway, or hand it back.
 - Run a build or suite in the foreground, with a timeout long enough for it. Background a command only
   when you have other work to do meanwhile, never to wait on it, and never end your turn while one you
   started is still running: your report is delivered once, when you hand back, so a result that lands

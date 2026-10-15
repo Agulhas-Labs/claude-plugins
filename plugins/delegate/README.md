@@ -83,18 +83,20 @@ wait of nine minutes; cold turns were 2.6% of subagent spend, and agents that we
 held 74% of it, so the first cold wait predicts the next.
 
 A third hook, the long-run guard, acts before the wait rather than after it. When a subagent is about to
-run a command of the same kind (a build or test of the same tool, say) as one that already outlasted the
-prompt cache in that agent, it refuses the call once, naming the earlier wait and the context size.
-Re-issuing the identical command runs it. Measured on one machine over seven days: 268 cold subagent turns
+repeat a build or test (the same command with the same arguments, whatever `cd`, wrappers or pipes surround
+it) that already outlasted the prompt cache in that agent, it refuses the call once, naming the earlier wait
+and the context size. Re-issuing the identical command runs it, a narrower run (a test filter, say) is not
+refused, and nothing but a build or test ever is. Measured on one machine over seven days: 268 cold subagent turns
 followed a Bash call, 193 of them a build or test, after a median wait of 9 minutes in a 72k context; the
 56 agents that went cold two or more times held 54% of the avoidable cost; and with only the after-the-fact
 line above, the cold share rose from 7.1% to 8.6% of subagent spend. `DELEGATE_LONG_RUN_GUARD=0` turns it
 off, and the line above stays.
 
-The same hook guards the reviewer: a `reviewer` cannot run git commands that move HEAD, the index, the
-worktree or refs (checkout, switch, reset, stash, commit, merge and the like) except inside a worktree it
-added itself, where it builds and tests a revision. Observed once: a reviewer detached HEAD in the
-checkout other agents were using. `DELEGATE_REVIEWER_GUARD=0` turns it off.
+The same hook guards the reviewer: a `reviewer` cannot run git commands that move a checkout (checkout,
+switch, reset, stash, commit, merge and the like) that existed before it started, or that move refs every
+worktree of such a repository shares (forcing or deleting a branch, tags, push, the stash). Worktrees and
+repositories it made itself, where it builds and tests a revision, are its own. Observed once: a reviewer
+detached HEAD in the checkout other agents were using. `DELEGATE_REVIEWER_GUARD=0` turns it off.
 
 A fourth hook reads each handoff to a `builder` or `builder-lite`. One with no gate line
 (`G<n> <outcome> — CHECK: <command> — EXPECT: <token>`), in the prompt or in a `.md` or `.txt` file the
@@ -187,10 +189,9 @@ anything that isn't a positive integer means the default.
 
 Four more switches turn a hook off when set to `0`; any other value leaves it on:
 
-- `DELEGATE_LONG_RUN_GUARD`: the refusal of a command of the same kind as one that already outlasted the
-  cache.
-- `DELEGATE_REVIEWER_GUARD`: the block on a reviewer's git commands that move HEAD, the index, the
-  worktree or refs.
+- `DELEGATE_LONG_RUN_GUARD`: the refusal of a repeat of a build or test that already outlasted the cache.
+- `DELEGATE_REVIEWER_GUARD`: the block on a reviewer's git commands that move a checkout, or shared refs,
+  that existed before it started.
 - `DELEGATE_HANDOFF_GATES`: the refusal of a maker handoff with no gate line.
 - `DELEGATE_MAIN_BUDGET`: the context-budget tier for your own session.
 
@@ -221,8 +222,8 @@ Every tool definition an agent carries is re-sent each turn, so the roster trims
 short `tools:` allowlist. The others get everything except the built-ins no coding job uses, listed in
 `disallowedTools`, and keep all your MCP servers, which load on demand. `reviewer` is also denied `Write`, `Edit`
 and `NotebookEdit`. It keeps `Bash` to build and test, and the reviewer guard (see
-[How it works](#how-it-works)) stops its git commands from moving HEAD, the index, the worktree or refs
-outside a worktree it added itself.
+[How it works](#how-it-works)) stops its git commands from moving a checkout, or a repository's shared
+refs, that existed before it started.
 
 Ask for the `agent-cost` report with `--tools` to see what each agent type actually called. To add a tool, take it out
 of `disallowedTools` (or add it to `runner`'s `tools:`); to drop one, add it there. MCP tools are named

@@ -25,10 +25,11 @@ Start a new session after installing. None of them needs configuring.
 Your session plans and judges on the model you chose. Haiku runs commands, Sonnet makes changes that are
 already spelled out, and Opus writes the code that still has decisions in it, then reviews the result
 without having seen how it was made. A hook warns an agent as its context grows: freeze scope at 120k,
-hand back at 150k, stop at 200k. Further hooks refuse a repeat of a command that already outlasted the
-cache and a maker handoff with no gate line (each lets an identical re-issue through once), and a
-reviewer's git commands that move HEAD (a retry is refused again). At most 4 agents run at once, and you can change that. No agent runs on a
-model above your session's.
+hand back at 150k, stop at 200k. Further hooks refuse a repeat of a build or test that already outlasted
+the cache and a maker handoff with no gate line (each lets an identical re-issue through once), and a
+reviewer's git commands that move a checkout, or the branches and tags of a repository, that existed
+before it started (a retry is refused again). At most 4 agents run at once, and you can change that. No
+agent runs on a model above your session's.
 
 Ask "where did my tokens go this week?" and its `agent-cost` report answers from your local transcripts,
 down to which projects, sessions and subagents cost the most. Each section says what to do about what it
