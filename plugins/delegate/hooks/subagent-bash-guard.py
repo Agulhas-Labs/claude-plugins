@@ -49,12 +49,15 @@ however it spelled the path) is younger, and so is free.
   index out of range) stays put. A directory that still holds an unexpanded variable, or does not exist, is
   unknown and allowed; so is one inside a repository or worktree that a `git init`, `git clone` or `git
   worktree add` earlier in the same line creates (below). A `cd`, `pushd` or `popd` into a directory
-  that is not there when the hook runs may fail and leave the shell where it was. Calls joined to it by `&&` (a pipe
+  that is not there when the hook runs, and that no `mkdir` or `git init` earlier in the line makes, may fail and leave the shell where it was. Calls joined to it by `&&` (a pipe
   within that chain included) run only if it succeeded, so they are judged from its target alone; after
   the chain breaks (`;`, a newline, `||`, a single `&`), every later call is judged from the directory
   before it as well, and refused if either refuses, until its group closes or the line ends. So
   `git worktree add <dir> <rev> && cd <dir> && git checkout -b x` is allowed and the same joined by `;`
   is not: if the add fails, the checkout runs where the line started.
+  A `git clone` or `git worktree add` target is not counted as made, because those fail in ordinary use.
+  Measured over 373 reviewer transcripts on one machine, counting none of them refused 150 calls in 87
+  transcripts; counting `mkdir` and `git init` leaves 32 in 23.
 - A git command that moves refs every worktree shares (branch -f/-d/-m/-c/-u, update-ref, symbolic-ref
   with two arguments, tag creating or deleting, push, stash, notes add/edit/remove/append/copy/merge/prune,
   worktree add -B, and worktree remove, move or prune of an older worktree) is refused when the
@@ -751,11 +754,22 @@ def walk(command, cwd, env):
     Where the line may be is a list of states, each a directory and its `pushd` stack. A `cd`, `pushd` or
     `popd` to a directory that is not there may fail, leaving the shell where it was; calls joined to it by
     `&&` run only if it succeeded, so the state it left behind becomes a candidate again only at the next
-    BREAK. The list is capped at MAX_STATES."""
+    BREAK. The list is capped at MAX_STATES. A move into a directory that an earlier `mkdir` or `git init`
+    in the line makes does not count as one that may fail (`git clone` and `git worktree add` do not make
+    one: they fail in ordinary use)."""
     found, names, new_checkouts, new_repos = [], {}, set(), set()
     states = [(cwd, ())]  # where the line may be now: (directory, `pushd` stack, top last)
     fallback = []  # where it is instead if a move since the last BREAK failed
     entered = []  # what each open subshell or substitution left behind
+    made = set()  # directories an earlier `mkdir` or `git init` makes; kept across groups, it is on disk
+
+    def make(path, parents=True):
+        """Count `path`, and with `parents` every directory above it, as made."""
+        while path and path not in made:
+            made.add(path)
+            if not parents or os.path.dirname(path) == path:
+                break
+            path = os.path.dirname(path)
 
     def fresh(path, sub):
         """Whether `sub` makes a new repository or worktree at `path`: git init does in any directory with no
@@ -781,6 +795,8 @@ def walk(command, cwd, env):
                 target = resolve(here, re.sub(r"\.git$", "", spots[0].rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1]), names, env)
             else:
                 target = None
+            if sub == "init" and target is not None:
+                make(target)
             if fresh(target, sub):
                 new_checkouts.add(target)
                 new_repos.add(target)
@@ -809,6 +825,24 @@ def walk(command, cwd, env):
                     name, value = word.split("=", 1)
                     names[name] = expand(value, names, env) or ""  # "" also stands for `$(…)`: unknown
             continue
+        if plain[0] == "mkdir":
+            operands, parents, skip = [], False, False
+            for word in plain[1:]:
+                if skip:
+                    skip = False
+                elif word in ("-m", "--mode"):
+                    skip = True
+                elif word == "--parents" or (word.startswith("-") and not word.startswith("--") and "p" in word):
+                    parents = True
+                    skip = word.endswith("m")
+                elif not word.startswith("-"):
+                    operands.append(word)
+            for cwd, _ in states:
+                for word in operands:
+                    made_path = resolve(cwd, word, names, env)
+                    if made_path is not None:
+                        make(made_path, parents)
+            continue
         if plain[0] in ("cd", "pushd", "popd"):
             moved = []
             for cwd, stack in states:
@@ -819,7 +853,7 @@ def walk(command, cwd, env):
                     after = list(stack)
                     there = stacked(plain, cwd, after, names, env)
                 moved.append((there, tuple(after)))
-                if there is not None and not os.path.isdir(there):
+                if there is not None and not os.path.isdir(there) and there not in made:
                     fallback.append((cwd, stack))  # it may fail, and the shell stays here
             states = list(dict.fromkeys(moved))
             continue

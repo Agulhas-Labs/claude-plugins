@@ -436,6 +436,26 @@ class ReviewerTests(Fixture):
             with self.subTest(command=command):
                 self.assertFalse(self.refused(command))
 
+    def test_a_directory_that_a_mkdir_or_git_init_makes_is_there_for_the_cd_that_follows(self):
+        s = self.scratch
+        for command in (
+            f"P={s}/made; mkdir -p $P/Sources && cd $P && git init -q\ngit add -A\ngit commit -qm x",
+            f"mkdir {s}/m; cd {s}/m; git init -q; git add -A",
+            f"git init -q {s}/r/deep && cd {s}/r/deep\ngit commit -q --allow-empty -m x",
+            f"mkdir -pv {s}/a/b; cd {s}/a; git init -q; git add -A",
+            f"mkdir -m 700 {s}/q; cd {s}/q; git init -q; git add -A",
+        ):
+            with self.subTest(command=command):
+                self.assertFalse(self.refused(command))
+        for command in (
+            f"mkdir -p {s}/a; cd {s}/b; git checkout main",
+            f"mkdir {s}/x/y; cd {s}/x; git checkout main",
+            f"git clone -q {self.checkout} {s}/c; cd {s}/c; git reset --hard",
+            f"git worktree add {s}/rv HEAD; cd {s}/rv; git checkout -b probe",
+        ):
+            with self.subTest(command=command):
+                self.assertTrue(self.refused(command))
+
     def test_list_forms_of_tag_and_stash_with_options_are_reads(self):
         for command in ("git tag -n5", "git tag -n 5", "git tag -n5 'v*'", "git stash -q list", "git stash --quiet show",
                         "git tag --sort=-v:refname", "git tag --sort refname", "git tag --format='%(refname)'",
