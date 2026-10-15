@@ -138,7 +138,8 @@ class ModelCeilingTests(unittest.TestCase):
         with open(os.path.join(ROOT, "hooks", "hooks.json"), encoding="utf-8") as f:
             entries = json.load(f)["hooks"]["PreToolUse"]
         commands = [h["command"] for e in entries if e.get("matcher") == "Agent" for h in e["hooks"]]
-        self.assertEqual(commands, ['sh "${CLAUDE_PLUGIN_ROOT}/hooks/model-ceiling.sh"'])
+        self.assertEqual(commands, ['sh "${CLAUDE_PLUGIN_ROOT}/hooks/model-ceiling.sh"',
+                                    'sh "${CLAUDE_PLUGIN_ROOT}/hooks/handoff-gates.sh"'])
 
 
 if __name__ == "__main__":
