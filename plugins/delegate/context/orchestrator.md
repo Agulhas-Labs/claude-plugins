@@ -85,9 +85,9 @@ what it did.
   spec, if there is one) and, per job, an absolute brief path in your scratch directory named after its
   branch (`<scratch>/briefs/feat-x.md`); each maker's handoff names its own brief. Don't read code
   yourself just to write a handoff: read the scout's index, and open a brief only when designing the
-  job needs it. Measured on one machine over 14 days: makers spent 27% of their cost before their first
-  edit, 47% of their file-read cost went on files another maker in the session also read, and
-  improvised scouts cost about $0.75 each, where the Haiku `runner` averages $0.02.
+  job needs it. Measured on one machine over 14 days: 47% of makers' file-read cost went on files another
+  maker in the session also read, and improvised scouts cost about $0.75 each, where the Haiku
+  `runner` averages $0.02.
 - **An agent that stops early hands back groundwork.** Its report lists what is committed, what
   remains, and for each remaining item what it learned: the files and lines, the decisions it would
   take, where the fixtures are. The next handoff quotes that, so nothing is read twice.

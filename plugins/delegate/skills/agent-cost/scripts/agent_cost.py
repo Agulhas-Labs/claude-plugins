@@ -463,7 +463,7 @@ class Context:
 # as a hook attachment records them. Matched on attachment entries only: a file read that quotes the
 # hook is a tool result, not the hook speaking.
 EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
-GIT_COMMIT = re.compile(r"\bgit\b(?:\s+-[Cc]\s+\S+)*\s+commit\b")
+GIT_COMMIT = re.compile(r"\bgit\b(?:\s+-[Cc]\s+\S+)*\s+commit(?![\w-])")
 
 HEREDOC = re.compile(r"(<<-?\s*(['\"]?)(\w+)\2[^\n]*\n).*?(?:\n\s*\3(?=\s|$)|\Z)", re.S)   # keeps the opening line
 UNQUOTE = re.compile(r"(>>?\s*|\bcd\s+|\btee\s+(?:-\w+\s+)*|\b\w+=)([\"'])([^\"'\s]*)\2")
@@ -1664,15 +1664,18 @@ def section_budget_marks(out, loaded):
             cells += ["-"] * 5
         else:
             left = [(l, g) for l, _, g in past if lists_work_left(l)]
-            costs = [c for c in (follow_up_costs(l, g) for l, g in left) if c]
-            cells += [str(len(left)), str(len(costs)), fmt_usd(sum(r for r, _ in costs)),
-                      fmt_usd(sum(e for _, e in costs)), str(sum(e > r for r, e in costs))]
+            if rung not in MAKER_TYPES:   # only a maker's work passes to a follow-up maker
+                cells += [str(len(left))] + ["-"] * 4
+            else:
+                costs = [c for c in (follow_up_costs(l, g) for l, g in left) if c]
+                cells += [str(len(left)), str(len(costs)), fmt_usd(sum(r for r, _ in costs)),
+                          fmt_usd(sum(e for _, e in costs)), str(sum(e > r for r, e in costs))]
         out.append(f"  {rung:{width}} {label:>14} {len(past):5} {cells[0]:>17} {cells[1]:>11} {cells[2]:>10}"
                    f" {cells[3]:>7} {cells[4]:>10} {cells[5]:>14} {cells[6]:>8}")
     out.append("  (heuristics: after-turns count the turns after the one that crossed the mark; left work is a report line"
                " that starts with Remaining, not done, unfinished or similar, and is not only about the full suite owed to"
                " a runner; linked is the first later maker whose handoff shares a branch or whose prompt reads as a"
-               " continuation. Run-ups $ is the follow-ups' list $ before their first edit; old context $ is what their later"
+               " continuation, and is counted for makers' hand-backs only. Run-ups $ is the follow-ups' list $ before their first edit; old context $ is what their later"
                " turns would have added in the larger context. Cheaper counts the linked hand-backs where the second"
                " exceeds the first.)")
     out.append("")

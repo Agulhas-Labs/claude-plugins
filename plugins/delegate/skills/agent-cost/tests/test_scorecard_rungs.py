@@ -81,7 +81,7 @@ class ScoutLineTests(RungFixture):
 
 
 
-class ClassLineTests(unittest.TestCase):
+class ClassLinePinTests(unittest.TestCase):
     def test_class_line_equals_the_hook(self):
         here = os.path.dirname(os.path.abspath(__file__))
         hook_path = os.path.join(here, "..", "..", "..", "hooks", "handoff-gates.py")

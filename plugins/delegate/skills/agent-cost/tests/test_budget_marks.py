@@ -112,5 +112,14 @@ class BudgetMarksTests(unittest.TestCase):
         self.assertIn("budget-marks", ac.DEFAULT_SECTIONS)
 
 
+
+class GitCommitTests(unittest.TestCase):
+    def test_a_commit_counts_and_commit_tree_does_not(self):
+        for command in ("git commit -m x", "git -C repo commit -qm x", "cd a && git commit --amend"):
+            self.assertIsNotNone(ac.GIT_COMMIT.search(command), command)
+        for command in ("git commit-tree HEAD^{tree} -p a -p b", "git commit-graph write", "git log --oneline"):
+            self.assertIsNone(ac.GIT_COMMIT.search(command), command)
+
+
 if __name__ == "__main__":
     unittest.main()
