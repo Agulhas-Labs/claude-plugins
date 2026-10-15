@@ -16,7 +16,9 @@ build|test`, any `xcodebuild`, `cargo|go|dotnet build|test`, `npm|pnpm|yarn|bun 
 `pytest` or `python -m pytest`, `make`, `gradle`, `gradlew` or `mvn` (the build/test set the agent-cost
 report uses). Its key is the program with all its arguments, redirections removed; a pipe's other side is
 another command. So `cd /a && time -p swift test 2>&1 | tail -5` has the key `swift test`, and `swift test
---filter A` another. Every other command has no key and is never refused.
+--filter A` another. Every other command has no key and is never refused. The key leaves the directory
+out, so `cd /a && swift test` and `cd /b && swift test` share one: a long run in one package refuses the
+first identical run in another, once.
 
 An earlier Bash call whose result came back more than the cache lifetime after the turn that issued it
 makes its keys "long"; a backgrounded call counts until the notification that it finished, since that
@@ -38,10 +40,14 @@ however it spelled the path) is younger, and so is free.
 - A git command that moves a checkout (checkout, switch, reset, restore, stash, commit, merge, rebase,
   cherry-pick, revert, am, pull, clean, rm, mv, add, apply, bisect, read-tree, submodule update) is
   refused when its directory lies in an older checkout: the nearest ancestor holding a `.git` entry.
-  Its directory is `git -C`, else the last `cd` before it in the line, else the call's `cwd`, with `~`,
-  `$HOME` and variables assigned earlier in the same command expanded. A directory that still holds an
-  unexpanded variable, or does not exist, is unknown and allowed; so is one inside a repository or
-  worktree that a `git init`, `git clone` or `git worktree add` earlier in the same line creates.
+  Its directory is `git -C`, else the last `cd`, `pushd` or `popd` before it in the line, else the call's
+  `cwd`, with `~`, `$HOME` and variables assigned earlier in the same command expanded. A `cd`, `pushd`,
+  `popd` or assignment inside a subshell `( … )` or a substitution (`$( … )`, backticks) lasts until the
+  group closes, nested groups included; one in a brace group `{ …; }` persists. `pushd` and `popd` keep a
+  directory stack for the line; `popd` on an empty stack stays put, and a rotation (`+N`, `-N`) makes the
+  directory unknown. A directory that still holds an unexpanded variable, or does not exist, is unknown
+  and allowed; so is one inside a repository or worktree that a `git init`, `git clone` or `git worktree
+  add` earlier in the same line creates.
 - A git command that moves refs every worktree shares (branch -f/-d/-m/-c/-u, update-ref, symbolic-ref
   with two arguments, tag creating or deleting, push, stash, notes add/edit/remove/append/copy/merge/prune,
   worktree add -B, and worktree remove, move or prune of an older worktree) is refused when the
@@ -189,11 +195,16 @@ def first_stamp(lines):
 
 # --- splitting a command line into simple commands ---------------------------------------------------
 
-def segments(command):
+OPEN, CLOSE = "(", ")"  # with segments(…, groups=True): where a subshell or substitution opens and closes
+
+def segments(command, groups=False):
     """The simple commands of a shell command line, each a list of words with quotes removed. Splits on
     `;`, `&`, `|`, newlines, parentheses, `$(` and backticks; drops redirections and here-document bodies.
-    Not a shell: a command hidden inside a quoted string (`sh -c '…'`) stays one word."""
+    Not a shell: a command hidden inside a quoted string (`sh -c '…'`) stays one word. With `groups`, a
+    subshell or substitution (`(`, `$(`, a backtick pair) is also marked where it opens and closes, by the
+    strings OPEN and CLOSE among the word lists; a `)` that closes nothing (a `case` pattern) is no mark."""
     out, words, word, has = [], [], [], False
+    opened = []  # the groups open at this point: "(" for `(` and `$(`, "`" for a backtick
     skip, pending = False, []  # skip: the next word is a redirection target; pending: here-doc delimiters
     i, n = 0, len(command)
 
@@ -268,6 +279,14 @@ def segments(command):
         elif command.startswith("$(", i) or c in ";&|()`":
             end_segment()
             i += 2 if c == "$" else 1
+            if not groups:
+                continue
+            if c in "$(" or (c == "`" and opened[-1:] != ["`"]):
+                opened.append("`" if c == "`" else "(")
+                out.append(OPEN)
+            elif c in ")`" and opened and (opened[-1] == "`") == (c == "`"):
+                opened.pop()
+                out.append(CLOSE)
         else:
             word.append(c)
             has = True
@@ -545,6 +564,13 @@ def positionals(args, takes=frozenset()):
     return found
 
 
+def stash_moves(args):
+    """Whether a `git stash` moves anything: every form but `list` and `show`, read past a leading `-q`. Any
+    other leading option (`-m list`, `-u`) makes it a push."""
+    first = next((a for a in args if a not in ("-q", "--quiet")), None)
+    return first not in ("list", "show")
+
+
 def moves_checkout(sub, args):
     """Whether a git subcommand moves HEAD, the index or the files of the checkout it runs in."""
     if sub == "checkout" and all(a in ("-q", "--quiet", "--progress", "--no-progress") for a in args):
@@ -552,7 +578,7 @@ def moves_checkout(sub, args):
     if sub in MOVES_CHECKOUT:
         return True
     if sub == "stash":
-        return not args or args[0] not in ("list", "show")
+        return stash_moves(args)
     if sub == "apply":
         return not any(a in ("--check", "--stat", "--numstat", "--summary") for a in args)
     if sub == "bisect":
@@ -567,11 +593,11 @@ def moves_refs(sub, args):
     if sub in ("update-ref", "push"):
         return True
     if sub == "stash":
-        return not args or args[0] not in ("list", "show")
+        return stash_moves(args)
     if sub == "branch":
         return any(a.split("=", 1)[0] in BRANCH_MOVES for a in args)
     if sub == "tag":
-        return bool(args) and not any(a.split("=", 1)[0] in TAG_LISTS for a in args)
+        return bool(args) and not any(a.split("=", 1)[0] in TAG_LISTS or re.fullmatch(r"-n\d+", a) for a in args)
     if sub == "symbolic-ref":
         return any(a in ("-d", "--delete") for a in args) or len(positionals(args, {"-m"})) >= 2
     if sub == "notes":
@@ -606,16 +632,50 @@ def git_call(words, cwd, names, env):
     return tree or store or here, rest[0], rest[1:]
 
 
+def stacked(plain, cwd, stack, names, env):
+    """The directory after a `pushd` or `popd` (`plain`, its words), updating `stack` (the top last) in place.
+    A rotation by `+N`/`-N` is not followed: the directory becomes unknown."""
+    args = [w for w in plain[1:] if w != "--"]
+    if any(re.fullmatch(r"[+-]\d+", w) for w in args):
+        return None
+    keep = "-n" in args  # change the stack only, not the directory
+    target = next((w for w in args if not w.startswith("-")), None)
+    if plain[0] == "popd":
+        if not stack:
+            return cwd  # an empty stack: popd fails and the directory stays
+        top = stack.pop()
+        return cwd if keep else top
+    if target is None:  # a bare pushd swaps the directory with the top of the stack
+        if not stack:
+            return cwd
+        top, stack[-1] = stack[-1], cwd
+        return top
+    there = resolve(cwd, target, names, env)
+    if keep:
+        stack.append(there)
+        return cwd
+    stack.append(cwd)
+    return there
+
+
 def walk(command, cwd, env):
     """Each git call in a command line, in order, as (directory, subcommand, arguments, checkouts the line
     has created by then, repositories the line has created by then, the line's variables by then),
     following `cd` and assignments."""
     found, names, new_checkouts, new_repos = [], {}, set(), set()
+    stack, entered = [], []  # the line's `pushd` stack; what each open subshell or substitution left behind
 
     def fresh(path):
         return path is not None and not os.path.lexists(os.path.join(path, ".git"))
 
-    for words in segments(command):
+    for words in segments(command, groups=True):
+        if words == OPEN:
+            entered.append((cwd, list(stack), dict(names)))
+            continue
+        if words == CLOSE:
+            if entered:
+                cwd, stack, names = entered.pop()
+            continue
         plain = core(words)
         if not plain or plain[0] in ("export", "local", "declare", "typeset", "readonly"):
             for word in (words if not plain else plain[1:]):
@@ -623,9 +683,12 @@ def walk(command, cwd, env):
                     name, value = word.split("=", 1)
                     names[name] = expand(value, names, env) or ""  # "" also stands for `$(…)`: unknown
             continue
-        if plain[0] in ("cd", "pushd"):
+        if plain[0] == "cd":
             target = next((w for w in plain[1:] if not w.startswith("-") or w == "-"), "~")
             cwd = None if target == "-" else resolve(cwd, target, names, env)
+            continue
+        if plain[0] in ("pushd", "popd"):
+            cwd = stacked(plain, cwd, stack, names, env)
             continue
         call = git_call(words, cwd, names, env)
         if not call:

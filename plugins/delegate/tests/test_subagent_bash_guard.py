@@ -360,6 +360,30 @@ class ReviewerTests(Fixture):
                         "for d in a b; do (cd $d && git checkout main); done", "cd - && git checkout main"):
             self.assertFalse(self.refused(command), command)
 
+    def test_a_cd_inside_a_subshell_or_substitution_ends_with_it_and_popd_returns(self):
+        s, c = self.scratch, self.checkout
+        for command in (f"(cd {s} && ls); git checkout main", f"x=$(cd {s}; pwd); git checkout main",
+                        f"y=`cd {s}`; git reset --hard", f"pushd {s} && popd && git checkout main",
+                        f"(cd {s}; (cd /); ls) && git stash", f"x=$(cd {s}; y=`cd /; pwd`; pwd); git checkout main"):
+            with self.subTest(command=command):
+                self.assertTrue(self.refused(command))
+        for command in (f"{{ cd {s}; }}; git checkout main", f"(cd {s} && git init -q n && cd n && git checkout -b x)",
+                        f"pushd {s} && git checkout main", f"cd {s} && pushd {c} && popd && git checkout main",
+                        f"(cd {c}; cd {s}; git checkout main)", f"popd; cd {s} && popd && git checkout main",
+                        f"pushd {s} && pushd +1 && git checkout main",
+                        # D is unknown once its group closes, so the cd target cannot be told: allowed, as before.
+                        f"(D={s}); cd $D 2>/dev/null; git checkout main"):
+            with self.subTest(command=command):
+                self.assertFalse(self.refused(command))
+
+    def test_list_forms_of_tag_and_stash_with_options_are_reads(self):
+        for command in ("git tag -n5", "git tag -n 5", "git tag -n5 'v*'", "git stash -q list", "git stash --quiet show"):
+            with self.subTest(command=command):
+                self.assertFalse(self.refused(command))
+        for command in ("git stash -q", "git stash -q pop", "git stash -m list"):
+            with self.subTest(command=command):
+                self.assertTrue(self.refused(command))
+
     def test_home_and_tilde_expand(self):
         env = dict(ENV, HOME=self.root)
         self.assertTrue(self.refused("cd ~/sibling && git checkout main", env=env))
