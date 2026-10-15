@@ -48,7 +48,13 @@ however it spelled the path) is younger, and so is free.
   rotation (`+N`, `-N`) moves to the entry it names, and a call bash rejects (`popd` on an empty stack, an
   index out of range) stays put. A directory that still holds an unexpanded variable, or does not exist, is
   unknown and allowed; so is one inside a repository or worktree that a `git init`, `git clone` or `git
-  worktree add` earlier in the same line creates (below).
+  worktree add` earlier in the same line creates (below). A `cd`, `pushd` or `popd` into a directory
+  that is not there when the hook runs may fail and leave the shell where it was. Calls joined to it by `&&` (a pipe
+  within that chain included) run only if it succeeded, so they are judged from its target alone; after
+  the chain breaks (`;`, a newline, `||`, a single `&`), every later call is judged from the directory
+  before it as well, and refused if either refuses, until its group closes or the line ends. So
+  `git worktree add <dir> <rev> && cd <dir> && git checkout -b x` is allowed and the same joined by `;`
+  is not: if the add fails, the checkout runs where the line started.
 - A git command that moves refs every worktree shares (branch -f/-d/-m/-c/-u, update-ref, symbolic-ref
   with two arguments, tag creating or deleting, push, stash, notes add/edit/remove/append/copy/merge/prune,
   worktree add -B, and worktree remove, move or prune of an older worktree) is refused when the
@@ -204,13 +210,17 @@ def first_stamp(lines):
 # --- splitting a command line into simple commands ---------------------------------------------------
 
 OPEN, CLOSE = "(", ")"  # with segments(…, groups=True): where a subshell or substitution opens and closes
+BREAK = ";"  # with segments(…, groups=True): where an `&&` chain ends, so what follows runs even if it failed
 
 def segments(command, groups=False):
     """The simple commands of a shell command line, each a list of words with quotes removed. Splits on
     `;`, `&`, `|`, newlines, parentheses, `$(` and backticks; drops redirections and here-document bodies.
     Not a shell: a command hidden inside a quoted string (`sh -c '…'`) stays one word. With `groups`, a
     subshell or substitution (`(`, `$(`, a backtick pair) is also marked where it opens and closes, by the
-    strings OPEN and CLOSE among the word lists; a `)` that closes nothing (a `case` pattern) is no mark."""
+    strings OPEN and CLOSE among the word lists; a `)` that closes nothing (a `case` pattern) is no mark.
+    Also with `groups`, the string BREAK marks each separator after which the next command runs whether or
+    not the one before succeeded: `;`, `;;`, `||`, a single `&` (not `&>`), and a newline that does not
+    follow `&&` or `|`. `&&` and a pipe (`|`, `|&`) are no mark."""
     out, words, word, has = [], [], [], False
     opened = []  # the groups open at this point: "(" for `(` and `$(`, "`" for a backtick
     skip, pending = False, []  # skip: the next word is a redirection target; pending: here-doc delimiters
@@ -252,6 +262,11 @@ def segments(command, groups=False):
             i += 1
         elif c == "\n":
             end_segment()
+            j = i - 1
+            while j >= 0 and command[j] in " \t":
+                j -= 1
+            if groups and (j < 0 or not (command[j] == "|" or command[j - 1:j + 1] in ("&&", "|&"))):
+                out.append(BREAK)  # a newline after `&&` or a pipe carries the chain on to the next line
             i += 1
             for delimiter in pending:  # skip each here-document body, up to its delimiter line
                 while i < n:
@@ -286,8 +301,12 @@ def segments(command, groups=False):
                 skip = True
         elif command.startswith("$(", i) or c in ";&|()`":
             end_segment()
-            i += 2 if c == "$" else 1
+            step = 2 if c == "$" or command.startswith(("&&", "||", "|&", ";;"), i) else 1
+            op, i = command[i:i + step], i + step
             if not groups:
+                continue
+            if op in (";", ";;", "||") or (op == "&" and command[i:i + 1] != ">"):
+                out.append(BREAK)
                 continue
             if c in "$(" or (c == "`" and opened[-1:] != ["`"]):
                 opened.append("`" if c == "`" else "(")
@@ -721,12 +740,22 @@ def stacked(plain, cwd, stack, names, env):
     return there
 
 
+MAX_STATES = 64  # where a line may be: beyond this many, the latest candidates are dropped
+
+
 def walk(command, cwd, env):
     """Each git call in a command line, in order, as (directory, subcommand, arguments, checkouts the line
     has created by then, repositories the line has created by then, the line's variables by then),
-    following `cd` and assignments."""
+    following `cd` and assignments. A call that may run in more than one directory comes once for each.
+
+    Where the line may be is a list of states, each a directory and its `pushd` stack. A `cd`, `pushd` or
+    `popd` to a directory that is not there may fail, leaving the shell where it was; calls joined to it by
+    `&&` run only if it succeeded, so the state it left behind becomes a candidate again only at the next
+    BREAK. The list is capped at MAX_STATES."""
     found, names, new_checkouts, new_repos = [], {}, set(), set()
-    stack, entered = [], []  # the line's `pushd` stack; what each open subshell or substitution left behind
+    states = [(cwd, ())]  # where the line may be now: (directory, `pushd` stack, top last)
+    fallback = []  # where it is instead if a move since the last BREAK failed
+    entered = []  # what each open subshell or substitution left behind
 
     def fresh(path, sub):
         """Whether `sub` makes a new repository or worktree at `path`: git init does in any directory with no
@@ -740,32 +769,8 @@ def walk(command, cwd, env):
         except OSError:
             return False
 
-    for words in segments(command, groups=True):
-        if words == OPEN:
-            entered.append((cwd, list(stack), dict(names)))
-            continue
-        if words == CLOSE:
-            if entered:
-                cwd, stack, names = entered.pop()
-            continue
-        plain = core(words)
-        if not plain or plain[0] in ("export", "local", "declare", "typeset", "readonly"):
-            for word in (words if not plain else plain[1:]):
-                if ASSIGNMENT.match(word):
-                    name, value = word.split("=", 1)
-                    names[name] = expand(value, names, env) or ""  # "" also stands for `$(…)`: unknown
-            continue
-        if plain[0] == "cd":
-            target = next((w for w in plain[1:] if not w.startswith("-") or w == "-"), "~")
-            cwd = None if target == "-" else resolve(cwd, target, names, env)
-            continue
-        if plain[0] in ("pushd", "popd"):
-            cwd = stacked(plain, cwd, stack, names, env)
-            continue
-        call = git_call(words, cwd, names, env)
-        if not call:
-            continue
-        here, sub, args = call
+    def note(here, sub, args):
+        """Record what a git call at `here` creates."""
         if here is not None and sub in ("init", "clone"):
             spots = positionals(args, INIT_VALUE if sub == "init" else CLONE_VALUE)
             if sub == "init":
@@ -784,7 +789,45 @@ def walk(command, cwd, env):
             target = resolve(here, target, names, env) if target else None
             if fresh(target, sub):
                 new_checkouts.add(target)
-        found.append((here, sub, args, set(new_checkouts), set(new_repos), dict(names)))
+
+    for words in segments(command, groups=True):
+        if words == OPEN:  # a group inherits where the line may be; a move failing inside it ends the group
+            entered.append((states, fallback, dict(names)))
+            fallback = []
+            continue
+        if words == CLOSE:
+            if entered:
+                states, fallback, names = entered.pop()
+            continue
+        if words == BREAK:
+            states, fallback = list(dict.fromkeys(states + fallback))[:MAX_STATES], []
+            continue
+        plain = core(words)
+        if not plain or plain[0] in ("export", "local", "declare", "typeset", "readonly"):
+            for word in (words if not plain else plain[1:]):
+                if ASSIGNMENT.match(word):
+                    name, value = word.split("=", 1)
+                    names[name] = expand(value, names, env) or ""  # "" also stands for `$(…)`: unknown
+            continue
+        if plain[0] in ("cd", "pushd", "popd"):
+            moved = []
+            for cwd, stack in states:
+                if plain[0] == "cd":
+                    target = next((w for w in plain[1:] if not w.startswith("-") or w == "-"), "~")
+                    there, after = (None if target == "-" else resolve(cwd, target, names, env)), stack
+                else:
+                    after = list(stack)
+                    there = stacked(plain, cwd, after, names, env)
+                moved.append((there, tuple(after)))
+                if there is not None and not os.path.isdir(there):
+                    fallback.append((cwd, stack))  # it may fail, and the shell stays here
+            states = list(dict.fromkeys(moved))
+            continue
+        calls = [call for call in (git_call(words, cwd, names, env) for cwd, _ in states) if call]
+        for call in calls:
+            note(*call)
+        for here, sub, args in calls:
+            found.append((here, sub, args, set(new_checkouts), set(new_repos), dict(names)))
     return found
 
 
@@ -840,8 +883,10 @@ def refusal(here, sub, args, new_checkouts, new_repos, start, names, env):
 
 
 ADVICE = (
-    "To build or test a revision, add a throwaway worktree in your scratch directory "
-    "(`git worktree add <scratch>/<name> <rev> --detach`), work there, and remove it before reporting. "
+    "To build or test a revision, add a throwaway worktree in your scratch directory and join the add and "
+    "the cd with `&&` (`git worktree add <scratch>/<name> <rev> --detach && cd <scratch>/<name> && …`), "
+    "work there, and remove it before reporting: after a `;`, a cd into a directory that is not there yet "
+    "is judged from the directory before it too. "
     "To see whether branches overlap, `git merge-tree --write-tree <a> <b>` touches no checkout."
 )
 WHAT = {
