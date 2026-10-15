@@ -22,8 +22,8 @@ ONE_SCRIPT = re.compile(r'sh "\$\{CLAUDE_PLUGIN_ROOT\}/hooks/[a-z-]+\.sh"')
 ASCII_LOCALE = dict(os.environ, LC_ALL="C", LANG="C")
 
 
-def run(*args, env=None):
-    return subprocess.run([SH, HOOK, *args], input="{}", capture_output=True, encoding="utf-8", env=env)
+def run(*args, env=None, payload="{}"):
+    return subprocess.run([SH, HOOK, *args], input=payload, capture_output=True, encoding="utf-8", env=env)
 
 
 def rendered(path, max_agents=None):
@@ -112,6 +112,18 @@ class HookWiringTests(unittest.TestCase):
         self.assertEqual(payload["hookEventName"], "SubagentStart")
         self.assertEqual(payload["additionalContext"], read(os.path.join(CONTEXT, "engineering.md")).strip())
         self.assertNotIn("# Orchestrator conventions", payload["additionalContext"])
+
+    def test_claude_codes_own_helper_agents_get_no_conventions(self):
+        real = os.path.join(CONTEXT, "engineering.md")
+        for name in ("Explore", "Plan", "claude-code-guide", "statusline-setup"):
+            for payload in ('{"hook_event_name":"SubagentStart","agent_type":"%s"}' % name,
+                            '{"hook_event_name": "SubagentStart", "agent_type": "%s"}' % name):
+                out = run(real, payload=payload)
+                self.assertEqual((out.returncode, out.stdout), (0, ""), payload)
+        # Any other agent, including a name that only starts like a helper's, still gets them.
+        for name in ("delegate:builder", "general-purpose", "Explorer", "my-plugin:Explore"):
+            out = run(real, payload='{"agent_type": "%s"}' % name)
+            self.assertEqual(json.loads(out.stdout)["hookSpecificOutput"]["additionalContext"], read(real).strip(), name)
 
     def test_only_the_subagent_hooks_need_python(self):
         for command in hook_commands("SessionStart") + hook_commands("SubagentStart"):
