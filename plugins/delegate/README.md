@@ -104,6 +104,13 @@ prompt names by absolute or `~/` path, is refused once with the format; the iden
 through. Measured on one machine over three days: 60% of `builder` and 42% of `builder-lite` prompts carried
 a gate line. `DELEGATE_HANDOFF_GATES=0` turns it off.
 
+The same hook asks a handoff to `builder` to say why it needs that rung, on a line of its own:
+`Rung: builder — <class>`, the class one of sets aside or restores work, process lifecycle, security,
+classification, or builder-lite failed its gates twice. A handoff missing both that line and its gates
+is refused once, naming both, and a call that names its own `model` is left alone. Measured on one
+machine over 14 days: a `builder` cost $1.84 at list price to a `builder-lite`'s $0.59, and 110 of 518
+`builder` handoffs named none of the classes. `DELEGATE_BUILDER_CLASS=0` turns this check off.
+
 Your own session gets a context-budget tier too: from 200k, and at each further 100k, it is told that
 every turn re-sends its context, and asked to suggest at the next natural break that you save a short note
 and start fresh (`/clear`), or `/compact`. Measured on one machine over seven days: 51 of 77 main sessions
@@ -139,8 +146,9 @@ Your numbers will differ; `agent-cost` shows you yours.
 | --- | --- | --- |
 | your session | yours (Sonnet, Opus or Fable) | Plans, picks the agent for each job, writes the handoff, re-runs the gates. |
 | `runner` | Haiku | A scripted list of commands whose output is the answer, such as running suites. It edits nothing. |
+| `scout` | Haiku | Runs before the makers: one brief per job, at the path the handoff names, quoting the lines the job changes and the signatures it calls, with the narrow test that covers it and the conventions in play. Facts only, no design; it writes nothing but its briefs. |
 | `builder-lite` | Sonnet | The default implementer: any change whose design the handoff has settled, from a feature slice to a round of review fixes, and mechanical, fully specified work: sweeps, renames, fixture edits, applying a reviewed diff. |
-| `builder` | Opus, or your session's model if lower | The exception: safety-critical code, classification subtleties, or a job `builder-lite` failed its gates on twice. |
+| `builder` | Opus, or your session's model if lower | The exception: safety-critical code, classification subtleties, or a job `builder-lite` failed its gates on twice. Its handoff says which, on a `Rung: builder — <class>` line. |
 | `reviewer` | Opus, or your session's model if lower | Sees the spec and the diff, never the reasoning that produced them. It ends with one line: `Verdict: merge-ready`, `merge-ready with lows`, `merge-ready after fixes` or `not merge-ready`, or one `Verdict (fix/name): …` line per branch when it reviewed several. |
 
 `mechanic` was retired in 2.0.0, its work folded into `builder-lite` and `runner`, and the report still shows its rows for transcripts from before.
@@ -187,12 +195,14 @@ isn't a positive integer means the default.
 run before the budget hook says the prompt cache has expired. Set it to match your cache lifetime;
 anything that isn't a positive integer means the default.
 
-Four more switches turn a hook off when set to `0`; any other value leaves it on:
+Five more switches turn a hook off when set to `0`; any other value leaves it on:
 
 - `DELEGATE_LONG_RUN_GUARD`: the refusal of a repeat of a build or test that already outlasted the cache.
 - `DELEGATE_REVIEWER_GUARD`: the block on a reviewer's git commands that move a checkout, or shared refs,
   that existed before it started.
-- `DELEGATE_HANDOFF_GATES`: the refusal of a maker handoff with no gate line.
+- `DELEGATE_HANDOFF_GATES`: the refusal of a maker handoff with no gate line (and of a `builder`
+  handoff with no class line).
+- `DELEGATE_BUILDER_CLASS`: the refusal of a `builder` handoff with no `Rung: builder — <class>` line.
 - `DELEGATE_MAIN_BUDGET`: the context-budget tier for your own session.
 
 To let agents run above your session's model, for instance Opus builders under a Sonnet session, switch

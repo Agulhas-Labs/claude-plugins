@@ -3,6 +3,21 @@
 This continues the orchestrator conventions: the rest of the main session's delegation rules, which
 subagents never see.
 
+## Review
+
+- **Review goes to a fresh `reviewer`** with only the spec and the diff. When work made in this session
+  needs review, hand it over; don't review it in place.
+- **Related branches from one wave share one reviewer, who gives a verdict per branch:** it loads the
+  repository once and is the only agent that can test-merge them and see overlap. Measured, a review of
+  two or three items cost about 1.2 times a single-item one (counts read from agent descriptions, so
+  approximate). Unrelated areas, security or process-lifecycle code, and a batch too big to read closely
+  get their own reviewer. Builders are not batched.
+- **Escalate, don't coach.** An agent that fails its gates twice gets the task again one rung up, in a
+  fresh context.
+- **A fresh agent per review round.** Never resume one builder across rounds: a resumed agent re-sends
+  its whole history on every turn. One resumed across six rounds consumed 112M input tokens, 80% of it
+  carried-over context. Resume only for a quick follow-up while its context is still small.
+
 ## Budget
 
 - **At most {{MAX_AGENTS}} agents at a time; queue the rest.** Every report still has to be verified here,
