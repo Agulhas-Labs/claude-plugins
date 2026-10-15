@@ -110,10 +110,7 @@ passed 200k, and main sessions were 31% of all spend. `DELEGATE_MAIN_BUDGET=0` t
 Claude Code's own helper agents (Explore, Plan, claude-code-guide and statusline-setup) get no conventions:
 they build and commit nothing.
 
-The plugin once also nudged a subagent to batch its reads after a third single read-only call in a row. It
-fired 738 times in three days, and the turn after it made more than one call 9% of the time, below the 12%
-of all subagent turns, so it was retired; the rule to request independent calls together stays in the
-conventions.
+The plugin once also nudged a subagent to batch its reads after a third single read-only call in a row; on one machine over three days it fired 738 times and the turn after it made more than one call 9% of the time, below the 12% of all subagent turns, so it was retired, and the rule to request independent calls together stays in the conventions.
 
 The plugin once also held a subagent's stop while a command it had backgrounded still ran. Measured on
 Claude Code 2.1.293, the harness re-invokes the agent when the command exits and a report is delivered
@@ -143,6 +140,8 @@ Your numbers will differ; `agent-cost` shows you yours.
 | `builder-lite` | Sonnet | The default implementer: any change whose design the handoff has settled, from a feature slice to a round of review fixes, and mechanical, fully specified work: sweeps, renames, fixture edits, applying a reviewed diff. |
 | `builder` | Opus, or your session's model if lower | The exception: safety-critical code, classification subtleties, or a job `builder-lite` failed its gates on twice. |
 | `reviewer` | Opus, or your session's model if lower | Sees the spec and the diff, never the reasoning that produced them. It ends with one line: `Verdict: merge-ready`, `merge-ready with lows`, `merge-ready after fixes` or `not merge-ready`, or one `Verdict (fix/name): …` line per branch when it reviewed several. |
+
+`mechanic` was retired in 2.0.0, its work folded into `builder-lite` and `runner`, and the report still shows its rows for transcripts from before.
 
 The agents are namespaced (`delegate:runner` and so on). The plugin never changes your session's
 model, only what the subagents run on, and it never runs one above your session's model. Where a pin is
@@ -261,8 +260,8 @@ back something like this (the figures here are made up for illustration):
 
 ```text
 === Totals ===
-  main       contexts     14  turns    1210  raw input   142.6M  input-eq    16.3M  list $   96.40  output     1.1M
-  subagent   contexts     60  turns    5320  raw input   388.4M  input-eq    47.9M  list $  212.75  output     2.4M
+  main       contexts     14  turns    1210  raw input   142.6M  input-eq    16.3M  output     1.1M  list $    $96
+  subagent   contexts     60  turns    5320  raw input   388.4M  input-eq    47.9M  output     2.4M  list $   $213
 
 === Turn shape ===
   main       turns carrying exactly one tool call:  61.2% of turns,  58.7% of input-eq spend
@@ -292,7 +291,7 @@ and each one says what to do about what it shows:
 | Cold cache | How much went on messages sent into a large context after its prompt cache expired, and whether your sessions get the five-minute or the one-hour cache lifetime. | [`cache-guard`](../cache-guard/README.md), a sibling plugin, which warns you with the cost before that message is sent. |
 | What fills the context | Which kind of content you keep re-sending, with your sessions' share and subagents' share side by side. | Reading files by range, and a code index in place of `cat` and `grep`. |
 | Fixed start | What every context pays before any work: instruction files, MCP tool listings, the skill listing. | Trimming the instruction files every session loads (and every subagent loads again), and disconnecting servers a coding session never calls. |
-| Rule scorecard | One line per rule this plugin states: the metric that measures it in the window, the measured baseline where there is one (a target for the model ceiling), and whether it holds. Its `handoffs carry the code` line is the share of builder spend before their first edit (an edit made through Bash counts), and `maker handoffs carry gates` is the share of maker handoffs with a gate line. | Running it over the windows before and after a change to see which rules your agents keep. A high share before the first edit means handoffs aren't carrying the code the job touches: quote it, or scout first. A low gates share means handoffs end without a check to run. |
+| Rule scorecard | One line per rule this plugin states: the metric that measures it in the window, the measured baseline where there is one (a target for the model ceiling), and whether it holds. Its `handoffs carry the code` line is the share of maker spend (`builder`, `builder-lite`, and `mechanic` in older transcripts) before their first edit (an edit made through Bash counts), and `maker handoffs carry gates` is the share of maker handoffs with a gate line. | Running it over the windows before and after a change to see which rules your agents keep. A high share before the first edit means handoffs aren't carrying the code the job touches: quote it, or scout first. A low gates share means handoffs end without a check to run. |
 | Review by rung | For each maker type (`builder`, `builder-lite`) and round, how many makers a later reviewer passed or failed, linked by a branch name both handoffs state (a heuristic; unnamed or out-of-window reviews leave a maker unlinked), the fail share, and the mean input-eq per maker. A reviewer that gave one verdict line per branch gives each maker the line naming its branch. | Choosing between the dearer and the cheaper builder: if the cheaper rung's fail share matches the dearer one's in the same round, send it more of that work. |
 | Tools called (`--tools`) | The tools each agent type actually called. | Editing an agent definition's `tools:` or `disallowedTools:` line. |
 
@@ -341,7 +340,9 @@ about fifty times over, before any work was done.
 
 Spend is weighted by price against the uncached input rate. A cache read counts a tenth (a fortieth on
 Fable 5.1, as published), a five-minute cache write 1.25 and a one-hour cache write 2. The figures are
-shares of cost, not raw token counts. Output tokens are reported separately, and figures marked `≈` are
+shares of cost, not raw token counts. `list $` prices each turn's input-eq at its model's list input price and its output at five times that price, from the same table as `cache-guard`; `-` marks a model the table can't place. It is a list-rate comparison, not a bill.
+
+Output tokens are reported separately, and figures marked `≈` are
 estimates from character counts.
 
 The transcript format is undocumented and has changed before. The report lists every Claude Code

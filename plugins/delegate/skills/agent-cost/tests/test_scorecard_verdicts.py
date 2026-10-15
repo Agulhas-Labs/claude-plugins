@@ -25,6 +25,11 @@ class VerdictFormTests(unittest.TestCase):
         self.assertEqual(ac.reviewer_verdict(f"Verdict ({name}): not merge-ready"), "fail")
         self.assertEqual(ac.reviewer_verdict(f"Verdict ({name}): merge-ready"), "pass")
 
+    def test_a_branch_is_matched_whole_not_as_a_prefix_of_another(self):
+        report = "Verdict (fix/one): merge-ready\nVerdict (fix/one-b): not merge-ready"
+        self.assertEqual(ac.reviewer_verdict(report, {"fix/one"}), "pass")
+        self.assertEqual(ac.reviewer_verdict(report, {"fix/one-b"}), "fail")
+
     def test_each_branch_gets_its_own_line(self):
         report = ("Verdict (fix/one): merge-ready\nVerdict (fix/two): not merge-ready\n"
                   "Verdict (fix/three): merge-ready after fixes")
