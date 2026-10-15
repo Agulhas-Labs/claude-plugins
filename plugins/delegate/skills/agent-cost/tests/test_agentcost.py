@@ -1836,7 +1836,7 @@ class RuleScorecardTests(unittest.TestCase):
         self.assertEqual(lines["a fresh agent per round"],
                          "subagents prompted again after their hand-back: 1 of 3 that handed back; no baseline")
         self.assertEqual(lines["calls requested together"],
-                         "single-tool-call share of subagent turns: 89.5% (batchable 5.3%); baseline 70%: not holding")
+                         "single-tool-call share of subagent turns: 89.5% (batchable 5.3%); no baseline")
         self.assertEqual(lines["the slow check goes to a runner"],
                          "cold turns after a Bash call, share of subagent spend: 31.6%; baseline 7.5%: not holding")
         # the Opus builder under a Sonnet session is above; the Opus agent with no parent in the window is
@@ -1861,7 +1861,7 @@ class RuleScorecardTests(unittest.TestCase):
 
     def test_a_subagent_on_its_parents_family_or_below_is_within_the_ceiling(self):
         _, loaded = rule_tree(self)
-        judged, above = ac.above_ceiling(loaded)
+        judged, above, _ = ac.above_ceiling(loaded)
         self.assertEqual([l.ctx.agent_id for l in above], ["b1"])
         self.assertIn("r1", [l.ctx.agent_id for l in judged])   # Sonnet under Sonnet
         self.assertNotIn("o1", [l.ctx.agent_id for l in judged])  # no parent in the window
@@ -1909,7 +1909,7 @@ class RuleScorecardTests(unittest.TestCase):
             parent.ctx.turns[i]["ts"] = BASE + timedelta(seconds=secs)
         sub.ctx.turns[0]["ts"] = BASE + timedelta(seconds=10)
         sub.ctx.turns[0]["model"] = "claude-opus-5"   # above the parent's first model, not its model at this turn
-        judged, above = ac.above_ceiling([parent, sub])
+        judged, above, _ = ac.above_ceiling([parent, sub])
         self.assertEqual((len(judged), len(above)), (1, 0))
 
     def test_a_subagent_is_judged_against_the_model_its_parent_used_at_its_first_turn(self):
@@ -1926,7 +1926,7 @@ class RuleScorecardTests(unittest.TestCase):
                 parent.ctx.turns[1]["ts"] = BASE + timedelta(seconds=30)
                 sub.ctx.turns[0]["ts"] = BASE + timedelta(seconds=10)
                 sub.ctx.turns[0]["model"] = own
-                judged, above = ac.above_ceiling([parent, sub])
+                judged, above, _ = ac.above_ceiling([parent, sub])
                 self.assertEqual(len(judged), 1)
                 self.assertEqual(len(above), 1 if expect_above else 0)
 

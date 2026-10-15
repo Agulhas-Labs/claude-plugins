@@ -393,6 +393,8 @@ class Context:
         self.agent_id = agent_id
         self.agent_type = agent_type_of(path, kind)
         self.worktree_branch = meta_of(path, kind).get("worktreeBranch") or None
+        self.tool_use_id = meta_of(path, kind).get("toolUseId") or None   # the parent's Agent call that spawned it
+        self.agent_calls = {}              # Agent tool_use id -> the model that call named, or None
         self.first_prompt = ""   # the text of the first prompt the context was given
         self.handoff = ""        # a subagent's first prompt plus the text of the files it names
         self.handoff_missing = 0   # how many of those named files were not on disk
@@ -592,6 +594,8 @@ def load_context(kind, path, project_dir, session_id, agent_id):
                 if not isinstance(b, dict):
                     continue
                 if b.get("type") == "tool_use":
+                    if b.get("name") == "Agent" and b.get("id"):
+                        ctx.agent_calls[b["id"]] = (b.get("input") or {}).get("model")
                     if b.get("name") == "SubagentHandback":
                         ctx.handback_report = (b.get("input") or {}).get("message") or ""
                     cat = classify(b.get("name", ""), b.get("input") or {})
@@ -1286,7 +1290,6 @@ def section_fixed_start(out, loaded):
 # cold-turn share is the one its orchestrator conventions quote (the week it was measured in is not
 # recorded here); the model-ceiling line's baseline is a target, not a measurement.
 BASELINE_TOP_DECILE_SHARE = 45.0    # % of subagent spend in the longest-running 10% of subagents
-BASELINE_SINGLE_CALL_SHARE = 70.0   # % of subagent turns that made a single tool call
 BASELINE_COLD_SHARE = 7.5           # % of subagent spend on cold turns
 MAKER_TYPES = ("builder", "builder-lite", "mechanic")   # the agent types that edit, as folded_type names them
 
@@ -1301,13 +1304,13 @@ VERDICT_RULES = (
     ("pass after fixes", re.compile(r"pass(ed)? after|merge-ready after|mergeable after"
                                     r"|after (the|one|two|\d) (named )?fix"
                                     r"|(merge|publish|ship|ready) after (the |those |these )?(named )?fix")),
-    ("fail", re.compile(r"verdict\**(?:\s*\([^)\n]{0,20}\))?\s*[:—–-]?\**\s*\**fail|not merge-ready|not mergeable|do not merge"
+    ("fail", re.compile(r"verdict\**(?:\s*\([^)\n]{0,80}\))?\s*[:—–-]?\**\s*\**fail|not merge-ready|not mergeable|do not merge"
                         r"|fix first|fix(es)? (is |are )?needed before|not ready (to|for) merge|blocks? (the )?merge")),
-    ("pass", re.compile(r"verdict\**(?:\s*\([^)\n]{0,20}\))?\s*[:—–-]?\**\s*\**pass|merge-ready|mergeable|ready to merge")),
+    ("pass", re.compile(r"verdict\**(?:\s*\([^)\n]{0,80}\))?\s*[:—–-]?\**\s*\**pass|merge-ready|mergeable|ready to merge")),
 )
 # the whole line, label included; a word or two before the label ("Final verdict") and a short
 # parenthetical after it ("Verdict (A)") are still the label
-VERDICT_LINE = re.compile(r"(?im)^(\W*(?:\w+\W+){0,2}?verdict\**(?:\s*\([^)\n]{0,20}\))?\W*[:\u2014\u2013-]\s*.+)$")
+VERDICT_LINE = re.compile(r"(?im)^(\W*(?:\w+\W+){0,2}?verdict\**(?:\s*\([^)\n]{0,80}\))?\W*[:\u2014\u2013-]\s*.+)$")
 VERDICTS = tuple(name for name, _ in VERDICT_RULES) + ("unclassified",)
 
 
@@ -1319,15 +1322,20 @@ def model_rank(model):
 
 
 def above_ceiling(loaded):
-    """(subagents judged, subagents above their parent session's model), as Loaded lists. The parent is
+    """(subagents judged, subagents above their parent session's model, subagents left out), the first two as
+    Loaded lists. A subagent whose spawning Agent call named a model is left out and counted: the ceiling hook
+    leaves such a call alone. The parent is
     the main context of the same project and session in the window, its model the one its last turn at
     or before the subagent's first used, the model the ceiling hook would have read. A subagent whose
     parent is not in the window, or whose model or parent's names no family, is not judged."""
     parents = {(l.ctx.project_dir, l.ctx.session_id): l for l in loaded if l.ctx.kind == "main"}
-    judged, above = [], []
+    judged, above, skipped = [], [], 0
     for l in loaded:
         parent = parents.get((l.ctx.project_dir, l.ctx.session_id))
         if l.ctx.kind != "subagent" or parent is None:
+            continue
+        if parent.ctx.agent_calls.get(l.ctx.tool_use_id):
+            skipped += 1
             continue
         own = [(t["ts"], model_rank(t["model"])) for t in l.window_turns if model_rank(t["model"]) is not None]
         theirs = [(t["ts"], model_rank(t["model"])) for t in parent.ctx.turns if model_rank(t["model"]) is not None]
@@ -1339,15 +1347,21 @@ def above_ceiling(loaded):
         judged.append(l)
         if rank > parent_rank:
             above.append(l)
-    return judged, above
+    return judged, above, skipped
 
 
-def reviewer_verdict(report):
-    """One of VERDICTS for a reviewer's hand-back report; no report at all is unclassified."""
+def reviewer_verdict(report, branches=None):
+    """One of VERDICTS for a reviewer's hand-back report; no report at all is unclassified. Where a verdict
+    line's parenthetical names one of `branches`, the last such line is the one classified."""
     text = (report or "").lower()
     lines = VERDICT_LINE.findall(text)
     if lines:
         text = lines[-1]
+        for line in reversed(lines):
+            paren = re.match(r"\W*(?:\w+\W+){0,2}?verdict\**\s*\(([^)\n]*)\)", line)
+            if paren and any(b.lower() in paren.group(1) for b in branches or ()):
+                text = line
+                break
     for name, rule in VERDICT_RULES:
         if text and rule.search(text):
             return name
@@ -1387,7 +1401,7 @@ def branches_named(text, worktree_branch=None):
 
 
 def rung_links(loaded):
-    """[(maker Loaded, round, reviewer Loaded or None)] for every maker in the window. Within one session,
+    """[(maker Loaded, round, reviewer Loaded or None, the maker's own branches)] for every maker in the window. Within one session,
     subagents are ordered by their first turn. A maker's own branches are the ones the fewest makers of the
     session name in their handoffs, so a base branch every handoff names does not tie makers together, plus
     the maker's own worktree branch, which is left out of that count: it is unique to each agent, so counted
@@ -1414,7 +1428,7 @@ def rung_links(loaded):
             finished = l.ctx.turns[-1]["ts"]
             reviewer = next((r for r in group[i + 1:] if folded_type(r) == "reviewer"
                              and r.ctx.turns[0]["ts"] >= finished and mine & branches[id(r)]), None)
-            links.append((l, "later" if mine & seen else "first", reviewer))
+            links.append((l, "later" if mine & seen else "first", reviewer, mine))
             seen |= mine
     return links
 
@@ -1425,19 +1439,19 @@ def section_review_by_rung(out, loaded):
         return
     out.append("=== Review by rung ===")
     out.append("  makers linked to a review by the maker's least-shared branch, from a reviewer that started after the"
-               " maker finished; a reviewer covering several branches gives each the same verdict")
+               " maker finished; a reviewer covering several branches gives each maker the verdict line that names its branch, else its last verdict line")
     out.append(f"  {'rung':13} {'round':6} {'makers':>7} {'linked':>7} {'pass':>5} {'lows':>5} {'after-fixes':>12}"
                f" {'fail':>5} {'unclass':>8} {'fail%':>6} {'avg input-eq':>13}")
     for rung in MAKER_TYPES:
         for rnd in ("first", "later"):
-            rows = [(l, r) for l, k, r in links if folded_type(l) == rung and k == rnd]
+            rows = [(l, r, mine) for l, k, r, mine in links if folded_type(l) == rung and k == rnd]
             if not rows:
                 continue
-            verdicts = collections.Counter(reviewer_verdict(r.ctx.handback_report) for _, r in rows if r)
+            verdicts = collections.Counter(reviewer_verdict(r.ctx.handback_report, mine) for _, r, mine in rows if r)
             linked = sum(verdicts.values())
             judged = linked - verdicts["unclassified"]
             fail_pct = f"{100 * verdicts['fail'] / judged:.0f}%" if judged else "-"
-            avg = sum(t["ie"] for l, _ in rows for t in l.window_turns) / len(rows)
+            avg = sum(t["ie"] for l, _, _ in rows for t in l.window_turns) / len(rows)
             out.append(f"  {rung:13} {rnd:6} {len(rows):7} {linked:7} {verdicts['pass']:5} {verdicts['pass with lows']:5}"
                        f" {verdicts['pass after fixes']:12} {verdicts['fail']:5} {verdicts['unclassified']:8}"
                        f" {fail_pct:>6} {fmt_tok(avg):>13}")
@@ -1514,7 +1528,7 @@ def section_rule_scorecard(out, loaded):
         single, _, batchable, _ = turn_shape_shares(loaded, "subagent")
     line("calls requested together", "single-tool-call share of subagent turns",
          f"{single:.1f}% (batchable {batchable:.1f}%)" if subs else "n/a",
-         f"{BASELINE_SINGLE_CALL_SHARE:.0f}%", judgement(single, BASELINE_SINGLE_CALL_SHARE))
+         None, "no baseline" if subs else "n/a")
 
     # the slow check goes to a runner: the cold turns that followed a Bash call
     cold = None
@@ -1526,7 +1540,7 @@ def section_rule_scorecard(out, loaded):
          judgement(cold, BASELINE_COLD_SHARE))
 
     # the model ceiling
-    judged, above = above_ceiling(loaded)
+    judged, above, skipped = above_ceiling(loaded)
     above_ie = sum(t["ie"] for l in above for t in l.window_turns)
     line("the model ceiling", "subagents above their parent session's model",
          f"{len(above)} of {len(judged)}, {100 * above_ie / (sub_ie or 1):.1f}% of subagent spend" if judged else "n/a",
@@ -1539,8 +1553,8 @@ def section_rule_scorecard(out, loaded):
     line("the reviewer pays", "reviewer verdicts from the hand-back report",
          f"{mix} of {sum(verdicts.values())}" if verdicts else "n/a", None,
          "no baseline" if verdicts else "n/a")
-    out.append("  note: the model ceiling counts every subagent, including calls that named their own model, which the"
-               " hook leaves alone")
+    out.append(f"  note: the model ceiling leaves out {skipped} subagent{'' if skipped == 1 else 's'} whose call named"
+               " its own model, which the hook leaves alone")
     out.append("  not scored: two review rounds at most, since the branch a transcript records is the one checked"
                " out where the agent ran, not the change it reviewed")
     out.append("")
