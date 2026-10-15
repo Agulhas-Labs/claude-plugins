@@ -22,8 +22,16 @@ class EditsFilesTests(unittest.TestCase):
                     "python3 - <<'EOF'\nopen('f.py', 'w').write('x')\nEOF",
                     "python3 -c \"open('f', 'a').write('x')\"",
                     "python3 - <<'EOF'\nfrom pathlib import Path\nPath('f').write_text('x')\nEOF",
-                    "python -u - <<EOF\nPath('f').write_bytes(b'x')\nEOF"]:
-            self.assertTrue(ac.edits_files(cmd), cmd)
+                    "python -u - <<EOF\nPath('f').write_bytes(b'x')\nEOF",
+                    "cat <<'EOF' > Sources/X.swift\nx\nEOF", "echo x\npatch -p1 < f.patch",
+                    "/usr/bin/python3 -c \"open('f', 'w').write('x')\"",
+                    "env python3 -c \"open('f', 'w').write('x')\"",
+                    ".venv/bin/python -c \"open('f', 'w').write('x')\"",
+                    "python3 -c \"open(os.path.join(a, b), 'w').write('x')\"",
+                    "perl -pie 's/a/b/' f", "echo x > $S/out", "S=/repo; echo 1 > $S/out",
+                    "cd /tmp/w && cd /repo && cat > probe", "echo x | tee out.txt"]:
+            with self.subTest(cmd=cmd):
+                self.assertTrue(ac.edits_files(cmd), cmd)
 
     def test_commands_that_do_not_edit(self):
         for cmd in ["sed -n 1,5p f.py", "cat f.py", "grep -n foo f.py", "git diff", "git apply --check fix.patch",
@@ -31,8 +39,17 @@ class EditsFilesTests(unittest.TestCase):
                     "python3 - <<'EOF'\nprint(open('f', 'r').read())\nif 1 > 0: pass\nEOF",
                     "make test 2>&1", "make test > /dev/null", "echo x > /tmp/out", "echo x > /private/tmp/out",
                     "echo x > /var/folders/ab/out", "echo x > $TMPDIR/out", "echo x | tee /tmp/out", "ls &> /dev/null",
-                    "echo 'a > b'", ""]:
-            self.assertFalse(ac.edits_files(cmd), cmd)
+                    "echo 'a > b'", "",
+                    "perl -MList::Util=sum -e 'print 1'", "sed -n '/ -i/p' f", "(( i > 1 ))",
+                    "echo $(( a > b ))", "tee \"$TMPDIR/x\" < f", "tee '/tmp/x' < f",
+                    "python3 -c \"print(open('a').read().replace('x', 'y'))\"",
+                    "python3 -c \"d=open('a').read(); f(d, 'x')\"",
+                    "S=/tmp/x; echo 1 > $S/out", "S=\"$TMPDIR/y\" && cat > \"$S/p\"",
+                    "S=/tmp/x; echo 1 > ${S}/out", "cd /tmp/w && cat > probe",
+                    "echo x > ~/Library/Caches/a", "echo x > $HOME/Library/Caches/a",
+                    "echo x > ${HOME}/Library/Caches/a"]:
+            with self.subTest(cmd=cmd):
+                self.assertFalse(ac.edits_files(cmd), cmd)
 
     def test_a_bash_edit_sets_the_first_edit_turn(self):
         fx = FixtureRoot(self)
