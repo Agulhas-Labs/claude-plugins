@@ -453,6 +453,8 @@ class Context:
         self.start = None     # fixed-start composition dict, filled from attachments before first turn
         self.hand_back_nudge_turn = None   # len(turns) when the budget hook first asked it to hand back
         self.first_edit_turn = None        # index into turns of the first turn that called an edit tool
+        self.first_commit_turn = None      # index into turns of the first turn that ran a git commit
+        self.last_text = ""                # the last assistant text block, for a report that was not handed back
         self.handback_report = None        # the last SubagentHandback call's message, if it made one
         self.prompted_after_handback = False   # a prompt arrived after a SubagentHandback call
 
@@ -461,6 +463,7 @@ class Context:
 # as a hook attachment records them. Matched on attachment entries only: a file read that quotes the
 # hook is a tool result, not the hook speaking.
 EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
+GIT_COMMIT = re.compile(r"\bgit\b(?:\s+-[Cc]\s+\S+)*\s+commit\b")
 
 HEREDOC = re.compile(r"(<<-?\s*(['\"]?)(\w+)\2[^\n]*\n).*?(?:\n\s*\3(?=\s|$)|\Z)", re.S)   # keeps the opening line
 UNQUOTE = re.compile(r"(>>?\s*|\bcd\s+|\btee\s+(?:-\w+\s+)*|\b\w+=)([\"'])([^\"'\s]*)\2")
@@ -698,9 +701,14 @@ def load_context(kind, path, project_dir, session_id, agent_id):
                                     b.get("name") in EDIT_TOOLS
                                     or (b.get("name") == "Bash" and edits_files((b.get("input") or {}).get("command")))):
                                 ctx.first_edit_turn = len(ctx.turns) - 1
+                            if (ctx.first_commit_turn is None and b.get("name") == "Bash"
+                                    and GIT_COMMIT.search((b.get("input") or {}).get("command") or "")):
+                                ctx.first_commit_turn = len(ctx.turns) - 1
                     ctx.events.append((len(ctx.turns), "assistant: tool-call inputs (edits, commands)", len(json.dumps(b.get("input")))))
                 elif b.get("type") == "text":
                     ctx.events.append((len(ctx.turns), "assistant: text", len(b.get("text", ""))))
+                    if b.get("text"):
+                        ctx.last_text = b["text"]
         elif etype == "user":
             if ctx.handback_report is not None and is_prompt(e):
                 ctx.prompted_after_handback = True
@@ -1563,6 +1571,113 @@ def section_review_by_rung(out, loaded):
     out.append("")
 
 
+# Budget marks: whether handing back at a mark pays. A subagent is warned at three context sizes; a scout's
+# are lower. When an agent is told to hand back and its report lists work left, a fresh agent takes that
+# work. The fresh agent pays a run-up (its turns before its first edit) that the old agent, finishing in
+# place, would not; in exchange its context is smaller on every turn after, and the old agent's would have
+# carried the difference. Whichever sum is larger is the cheaper road.
+BUDGET_MARKS = (("freeze", 120_000), ("hand-back", 150_000), ("stop", 200_000))
+SCOUT_BUDGET_MARKS = (("freeze", 60_000), ("hand-back", 80_000), ("stop", 95_000))
+WORK_LEFT_LINE = re.compile(r"(?im)^.{0,12}(remaining|remains|not done|unfinished|not started|left undone|still to do"
+                            r"|left to do|outstanding|not (?:yet )?(?:implemented|landed|addressed|fixed))\b.*$")
+OWED_TO_RUNNER = re.compile(r"(?i)(full|whole|complete)\s+(suite|run|test)|owed|runner")
+NOTHING_LEFT = re.compile(r"(?i)\b(none|nothing|no items?)\b")
+CONTINUATION = re.compile(r"(?i)\b(remaining|continu\w*|pick(?:s|ing)? up|handed back|hand-back|left off"
+                          r"|previous (?:agent|builder)|ran out|budget)\b")
+
+
+def lists_work_left(l):
+    """Whether a subagent's report has a line that names work still to do. The report is its hand-back
+    message, or for an older transcript its last text. A line that is only about the full suite being owed
+    to a runner, or that says none, does not count."""
+    report = l.ctx.handback_report or l.ctx.last_text
+    return any(not OWED_TO_RUNNER.search(m.group(0)) and not NOTHING_LEFT.search(m.group(0))
+               for m in WORK_LEFT_LINE.finditer(report or ""))
+
+
+def follow_up_costs(l, group):
+    """(run-up $, old-context $) for the first maker of `group` that took over from `l`, or None when
+    none did. The follow-up is the first later maker of the session, started after `l`'s last turn, whose
+    handoff names one of `l`'s branches or whose first prompt reads as a continuation. Its run-up is the
+    list $ of its turns before its first edit; the old context's figure is what those later turns would have
+    added had they carried `l`'s larger context, a cold turn weighing what a rewrite costs."""
+    mine = branches_named(l.ctx.handoff, l.ctx.worktree_branch)
+    end = l.ctx.turns[-1]["ts"]
+    nxt = next((f for f in group if f is not l and folded_type(f) in MAKER_TYPES and f.ctx.turns[0]["ts"] > end
+                and (mine & branches_named(f.ctx.handoff, f.ctx.worktree_branch)
+                     or CONTINUATION.search(f.ctx.first_prompt[:4000]))), None)
+    if nxt is None:
+        return None
+    turns = nxt.ctx.turns
+    first = nxt.ctx.first_edit_turn if nxt.ctx.first_edit_turn is not None else len(turns)
+    model = turns[0]["model"]
+    w = cache_read_weight(model)
+    runup = sum(input_equivalent(t["usage"], t.get("model")) for t in turns[:first])
+    lift = max(0, l.ctx.turns[-1]["ctx"] - (turns[first]["ctx"] if first < len(turns) else turns[-1]["ctx"]))
+    cold = {id(r["turn"]) for r in cold_turns(turns)}
+    extra = sum(lift * ((1.25 - w) if id(t) in cold else w) for t in turns[first + 1:])
+    return list_dollars(runup, 0, model) or 0.0, list_dollars(extra, 0, model) or 0.0
+
+
+def section_budget_marks(out, loaded):
+    sessions = collections.defaultdict(list)
+    for l in loaded:
+        if l.ctx.kind == "subagent" and l.ctx.turns:
+            sessions[(l.ctx.project_dir, l.ctx.session_id)].append(l)
+    for group in sessions.values():
+        group.sort(key=lambda l: l.ctx.turns[0]["ts"])
+    rows = []   # (rung, mark name, mark, [(agent, crossing turn, its session's group)])
+    types = {folded_type(l) for g in sessions.values() for l in g if l.window_turns}
+    order = [t for t in MAKER_TYPES if t in types] + [t for t in ("scout",) if t in types]
+    order += sorted(types - set(order))
+    for rung in order:
+        marks = SCOUT_BUDGET_MARKS if rung == "scout" else BUDGET_MARKS
+        for name, mark in marks:
+            past = []
+            for g in sessions.values():
+                for l in g:
+                    if folded_type(l) != rung or not l.window_turns:
+                        continue
+                    crossed = next((i for i, t in enumerate(l.ctx.turns) if t["ctx"] >= mark), None)
+                    if crossed is not None:
+                        past.append((l, crossed, g))
+            if past:
+                rows.append((rung, name, mark, past))
+    if not rows:
+        return
+    out.append("=== Budget marks ===")
+    out.append("  agents whose context reached each budget mark, and for the hand-back and stop marks whether handing the"
+               " work left to a fresh agent cost less than finishing in place (a scout's marks are lower)")
+    width = max(13, *(len(rung) for rung, _, _, _ in rows))
+    out.append(f"  {'rung':{width}} {'mark':>14} {'past':>5} {'after, committed':>17} {'after, not':>11} {'left work':>10}"
+               f" {'linked':>7} {'run-ups $':>10} {'old context $':>14} {'cheaper':>8}")
+
+    def turns_after(agents, committed):
+        xs = [len(l.ctx.turns) - 1 - i for l, i, _ in agents
+              if (l.ctx.first_commit_turn is not None and l.ctx.first_commit_turn <= i) == committed]
+        return f"{median(xs):.0f} ({len(xs)})" if xs else "-"
+
+    for rung, name, mark, past in rows:
+        label = f"{name} {mark // 1000}k"
+        cells = [turns_after(past, True), turns_after(past, False)]
+        if name == "freeze":
+            cells += ["-"] * 5
+        else:
+            left = [(l, g) for l, _, g in past if lists_work_left(l)]
+            costs = [c for c in (follow_up_costs(l, g) for l, g in left) if c]
+            cells += [str(len(left)), str(len(costs)), fmt_usd(sum(r for r, _ in costs)),
+                      fmt_usd(sum(e for _, e in costs)), str(sum(e > r for r, e in costs))]
+        out.append(f"  {rung:{width}} {label:>14} {len(past):5} {cells[0]:>17} {cells[1]:>11} {cells[2]:>10}"
+                   f" {cells[3]:>7} {cells[4]:>10} {cells[5]:>14} {cells[6]:>8}")
+    out.append("  (heuristics: after-turns count the turns after the one that crossed the mark; left work is a report line"
+               " that starts with Remaining, not done, unfinished or similar, and is not only about the full suite owed to"
+               " a runner; linked is the first later maker whose handoff shares a branch or whose prompt reads as a"
+               " continuation. Run-ups $ is the follow-ups' list $ before their first edit; old context $ is what their later"
+               " turns would have added in the larger context. Cheaper counts the linked hand-backs where the second"
+               " exceeds the first.)")
+    out.append("")
+
+
 GATE_LINE = re.compile(r"\bG\d+\b[^\n]*CHECK:")
 # Copied from hooks/handoff-gates.py; it must match that file's CLASS_LINE.
 CLASS_LINE = re.compile(r"(?im)^[^\w\n]*Rung:[^\w\n]*builder(?![\w-])[^\w\n]*"
@@ -1777,6 +1892,7 @@ SECTIONS = (
     ("fixed-start", "Fixed start", lambda out, loaded, top_n: section_fixed_start(out, loaded)),
     ("rule-scorecard", "Rule scorecard", lambda out, loaded, top_n: section_rule_scorecard(out, loaded)),
     ("review-by-rung", "Review by rung", lambda out, loaded, top_n: section_review_by_rung(out, loaded)),
+    ("budget-marks", "Budget marks", lambda out, loaded, top_n: section_budget_marks(out, loaded)),
     ("largest-contexts", "Largest contexts", section_largest),
     ("tools-called", "Tools called", lambda out, loaded, top_n: section_tools(out, loaded)),
 )

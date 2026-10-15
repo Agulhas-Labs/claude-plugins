@@ -1448,6 +1448,7 @@ SECTION_HEADINGS = {
     "fixed-start": "=== Fixed start ===",
     "rule-scorecard": "=== Rule scorecard ===",
     "review-by-rung": "=== Review by rung ===",
+    "budget-marks": "=== Budget marks ===",
     "largest-contexts": "=== Largest contexts",
     "tools-called": "=== Tools called",
 }
@@ -1469,7 +1470,7 @@ class SectionSelectionTests(unittest.TestCase):
             deferred_attachment(ts_str(BASE), ["mcp__codeindex__digest"]),
             assistant("m1", ts_str(BASE), usage(cache_read=3000), content=[tool_use_block("t1")]),
             user_tool_result(ts_str(BASE + timedelta(seconds=1)), "t1", "result text"),
-            assistant("m2", ts_str(BASE + timedelta(seconds=2)), usage(cache_read=4000)),
+            assistant("m2", ts_str(BASE + timedelta(seconds=2)), usage(cache_read=130_000)),   # past the 120k mark
         ])
         self.fx = fx
         return ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
@@ -1964,11 +1965,12 @@ class RuleScorecardTests(unittest.TestCase):
         report = ac.build_report(loaded, 12, sections=["rule-scorecard"])
         self.assertEqual(section_body(report, "Rule scorecard").splitlines()[0].strip(), "none in this window")
 
-    def test_in_the_default_report_just_before_review_by_rung_and_largest_contexts(self):
+    def test_in_the_default_report_just_before_review_by_rung_budget_marks_and_largest_contexts(self):
         _, loaded = rule_tree(self)
         headings = [l for l in ac.build_report(loaded, 12).splitlines() if l.startswith("=== ")]
-        self.assertEqual(headings[-3], "=== Rule scorecard ===")
-        self.assertEqual(headings[-2], "=== Review by rung ===")
+        self.assertEqual(headings[-4], "=== Rule scorecard ===")
+        self.assertEqual(headings[-3], "=== Review by rung ===")
+        self.assertEqual(headings[-2], "=== Budget marks ===")
         self.assertTrue(headings[-1].startswith("=== Largest contexts"))
 
     def test_asked_for_alone_with_sections(self):
