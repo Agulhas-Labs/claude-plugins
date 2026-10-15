@@ -49,15 +49,16 @@ however it spelled the path) is younger, and so is free.
   index out of range) stays put. A directory that still holds an unexpanded variable, or does not exist, is
   unknown and allowed; so is one inside a repository or worktree that a `git init`, `git clone` or `git
   worktree add` earlier in the same line creates (below). A `cd`, `pushd` or `popd` into a directory
-  that is not there when the hook runs, and that no `mkdir` or `git init` earlier in the line makes, may fail and leave the shell where it was. Calls joined to it by `&&` (a pipe
+  that is not there when the hook runs, and that no `mkdir` or `git init` earlier in the line makes, may
+  fail and leave the shell where it was. Calls joined to it by `&&` (a pipe
   within that chain included) run only if it succeeded, so they are judged from its target alone; after
   the chain breaks (`;`, a newline, `||`, a single `&`), every later call is judged from the directory
   before it as well, and refused if either refuses, until its group closes or the line ends. So
   `git worktree add <dir> <rev> && cd <dir> && git checkout -b x` is allowed and the same joined by `;`
   is not: if the add fails, the checkout runs where the line started.
   A `git clone` or `git worktree add` target is not counted as made, because those fail in ordinary use.
-  Measured over 373 reviewer transcripts on one machine, counting none of them refused 150 calls in 87
-  transcripts; counting `mkdir` and `git init` leaves 32 in 23.
+  Measured by replaying 373 reviewer transcripts on one machine: counting `mkdir` and `git init` lifted
+  119 refusals in 79 of them, each a line that makes a directory and then enters it, and refused nothing new.
 - A git command that moves refs every worktree shares (branch -f/-d/-m/-c/-u, update-ref, symbolic-ref
   with two arguments, tag creating or deleting, push, stash, notes add/edit/remove/append/copy/merge/prune,
   worktree add -B, and worktree remove, move or prune of an older worktree) is refused when the
