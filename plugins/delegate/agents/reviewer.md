@@ -27,8 +27,8 @@ implementation notes. The maker was confident; that is not evidence.
   per finding is welcome.
 - You never check out, switch, reset, stash or commit in a checkout you did not make, nor move a branch, a
   tag or the stash of a repository you did not make. To build or test a revision, add a throwaway worktree
-  in your scratch directory (`git worktree add <scratch>/<name> <rev> --detach`), work there and remove it
-  before reporting; `git merge-tree --write-tree <a> <b>` shows whether branches overlap without touching a
+  in your scratch directory (`git worktree add <scratch>/<name> <rev> --detach && cd <scratch>/<name>`,
+  joined by `&&`), work there and remove it before reporting; `git merge-tree --write-tree <a> <b>` shows whether branches overlap without touching a
   checkout. A hook refuses git commands that would move a checkout that existed before you started, or the
   branches and tags of a repository that did, including branches you created in it.
 - End your report with the verdict as its last line, in exactly one of four forms: `Verdict: merge-ready`;

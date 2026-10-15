@@ -66,11 +66,11 @@ class Fixture(unittest.TestCase):
             for e in entries:
                 f.write(json.dumps(e) + "\n")
 
-    def payload(self, command, agent_type=f"{NAME}:builder", agent="a1", background=False):
+    def payload(self, command, agent_type=f"{NAME}:builder", agent="a1", background=False, cwd=None):
         tool_input = {"command": command, "description": "run"}
         if background:
             tool_input["run_in_background"] = True
-        payload = {"session_id": "s", "transcript_path": self.parent, "cwd": self.checkout,
+        payload = {"session_id": "s", "transcript_path": self.parent, "cwd": cwd or self.checkout,
                    "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": tool_input,
                    "tool_use_id": "toolu_now", "agent_type": agent_type}
         if agent:
@@ -272,8 +272,8 @@ class ReviewerTests(Fixture):
             timespec="milliseconds").replace("+00:00", "Z"), "message": {"role": "user", "content": "Review"}}
         super().write(opening, *entries)
 
-    def refused(self, command, env=ENV):
-        said = self.reason(command, agent_type=self.REVIEWER, env=env)
+    def refused(self, command, env=ENV, cwd=None):
+        said = self.reason(command, agent_type=self.REVIEWER, env=env, cwd=cwd)
         return said is not None and guard.REVIEWER_TAG in said
 
     def test_commands_that_move_the_checkout_it_started_in_are_refused_anywhere_in_a_line(self):
@@ -347,6 +347,37 @@ class ReviewerTests(Fixture):
         os.makedirs(later)
         self.assertFalse(self.refused(f"S={self.checkout}/.build; git worktree add --detach $S/rv HEAD && cd $S/rv && git checkout -b probe"))
 
+    def test_a_failed_add_or_clone_into_a_directory_that_is_not_empty_makes_nothing(self):
+        leftover = os.path.join(self.checkout, ".build", "rv")
+        os.makedirs(leftover)
+        with open(os.path.join(leftover, "log"), "w", encoding="utf-8") as f:
+            f.write("x\n")  # git refuses to add or clone into it, and the line goes on in the older checkout
+        for sep in ("; ", "\n"):
+            for command in (f"git worktree add .build/rv HEAD{sep}cd .build/rv{sep}git checkout -b probe",
+                            f"git clone -q {self.checkout} .build/rv{sep}cd .build/rv{sep}git reset --hard HEAD~1",
+                            f"git clone -q {self.checkout} {leftover}{sep}git -C {leftover} branch -f main HEAD"):
+                self.assertTrue(self.refused(command), command)
+        os.makedirs(os.path.join(self.checkout, ".build", "new"))  # there and empty: git adds into it
+        self.assertFalse(self.refused("git worktree add .build/new HEAD && cd .build/new && git checkout -b probe"))
+
+    def test_a_new_repository_does_not_hold_an_older_checkout_nested_inside_it(self):
+        for command in (f"git init -q {self.root} && cd {self.checkout} && git checkout -b x",
+                        f"git init -q {self.root}; git -C {self.checkout} branch -f main HEAD",
+                        f"cd {self.root} && git init -q && cd sibling && git reset --hard"):
+            self.assertTrue(self.refused(command), command)
+
+    def test_an_add_or_init_where_a_git_entry_is_already_there_makes_nothing(self):
+        for command in ("git worktree add . && git checkout main", "git worktree add . HEAD; git checkout main",
+                        "git init -q . && git checkout main", "git init -q; git branch -f main HEAD"):
+            self.assertTrue(self.refused(command), command)
+
+    def test_git_dir_and_work_tree_name_the_directory_whatever_the_cwd(self):
+        for command in (f"git --git-dir={self.checkout}/.git --work-tree={self.checkout} checkout x",
+                        f"git --work-tree={self.checkout} --git-dir={self.checkout}/.git reset --hard",
+                        f"git --git-dir={self.checkout}/.git branch -f main HEAD",
+                        f"git --work-tree={self.sibling} reset --hard"):
+            self.assertTrue(self.refused(command, cwd=self.scratch), command)
+
     def test_a_nested_worktree_made_after_the_reviewer_started_is_its_own(self):
         nested = os.path.join(self.checkout, ".build", "rv")
         git(self.checkout, "worktree", "add", "--detach", nested, "HEAD")
@@ -359,6 +390,64 @@ class ReviewerTests(Fixture):
                         "git -C $WT reset --hard", f"cd {self.root}/gone && git checkout main",
                         "for d in a b; do (cd $d && git checkout main); done", "cd - && git checkout main"):
             self.assertFalse(self.refused(command), command)
+
+    def test_a_cd_inside_a_subshell_or_substitution_ends_with_it_and_popd_returns(self):
+        s, c = self.scratch, self.checkout
+        for command in (f"(cd {s} && ls); git checkout main", f"x=$(cd {s}; pwd); git checkout main",
+                        f"y=`cd {s}`; git reset --hard", f"pushd {s} && popd && git checkout main",
+                        f"(cd {s}; (cd /); ls) && git stash", f"x=$(cd {s}; y=`cd /; pwd`; pwd); git checkout main",
+                        # The line's stack is known whole, so a rotation is followed as bash follows it.
+                        f"pushd {s} && pushd +1 && git checkout main", f"pushd {s} && pushd -0 && git checkout main",
+                        f"popd +0; git checkout main", f"pushd {s} && pushd {s} && popd +0 && popd +0 && git checkout main",
+                        f"cd {s} && pushd {c} && pushd -n +1 && git checkout main",
+                        f"pushd +1; git checkout main", f"cd {s} && pushd {c} -n && git checkout main"):
+            with self.subTest(command=command):
+                self.assertTrue(self.refused(command))
+        for command in (f"{{ cd {s}; }}; git checkout main", f"(cd {s} && git init -q n && cd n && git checkout -b x)",
+                        f"pushd {s} && git checkout main", f"cd {s} && pushd {c} && popd && git checkout main",
+                        f"(cd {c}; cd {s}; git checkout main)", f"popd; cd {s} && popd && git checkout main",
+                        f"pushd {s} && pushd {c} && pushd +1 && git checkout main",
+                        f"pushd {s} && popd +1 && git checkout main", f"pushd {s} && pushd {c} && popd -0 && popd && git checkout main",
+                        # D is unknown once its group closes, so the cd target cannot be told: allowed, as before.
+                        f"(D={s}); cd $D 2>/dev/null; git checkout main"):
+            with self.subTest(command=command):
+                self.assertFalse(self.refused(command))
+
+    def test_after_a_cd_that_may_fail_a_broken_chain_is_judged_from_the_directory_before_it_too(self):
+        s, typo = self.scratch, "/nonexistent-typo"
+        branch = git(self.checkout, "rev-parse", "--abbrev-ref", "HEAD")
+        for command in (f"git worktree add {s}/rv {branch}; cd {s}/rv; git checkout -b probe",
+                        f"git worktree add {s}/rv {branch}\ncd {s}/rv\ngit checkout -b probe",
+                        f"cd {typo}; git checkout main", f"cd {typo} || true; git reset --hard",
+                        f"cd {typo} & git checkout main", f"(cd {typo}; git checkout main)",
+                        f"cd {typo} && ls; git stash", f"cd {typo} && (ls); git checkout main",
+                        f"pushd {typo}; git checkout main", f"cd {typo} &&\nls\ngit checkout main"):
+            with self.subTest(command=command):
+                self.assertTrue(self.refused(command))
+        for command in (f"git worktree add {s}/wt HEAD --detach && cd {s}/wt && git checkout -b x",
+                        f"git worktree add {s}/wt HEAD --detach &&\ncd {s}/wt &&\ngit checkout -b x",
+                        f"mkdir -p {s}/m && cd {s}/m && git init -q && git commit -q --allow-empty -m x",
+                        f"cd {typo} && git checkout main", f"cd {typo} &>/dev/null && git checkout main",
+                        f"cd {typo} && ls | cat && git checkout main", f"cd {typo} && (ls; git checkout main)",
+                        f"cd {s}; git checkout main", f"(cd {typo}; ls); cd {s}; git checkout main",
+                        f"cd {typo}; cd {s}; git checkout main",
+                        # Either scratch (the first cd succeeded) or the checkout's parent (it failed): no checkout.
+                        f"cd {s}/missing; cd ..; git checkout main"):
+            with self.subTest(command=command):
+                self.assertFalse(self.refused(command))
+
+    def test_list_forms_of_tag_and_stash_with_options_are_reads(self):
+        for command in ("git tag -n5", "git tag -n 5", "git tag -n5 'v*'", "git stash -q list", "git stash --quiet show",
+                        "git tag --sort=-v:refname", "git tag --sort refname", "git tag --format='%(refname)'",
+                        "git tag --sort=refname -l 'v*'", "git tag --contains abc", "git tag -l -- v9", "git tag -n x"):
+            with self.subTest(command=command):
+                self.assertFalse(self.refused(command))
+        for command in ("git stash -q", "git stash -q pop", "git stash -m list", "git tag --sort=refname newtag",
+                        "git tag --sort refname newtag", "git tag --format '%(refname)' newtag", "git tag -m x v2",
+                        "git tag -a -m x v2", "git tag -am x v2", "git tag -amx v2", "git tag -f v1 HEAD", "git tag -d v1",
+                        "git tag --column newtag", "git tag -m -l v2", "git tag -- v9", "git tag --color always"):
+            with self.subTest(command=command):
+                self.assertTrue(self.refused(command))
 
     def test_home_and_tilde_expand(self):
         env = dict(ENV, HOME=self.root)
