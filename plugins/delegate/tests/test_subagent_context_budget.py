@@ -118,103 +118,52 @@ class BudgetTests(unittest.TestCase):
         self.assertIsNotNone(self.advise("t2"))
         self.assertIsNone(self.advise("t3"))
 
-    def reads(self, *commands, context=50_000):
-        """One single-call Bash turn per command, calls named t1, t2, ..."""
-        self.write(*(assistant(f"m{i}", context, f"t{i}", command=c) for i, c in enumerate(commands, 1)))
+    def main_advise(self, tool_id, env=None, path=None):
+        return budget.advice({"transcript_path": path or self.main_file, "tool_use_id": tool_id}, **({"env": env} if env else {}))
 
-    def test_the_third_single_read_only_turn_in_a_row_is_told_to_batch(self):
-        self.reads("grep a x", "cat y", "git status")
-        said = self.advise("t3")
-        self.assertIn("Batch your reads", said)
-        self.assertIn("50k", said)
+    def main_write(self, *entries, path=None):
+        with open(path or self.main_file, "w") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
 
-    def test_two_in_a_row_are_not_told(self):
-        self.reads("grep a x", "cat y")
-        self.assertIsNone(self.advise("t2"))
+    @property
+    def main_file(self):
+        return self.parent
 
-    def test_the_fourth_in_a_run_is_not_told(self):
-        self.reads("grep a x", "cat y", "git status", "git diff")
-        self.assertIn("Batch your reads", self.advise("t3"))
-        self.assertIsNone(self.advise("t4"))
+    def test_main_session_is_silent_below_200k_and_speaks_at_it(self):
+        self.main_write(assistant("m1", 150_000, "t1"), assistant("m2", 199_000, "t2"), assistant("m3", 201_000, "t3"))
+        self.assertIsNone(self.main_advise("t2"))
+        said = self.main_advise("t3")
+        self.assertIn("this session's context is now 201k tokens", said)
+        self.assertIn("/compact", said)
+        self.assertNotIn("Context budget", said)
 
-    def test_a_two_call_turn_breaks_the_run(self):
-        self.write(
-            assistant("m1", 50_000, "t1", command="grep a x"), assistant("m2", 50_000, "t2", command="grep a x"),
-            assistant("m3", 50_000, "t3a", "t3b", command="grep a x"), assistant("m4", 50_000, "t4", command="grep a x"),
-            assistant("m5", 50_000, "t5", command="grep a x"), assistant("m6", 50_000, "t6", command="grep a x"),
-        )
-        for call in ("t1", "t2", "t3a", "t4", "t5"):
-            self.assertIsNone(self.advise(call), call)
-        self.assertIn("Batch your reads", self.advise("t6"))
+    def test_main_session_speaks_once_per_100k_crossing_on_the_first_call_of_the_turn(self):
+        self.main_write(assistant("m1", 201_000, "t1"), assistant("m2", 250_000, "t2"),
+                        assistant("m3", 300_000, "t3", "t4"), assistant("m4", 399_000, "t5"),
+                        assistant("m5", 400_000, "t6"))
+        self.assertIsNone(self.main_advise("t2"))
+        self.assertIn("300k", self.main_advise("t3"))
+        self.assertIsNone(self.main_advise("t4"))
+        self.assertIsNone(self.main_advise("t5"))
+        self.assertIn("400k", self.main_advise("t6"))
 
-    def test_writes_are_not_read_only(self):
-        for command in ("sed -i s/a/b/ f", "cat x > y", "git fetch origin", "ls | tee out"):
-            self.assertFalse(budget.read_only("Bash", {"command": command}), command)
-        self.assertFalse(budget.read_only("Edit", {}))
-        self.assertFalse(budget.read_only("Bash", {}))
-        self.reads("grep a x", "cat x > y", "git status")
-        self.assertIsNone(self.advise("t3"))
+    def test_main_session_gets_no_subagent_tier_and_no_cache_line(self):
+        self.main_write(assistant("m1", 100_000, "t1"), assistant("m2", 125_000, "t2", timestamp=ISSUED))
+        self.assertIsNone(budget.advice({"transcript_path": self.main_file, "tool_use_id": "t2"}, now=ISSUED_AT + 3600))
 
-    def test_expected_read_only_verdicts(self):
-        writes_or_builds = (
-            "swift test --filter Foo 2>&1 | tail -20", "npm test | tail", "make 2>&1 | grep error",
-            'git commit -am "fix grep usage"', "git push origin x | tail", "git merge feat/x | tail",
-            'python3 -c "print(1)" | head', "ls", "find . -name x", "wc -l f",
-            "git checkout feat/x && git log -1", "git branch feat/new", "git reset --hard && git status",
-            "git stash && git diff", "rm -rf .build && grep -r x .",
-        )
-        for command in writes_or_builds:
-            self.assertFalse(budget.read_only("Bash", {"command": command}), command)
-        for command in ("grep -rn x .", "sed -n 1,20p f", "git log --oneline -5", "git diff main",
-                        "git branch", "git branch -a", "git branch --list", "git branch -vv",
-                        "git branch --show-current", "git branch -r 2>/dev/null", "cat f | head"):
-            self.assertTrue(budget.read_only("Bash", {"command": command}), command)
+    def test_main_budget_can_be_switched_off(self):
+        self.main_write(assistant("m1", 150_000, "t1"), assistant("m2", 250_000, "t2"))
+        self.assertIsNotNone(self.main_advise("t2"))
+        self.assertIsNone(self.main_advise("t2", env={"DELEGATE_MAIN_BUDGET": "0"}))
 
-    def test_leading_cd_is_dropped_before_matching(self):
-        self.assertTrue(budget.read_only("Bash", {"command": "cd /x && git log --oneline"}))
-        # A subcommand that only starts like a writing one, and an rm inside a search pattern, stay reads.
-        self.assertTrue(budget.read_only("Bash", {"command": "git merge-base --is-ancestor a b"}))
-        self.assertTrue(budget.read_only("Bash", {"command": 'grep -E "foo|rm" f'}))
-        self.assertFalse(budget.read_only("Bash", {"command": "rm -rf .build && grep -r x ."}))
-        self.assertTrue(budget.read_only("Bash", {"command": "cd /x; cd y && git status"}))
-        self.assertFalse(budget.read_only("Bash", {"command": "cd /x && make"}))
-        for tool in ("Read", "Grep", "Glob"):
-            self.assertTrue(budget.read_only(tool, {}))
+    def test_a_main_payload_naming_an_agent_file_is_not_the_main_session(self):
+        self.main_write(assistant("m1", 150_000, "t1"), assistant("m2", 250_000, "t2"), path=self.agent_file)
+        self.assertIsNone(self.main_advise("t2", path=self.agent_file))
 
-    def test_the_batch_nudge_can_be_switched_off(self):
-        self.reads("grep a x", "cat y", "git status")
-        self.assertIsNone(self.advise("t3", env={"DELEGATE_BATCH_NUDGE": "0"}))
-        self.assertIn("Batch your reads", self.advise("t3", env={"DELEGATE_BATCH_NUDGE": "1"}))
-
-    def test_the_tier_line_comes_before_the_batch_line(self):
-        self.write(
-            assistant("m1", 110_000, "t1", command="grep a x"), assistant("m2", 115_000, "t2", command="grep a x"),
-            assistant("m3", 121_000, "t3", command="grep a x"),
-        )
-        said = self.advise("t3")
-        self.assertLess(said.index("Scope freeze"), said.index("Batch your reads"))
-
-    def test_the_batch_line_comes_before_the_cache_line(self):
-        self.write(
-            assistant("m1", 50_000, "t1", command="grep a x"), assistant("m2", 50_000, "t2", command="grep a x"),
-            assistant("m3", 50_000, "t3", command="grep a x", timestamp=ISSUED),
-        )
-        said = self.advise("t3", now=ISSUED_AT + 600)
-        self.assertLess(said.index("Batch your reads"), said.index("Cache expired"))
-
-    def test_three_single_read_glob_grep_turns_through_advice_are_told_to_batch(self):
-        def turn(mid, tool_id, name, tool_input):
-            usage = {"input_tokens": 2, "cache_read_input_tokens": 49_998, "cache_creation_input_tokens": 0}
-            block = {"type": "tool_use", "id": tool_id, "name": name, "input": tool_input}
-            return {"type": "assistant", "message": {"id": mid, "usage": usage, "content": [block]}}
-        self.write(turn("m1", "t1", "Read", {"file_path": "/x"}), turn("m2", "t2", "Grep", {"pattern": "a"}),
-                   turn("m3", "t3", "Glob", {"pattern": "*.py"}))
-        self.assertIsNone(self.advise("t2"))
-        self.assertIn("Batch your reads", self.advise("t3"))
-
-    def test_main_session_is_never_told(self):
-        self.write(assistant("m1", 125_000, "t1"), assistant("m2", 151_000, "t2"))
-        self.assertIsNone(budget.advice({"transcript_path": self.parent, "tool_use_id": "t2"}))
+    def test_a_subagent_is_never_given_the_main_words(self):
+        self.write(assistant("m1", 150_000, "t1"), assistant("m2", 250_000, "t2"))
+        self.assertNotIn("Session context", self.advise("t2"))
 
     def test_a_payload_naming_the_agent_transcript_itself_is_used_directly(self):
         self.write(assistant("m1", 125_000, "t1"), assistant("m2", 151_000, "t2"))
