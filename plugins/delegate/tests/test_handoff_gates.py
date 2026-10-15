@@ -140,7 +140,8 @@ class HandoffGatesTests(unittest.TestCase):
 
     def test_a_cut_first_line_in_the_tail_is_skipped(self):
         reason = self.reason(self.call())
-        pad = {"type": "user", "message": {"content": "x" * gates.TAIL}}
+        # The cut line still names a tool_use, so it passes the byte filter and reaches the parser.
+        pad = {"type": "user", "message": {"content": "x" * gates.TAIL + '"tool_use'}}
         self.write([pad, use("t1", f"{NAME}:builder", BARE), result("t1", reason)])
         self.assertIsNone(self.call())
 

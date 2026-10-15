@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""PostToolUse and PostToolUseFailure: warn a subagent, in three tiers, as its context passes a budget.
+"""PostToolUse and PostToolUseFailure: warn a subagent in three tiers, and the main session from 200k, as its
+context passes a budget.
 
 An agent's spend is its context summed over every turn, so it grows with the square of the agent's
 length. A single warning repeated verbatim tells an agent nothing it does not already know: measured
@@ -203,7 +204,9 @@ def advice(payload, env=None, now=None):
     if index is None:
         return None
     size, ids, stamps = history[index]
-    before = history[index - 1][0] if index > 0 else 0
+    # The size this hook last ran at: the latest earlier message that made a call. A message that made
+    # none never ran the hook, so a level crossed on it is spoken on the next call, not skipped.
+    before = next((earlier[0] for earlier in reversed(history[:index]) if earlier[1]), 0)
     if main:
         if ids[0] == call and main_level(size) > main_level(before):
             return main_nudge(size)
