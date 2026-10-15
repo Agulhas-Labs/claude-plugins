@@ -430,8 +430,11 @@ SCRATCH_PREFIXES = ("/dev/", "/tmp/", "/private/tmp/", "/var/folders/", "$TMPDIR
 
 
 def writes_to_file(target):
-    """Whether a redirect or tee target is a real file rather than the null device or scratch space."""
-    return bool(target) and not target.startswith(SCRATCH_PREFIXES)
+    """Whether a redirect or tee target is a real file rather than the null device, scratch space, a log,
+    or a gitignored build directory: a build's output sent to `.build/x.log` is not an edit."""
+    if not target or target.startswith(SCRATCH_PREFIXES) or target.endswith(".log"):
+        return False
+    return not (target.startswith(".build/") or "/.build/" in target)
 
 
 def edits_files(command):

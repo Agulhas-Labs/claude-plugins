@@ -151,5 +151,15 @@ class GateScorecardTests(unittest.TestCase):
         self.assertIn("1 of 2 (1 named a file no longer on disk)", line)
 
 
+class BuildLogRedirectTests(unittest.TestCase):
+    def test_a_build_log_or_build_directory_redirect_is_not_an_edit(self):
+        for command in ("swift build > .build/agent-build1.log 2>&1",
+                        "make 2>&1 > build.log",
+                        "echo exit $? >> .build/run.txt",
+                        "cd /repo && swift test > /repo/.build/out.txt"):
+            self.assertFalse(ac.edits_files(command), command)
+        self.assertTrue(ac.edits_files("cat > Sources/A.swift <<'EOF'\nx\nEOF"))
+
+
 if __name__ == "__main__":
     unittest.main()

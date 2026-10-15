@@ -43,9 +43,10 @@ class VerdictFormTests(unittest.TestCase):
         t = lambda kind, typ, agent, secs: _with_times(typed_loaded(kind, typ, [1000], agent), secs)
         a, b = t("subagent", "builder", "a", 0), t("subagent", "builder", "b", 1)
         r = t("subagent", "reviewer", "r", 100)
-        a.ctx.first_prompt = "Build `fix/one`."
-        b.ctx.first_prompt = "Build `fix/two`."
-        r.ctx.first_prompt = "Review `fix/one` and `fix/two`."
+        # Branch linking reads the handoff text, which loading fills from the first prompt.
+        a.ctx.first_prompt = a.ctx.handoff = "Build `fix/one`."
+        b.ctx.first_prompt = b.ctx.handoff = "Build `fix/two`."
+        r.ctx.first_prompt = r.ctx.handoff = "Review `fix/one` and `fix/two`."
         r.ctx.handback_report = "Verdict (fix/one): merge-ready\nVerdict (fix/two): not merge-ready"
         out = []
         ac.section_review_by_rung(out, [a, b, r])
