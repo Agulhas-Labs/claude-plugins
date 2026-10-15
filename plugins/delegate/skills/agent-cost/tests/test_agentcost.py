@@ -1861,6 +1861,18 @@ class RuleScorecardTests(unittest.TestCase):
         self.assertFalse(by_agent["r1"].prompted_after_handback)
         self.assertIsNone(by_agent["k0"].handback_report)
 
+    def test_the_stop_tiers_current_words_set_the_nudge_turn_too(self):
+        fx = FixtureRoot(self)
+        at = lambda s: ts_str(BASE + timedelta(seconds=s))
+        fx.subagent(agent="b2", agent_type="delegate:builder", entries=[
+            assistant("s1", at(60), usage(cache_creation=205_000), [tool_use_block("u1", "Bash", {"command": "make test"})], model=OPUS),
+            user_tool_result(at(61), "u1", "ok"),
+            budget_nudge(at(61), 205, "Stop here. Finish the item in hand only if all it still needs is its narrow check and the commit."),
+            assistant("s2", at(120), usage(cache_read=205_000), model=OPUS),
+        ])
+        loaded = ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
+        self.assertEqual({l.ctx.agent_id: l.ctx for l in loaded}["b2"].hand_back_nudge_turn, 1)
+
     def test_a_subagent_on_its_parents_family_or_below_is_within_the_ceiling(self):
         _, loaded = rule_tree(self)
         judged, above, _ = ac.above_ceiling(loaded)

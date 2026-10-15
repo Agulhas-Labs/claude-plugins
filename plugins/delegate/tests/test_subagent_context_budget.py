@@ -73,7 +73,37 @@ class BudgetTests(unittest.TestCase):
         self.assertIsNone(self.advise("t2"))
         said = self.advise("t3")
         self.assertIn("201k", said)
-        self.assertIn("Stop here, even mid-item", said)
+        self.assertIn("only if all it still needs is its narrow check and the commit", said)
+
+    def scout_advise(self, tool_id, agent_type, root=True):
+        payload = {"transcript_path": self.parent, "agent_id": "a1", "tool_use_id": tool_id, "agent_type": agent_type}
+        plugin_root = os.path.join(os.path.dirname(__file__), "..")
+        return budget.advice(payload, env={"CLAUDE_PLUGIN_ROOT": plugin_root} if root else {})
+
+    def test_a_scout_of_this_plugin_has_marks_of_60k_80k_and_95k(self):
+        self.write(assistant("m1", 50_000, "t1"), assistant("m2", 61_000, "t2"), assistant("m3", 70_000, "t3"),
+                   assistant("m4", 81_000, "t4"), assistant("m5", 94_000, "t5"), assistant("m6", 96_000, "t6"))
+        self.assertIn("Scope freeze", self.scout_advise("t2", "delegate:scout"))
+        self.assertIn("80k you will be asked", self.scout_advise("t2", "delegate:scout"))
+        self.assertIsNone(self.scout_advise("t3", "delegate:scout"))
+        self.assertIn("Finish only the item in hand", self.scout_advise("t4", "delegate:scout"))
+        self.assertIsNone(self.scout_advise("t5", "delegate:scout"))
+        self.assertIn("only if all it still needs is its narrow check and the commit", self.scout_advise("t6", "delegate:scout"))
+
+    def test_a_builder_keeps_the_default_marks(self):
+        self.write(assistant("m1", 50_000, "t1"), assistant("m2", 65_000, "t2"), assistant("m3", 125_000, "t3"))
+        self.assertIsNone(self.scout_advise("t2", "delegate:builder"))
+        said = self.scout_advise("t3", "delegate:builder")
+        self.assertIn("Scope freeze", said)
+        self.assertIn("150k you will be asked", said)
+
+    def test_any_other_scout_or_an_unreadable_plugin_root_gets_the_default_marks(self):
+        self.write(assistant("m1", 50_000, "t1"), assistant("m2", 65_000, "t2"))
+        self.assertIsNone(self.scout_advise("t2", "scout"))
+        self.assertIsNone(self.scout_advise("t2", "other:scout"))
+        self.assertIsNone(self.scout_advise("t2", "delegate:scout", root=False))
+        payload = {"transcript_path": self.parent, "agent_id": "a1", "tool_use_id": "t2", "agent_type": "delegate:scout"}
+        self.assertIsNone(budget.advice(payload, env={"CLAUDE_PLUGIN_ROOT": self.root}))
 
     def test_each_of_the_first_two_tiers_fires_once(self):
         self.write(
@@ -100,7 +130,7 @@ class BudgetTests(unittest.TestCase):
         for crossing, size in (("t1", "201k"), ("t3", "251k"), ("t5", "301k")):
             said = self.advise(crossing)
             self.assertIn(size, said)
-            self.assertIn("Stop here, even mid-item", said)
+            self.assertIn("only if all it still needs is its narrow check and the commit", said)
         self.assertIsNone(self.advise("t2"))
         self.assertIsNone(self.advise("t4"))
 
@@ -108,7 +138,7 @@ class BudgetTests(unittest.TestCase):
         # One turn can add 100k. The agent is told to stop, not to freeze scope it is already past.
         self.write(assistant("m1", 100_000, "t1"), assistant("m2", 210_000, "t2"))
         said = self.advise("t2")
-        self.assertIn("Stop here, even mid-item", said)
+        self.assertIn("only if all it still needs is its narrow check and the commit", said)
         self.assertNotIn("Scope freeze", said)
 
     def test_parallel_calls_in_one_turn_speak_once(self):
