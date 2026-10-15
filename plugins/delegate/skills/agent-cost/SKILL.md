@@ -120,8 +120,8 @@ spend is all in their own sessions.
   subagent: the difference is that a subagent pays it again for every agent started.
 - **Rule scorecard** — one line per rule the `delegate` plugin states, with the metric that measures it in
   the window, the measured baseline where there is one (a target for the model ceiling), and `holds` or
-  `not holding`. Its `handoffs carry the code` line is the share of builder spend before
-  their first edit: a high share means handoffs aren't carrying the code the job touches, so quote it in
+  `not holding`. Its `handoffs carry the code` line is the share of maker spend (`builder`, `builder-lite`,
+  and `mechanic` in older transcripts) before their first edit: a high share means handoffs aren't carrying the code the job touches, so quote it in
   the handoff, or send a scout first. An edit made through Bash counts: in-place `sed` or `perl`, a
   `git apply` that isn't a dry run, `patch`, `tee` or a redirect into a file outside scratch space, logs
   and `.build/`, and a Python run that writes a file. The `maker handoffs carry gates` line is the share

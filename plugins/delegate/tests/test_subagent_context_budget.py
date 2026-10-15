@@ -57,6 +57,10 @@ class BudgetTests(unittest.TestCase):
         # The point of this tier is knowing what the next one will ask for.
         self.assertIn("150k", said)
 
+    def test_a_subagent_crossing_on_a_turn_with_no_call_is_spoken_on_the_next_call(self):
+        self.write(assistant("m1", 110_000, "t1"), assistant("m2", 121_000), assistant("m3", 125_000, "t2"))
+        self.assertIn("Scope freeze", self.advise("t2"))
+
     def test_the_hand_back_tier_fires_at_150k_and_not_before(self):
         self.write(assistant("m1", 125_000, "t1"), assistant("m2", 149_000, "t2"), assistant("m3", 151_000, "t3"))
         self.assertIsNone(self.advise("t2"))
@@ -151,6 +155,13 @@ class BudgetTests(unittest.TestCase):
     def test_main_session_gets_no_subagent_tier_and_no_cache_line(self):
         self.main_write(assistant("m1", 100_000, "t1"), assistant("m2", 125_000, "t2", timestamp=ISSUED))
         self.assertIsNone(budget.advice({"transcript_path": self.main_file, "tool_use_id": "t2"}, now=ISSUED_AT + 3600))
+
+    def test_a_main_crossing_on_a_turn_with_no_call_is_spoken_on_the_next_call(self):
+        # A turn that ends on a text reply runs no hook; the 200k it crossed must not be lost.
+        self.main_write(assistant("m1", 190_000, "t1"), assistant("m2", 205_000),
+                        assistant("m3", 210_000, "t2"), assistant("m4", 260_000, "t3"))
+        self.assertIn("210k", self.main_advise("t2"))
+        self.assertIsNone(self.main_advise("t3"))
 
     def test_main_budget_can_be_switched_off(self):
         self.main_write(assistant("m1", 150_000, "t1"), assistant("m2", 250_000, "t2"))

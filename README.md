@@ -26,7 +26,8 @@ Your session plans and judges on the model you chose. Haiku runs commands, Sonne
 already spelled out, and Opus writes the code that still has decisions in it, then reviews the result
 without having seen how it was made. A hook warns an agent as its context grows: freeze scope at 120k,
 hand back at 150k, stop at 200k. Further hooks refuse a repeat of a command that already outlasted the
-cache, a reviewer's git commands that move HEAD, and a maker handoff with no gate line, each once. At most 4 agents run at once, and you can change that. No agent runs on a
+cache and a maker handoff with no gate line (each lets an identical re-issue through once), and a
+reviewer's git commands that move HEAD (a retry is refused again). At most 4 agents run at once, and you can change that. No agent runs on a
 model above your session's.
 
 Ask "where did my tokens go this week?" and its `agent-cost` report answers from your local transcripts,

@@ -1417,7 +1417,8 @@ def reviewer_verdict(report, branches=None):
         text = lines[-1]
         for line in reversed(lines):
             paren = re.match(r"\W*(?:\w+\W+){0,2}?verdict\**\s*\(([^)\n]*)\)", line)
-            if paren and any(b.lower() in paren.group(1) for b in branches or ()):
+            if paren and any(re.search(r"(?<![\w./-])" + re.escape(b.lower()) + r"(?![\w./-])", paren.group(1))
+                          for b in branches or ()):
                 text = line
                 break
     for name, rule in VERDICT_RULES:
