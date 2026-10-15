@@ -1773,7 +1773,7 @@ def section_rule_scorecard(out, loaded):
          (f"{len(gated)} of {len(makers)}" + (f" ({gone} named a file no longer on disk)" if gone else ""))
          if makers else "n/a", None, "no baseline" if makers else "n/a")
 
-    # builder handoffs name their class
+    # builder handoffs name a class
     builders = [l for l in subs if folded_type(l) == "builder"]
     classed = [l for l in builders if CLASS_LINE.search(l.ctx.handoff)]
     spend = {id(l): sum_dollars(l.window_turns) or 0 for l in builders}
@@ -1781,7 +1781,7 @@ def section_rule_scorecard(out, loaded):
     bare = sum(spend[id(l)] for l in builders if l not in classed)
     held = (f" (the {len(builders) - len(classed)} without held {100 * bare / total:.0f}% of builder spend)"
             if total and len(classed) < len(builders) else "")
-    line("builder handoffs name their class", "builder handoffs with a class line",
+    line("builder handoffs name a class", "builder handoffs with a class line",
          f"{len(classed)} of {len(builders)}{held}" if builders else "n/a", None,
          "no baseline" if builders else "n/a")
 

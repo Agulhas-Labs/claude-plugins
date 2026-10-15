@@ -1,5 +1,8 @@
 """Tests for the scorecard's two rung lines in scripts/agent_cost.py: builder handoffs naming their class, and a
 scout's brief before the makers. Run: python3 -m unittest discover -s plugins/delegate/skills/agent-cost/tests -p 'test_scorecard_rungs.py'"""
+import importlib.machinery
+import importlib.util
+import os
 import unittest
 from datetime import timedelta
 from unittest import mock
@@ -33,7 +36,7 @@ class RungFixture(unittest.TestCase):
 class ClassLineTests(RungFixture):
     def line(self, prompts, kind="builder"):
         return self.find(self.scorecard([(kind, p, i, False) for i, p in enumerate(prompts)]),
-                         "builder handoffs name their class")
+                         "builder handoffs name a class")
 
     def test_counts_builders_with_a_class_line_and_the_spend_of_the_rest(self):
         line = self.line(["Do it.\nRung: builder — security", "Do it."])
@@ -46,7 +49,7 @@ class ClassLineTests(RungFixture):
 
     def test_n_a_without_builders(self):
         out = self.scorecard([("builder-lite", "Rung: builder — security", 0, False)])
-        self.assertIn(": n/a; n/a", self.find(out, "builder handoffs name their class"))
+        self.assertIn(": n/a; n/a", self.find(out, "builder handoffs name a class"))
 
 
 class ScoutLineTests(RungFixture):
@@ -75,6 +78,18 @@ class ScoutLineTests(RungFixture):
             self.assertTrue(self.line(agents).rstrip().endswith("holds"))
         with mock.patch.dict(ac.BASELINE_RUNUP, {"builder": 0.0}):
             self.assertTrue(self.line(agents).rstrip().endswith("not holding"))
+
+
+
+class ClassLineTests(unittest.TestCase):
+    def test_class_line_equals_the_hook(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        hook_path = os.path.join(here, "..", "..", "..", "hooks", "handoff-gates.py")
+        loader = importlib.machinery.SourceFileLoader("handoff_gates_hook", hook_path)
+        spec = importlib.util.spec_from_loader("handoff_gates_hook", loader)
+        hook = importlib.util.module_from_spec(spec)
+        loader.exec_module(hook)
+        self.assertEqual((ac.CLASS_LINE.pattern, ac.CLASS_LINE.flags), (hook.CLASS_LINE.pattern, hook.CLASS_LINE.flags))
 
 
 if __name__ == "__main__":

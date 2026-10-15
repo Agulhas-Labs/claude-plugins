@@ -127,7 +127,7 @@ spend is all in their own sessions.
   and `.build/`, and a Python run that writes a file. The `maker handoffs carry gates` line is the share
   of maker handoffs with a gate line, and how many named a handoff file no longer on disk. Handoff files a
   prompt names (absolute or `~/` `.md`/`.txt`, up to five, 256 KB each) are read when the report runs, for
-  the gate line, the class line and for Review by rung's branch links. The `builder handoffs name their class`
+  the gate line, the class line and for Review by rung's branch links. The `builder handoffs name a class`
   line counts `builder` handoffs with a `Rung: builder — <class>` line and the share of builder spend held by
   those without one; a low count means builders are chosen without saying why. The `a scout before the makers`
   line sets the median spend and turns before the first edit of makers briefed by an earlier scout in the
