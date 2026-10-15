@@ -37,6 +37,7 @@ class PriceLookupTests(unittest.TestCase):
 
     def test_opus_four_and_four_one_list_at_three_times_the_later_generations(self):
         for model, price in (("claude-opus-4-20250514", 15.00), ("claude-opus-4-1-20250805", 15.00),
+                             ("claude-3-opus-20240229", 15.00),
                              ("claude-opus-4-5-20251101", 5.00), ("claude-opus-4-6", 5.00),
                              ("claude-opus-4-7", 5.00), ("claude-opus-5", 5.00), ("claude-opus-5-5", 4.00)):
             with self.subTest(model=model):

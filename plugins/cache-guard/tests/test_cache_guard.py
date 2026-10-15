@@ -448,6 +448,7 @@ class CostTests(GuardTestCase):
     def test_opus_four_and_four_one_are_priced_at_three_times_the_later_generations(self):
         for model, family, price in (("claude-opus-4-20250514", "opus4", 15.00), ("Opus 4.1", "opus41", 15.00),
                                      ("claude-opus-4-1-20250805", "opus41", 15.00),
+                                     ("claude-3-opus-20240229", "3opus", 15.00),
                                      ("claude-opus-4-5-20251101", "opus45", 5.00), ("claude-opus-4-6", "opus46", 5.00),
                                      ("Opus 4.7", "opus47", 5.00), ("claude-opus-5", "opus", 5.00)):
             with self.subTest(model=model):
