@@ -1,5 +1,7 @@
 """Tests for the maker measures that read a command or a handoff file: edits made through Bash, a handoff kept
 in a file, and the gates line of the rule scorecard. Run: python3 -m unittest discover -s plugins/delegate/skills/agent-cost/tests"""
+import importlib.machinery
+import importlib.util
 import os
 import shutil
 import tempfile
@@ -105,6 +107,50 @@ class HandoffFileTests(unittest.TestCase):
         ctx = self.context(f"Read {a} and {self.dir}/gone.md and {self.dir}/gone2.txt")
         self.assertEqual(ctx.handoff_missing, 2)
         self.assertIn("body", ctx.handoff)
+
+    def test_urls_and_file_scheme_name_no_file(self):
+        ctx = self.context("See https://github.com/a/b/README.md and file:///x/y.md for more")
+        self.assertEqual(ctx.handoff_missing, 0)
+
+    def test_missing_files_do_not_spend_the_five_file_allowance(self):
+        gone = " ".join(f"{self.dir}/gone{i}.md" for i in range(5))
+        live = self.write("live.md", "G1 tests pass - CHECK: run them")
+        ctx = self.context(f"Read {gone} then {live}")
+        self.assertIn("G1 tests pass", ctx.handoff)
+        self.assertEqual(ctx.handoff_missing, 5)
+
+    def test_read_handoff_equals_the_hook(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        hook_path = os.path.join(here, "..", "..", "..", "hooks", "handoff-gates.py")
+        loader = importlib.machinery.SourceFileLoader("handoff_gates_hook", hook_path)
+        spec = importlib.util.spec_from_loader("handoff_gates_hook", loader)
+        hook = importlib.util.module_from_spec(spec)
+        loader.exec_module(hook)
+        a = self.write("a.md", "alpha body")
+        b = self.write("b.txt", "beta body")
+        big = self.write("big.md", "x" * (256 * 1024 + 1))
+        live = [self.write(f"l{i}.md", f"live{i}") for i in range(7)]
+        home = tempfile.mkdtemp(prefix="handoff-home-", dir=os.path.expanduser("~"))
+        self.addCleanup(shutil.rmtree, home)
+        with open(os.path.join(home, "h.md"), "w") as f:
+            f.write("home body")
+        tilde = "~/" + os.path.basename(home) + "/h.md"
+        gone = [f"{self.dir}/gone{i}.md" for i in range(6)]
+        prompts = [
+            "no files at all",
+            f"{a} {a} {b} {a}",
+            f"Read {tilde} please",
+            f"{big} then {a}",
+            " ".join(gone) + f" {a}",
+            " ".join(live),
+            f"{gone[0]} {big} {gone[1]} {a} {a} " + " ".join(live),
+            f"https://github.com/a/b/README.md and {a}",
+            f"file:///x/y.md and {a}",
+            f"({a}) `{b}` \"{a}\"",
+        ]
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                self.assertEqual(ac.read_handoff(prompt)[0], hook.handoff(prompt))
 
     def test_only_md_and_txt_and_five_files_are_read(self):
         files = [self.write(f"f{i}.md", f"body{i}") for i in range(6)]

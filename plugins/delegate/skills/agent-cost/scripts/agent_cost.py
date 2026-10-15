@@ -530,30 +530,39 @@ def edits_files(command):
     return False
 
 
-HANDOFF_FILE = re.compile(r"(?<![\w.~/-])(?:~/|/)[\w./~+@-]*\.(?:md|txt)(?![\w/])")
+# Copied from hooks/handoff-gates.py (PATH, FILE_MAX, FILES_MAX); they must stay in step with it.
+HANDOFF_FILE = re.compile(r"(?<![\w.:/~-])(?:~/|/)[^\s`'\"()\[\]<>]*?\.(?:md|txt)(?![\w/-])")
 HANDOFF_FILE_LIMIT = 256 * 1024
 HANDOFF_FILES_PER_PROMPT = 5
 
 
 def read_handoff(prompt):
     """(the prompt followed by the text of each file it names, how many named files were not on disk).
-    A named file is an absolute or ~/ path ending .md or .txt, at most five per prompt, read at most 256 KB
-    and only if it exists when the report runs."""
-    texts, missing, seen = [prompt or ""], 0, []
+    The same rule as handoff() in hooks/handoff-gates.py: a named file is an absolute or ~/ path ending .md
+    or .txt (not one inside a URL), deduplicated by expanded path; a file that is not on disk or is over
+    256 KB is skipped without using up the allowance of five files read. The count of files not on disk
+    covers every distinct named path, past the five."""
+    texts, missing, seen, gone = [prompt or ""], 0, [], []
     for token in HANDOFF_FILE.findall(prompt or ""):
-        if token not in seen:
-            seen.append(token)
-    for token in seen[:HANDOFF_FILES_PER_PROMPT]:
         path = os.path.expanduser(token)
+        if path in seen or path in gone:
+            continue
         try:
             if not os.path.isfile(path):
+                gone.append(path)
                 missing += 1
-            elif os.path.getsize(path) <= HANDOFF_FILE_LIMIT:
-                with open(path, encoding="utf-8", errors="replace") as f:
-                    texts.append(f.read())
+                continue
+            if os.path.getsize(path) > HANDOFF_FILE_LIMIT:
+                continue
+            seen.append(path)
+            if len(seen) > HANDOFF_FILES_PER_PROMPT:
+                continue
+            with open(path, encoding="utf-8", errors="replace") as f:
+                texts.append(f.read())
         except OSError:
-            missing += 1
+            continue
     return "\n".join(texts), missing
+
 
 HAND_BACK_NUDGE = re.compile(r"Context budget: this agent's context is now \d+k tokens"
                              r".*?(?:Finish only the item in hand|Stop here, even mid-item)")
