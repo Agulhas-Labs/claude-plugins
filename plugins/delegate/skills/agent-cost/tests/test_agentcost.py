@@ -1578,8 +1578,8 @@ class SpendByTypeTests(unittest.TestCase):
         out = []
         ac.section_spend_by_type(out, loaded)
         self.assertEqual(out[0], "=== Spend by agent type ===")
-        return {line.split()[0]: line.split()[1:] for line in out[2:] if line.strip()}, [
-            line.split()[0] for line in out[2:] if line.strip()]
+        end = next(i for i, line in enumerate(out) if line.startswith("  total")) + 1
+        return {line.split()[0]: line.split()[1:] for line in out[2:end]}, [line.split()[0] for line in out[2:end]]
 
     def test_rows_fold_the_plugin_prefix_count_peaks_and_shares_add_to_100(self):
         loaded = [
@@ -1592,11 +1592,11 @@ class SpendByTypeTests(unittest.TestCase):
         rows, order = self._rows(loaded)
         # builder 659,999 input-eq, main 500,000, reviewer 50,000: sorted by input-eq, then the total
         self.assertEqual(order, ["builder", "main", "reviewer", "total"])
-        # columns: contexts, median turns, median peak, input-eq, share, avg/ctx, output, >=150k, >=200k
-        self.assertEqual(rows["builder"], ["3", "1", "200k", "660k", "54.5%", "220k", "4", "3", "1"])
-        self.assertEqual(rows["main"], ["1", "3", "200k", "500k", "41.3%", "500k", "3", "1", "1"])
-        self.assertEqual(rows["reviewer"], ["1", "1", "50k", "50k", "4.1%", "50k", "1", "0", "0"])
-        self.assertEqual(rows["total"], ["5", "1", "200k", "1.2M", "100.0%", "242k", "8", "4", "2"])
+        # columns: contexts, median turns, median peak, input-eq, share, avg/ctx, list $, $/ctx, output, >=150k, >=200k
+        self.assertEqual(rows["builder"], ["3", "1", "200k", "660k", "54.5%", "220k", "$1.32", "$0.44", "4", "3", "1"])
+        self.assertEqual(rows["main"], ["1", "3", "200k", "500k", "41.3%", "500k", "$1.00", "$1.00", "3", "1", "1"])
+        self.assertEqual(rows["reviewer"], ["1", "1", "50k", "50k", "4.1%", "50k", "$0.10", "$0.10", "1", "0", "0"])
+        self.assertEqual(rows["total"], ["5", "1", "200k", "1.2M", "100.0%", "242k", "$2.42", "$0.48", "8", "4", "2"])
         shares = sum(float(rows[name][4].rstrip("%")) for name in ("builder", "main", "reviewer"))
         self.assertAlmostEqual(shares, 100.0, delta=0.15)
 
@@ -1737,12 +1737,14 @@ def rule_tree(case):
 SECTIONS_BEFORE_SCORECARD = {
     'spend-by-type': (
         '=== Spend by agent type ===\n'
-        '  type                 contexts med turns  med peak  input-eq  share  avg/ctx    output  >=150k  >=200k\n'
-        '  builder                     1         5      205k      486k  75.6%     486k        50       1       1\n'
-        '  reviewer                    2         2       20k       80k  12.4%      40k        40       0       0\n'
-        '  mechanic                   10         1        6k       67k  10.4%       7k       100       0       0\n'
-        '  main                        1         3        7k       10k   1.5%      10k        30       0       0\n'
-        '  total                      14         1        8k      642k 100.0%      46k       220       1       1\n'
+        '  type                 contexts med turns  med peak  input-eq  share  avg/ctx  list $   $/ctx    output  >=150k  >=200k\n'
+        '  builder                     1         5      205k      486k  75.6%     486k   $2.43   $2.43        50       1       1\n'
+        '  reviewer                    2         2       20k       80k  12.4%      40k   $0.14   $0.07        40       0       0\n'
+        '  mechanic                   10         1        6k       67k  10.4%       7k   $0.08   $0.01       100       0       0\n'
+        '  main                        1         3        7k       10k   1.5%      10k   $0.02   $0.02        30       0       0\n'
+        '  total                      14         1        8k      642k 100.0%      46k   $2.67   $0.19       220       1       1\n'
+        "  list $ prices input-eq at each model's list input price and output at five times it; - where the\n"
+        '  table has no price for the model. A price comparison at list rates, not a bill.\n'
         '\n'
         'harness versions in this window: 2.1.272\n'
         'note: input-eq is a price comparison against the uncached input rate, not a token count.'

@@ -212,6 +212,53 @@ def input_equivalent(usage, model=None):
     return uncached * 1.0 + cache_read * cache_read_weight(model) + cache_write_eq
 
 
+# List input price in dollars per million tokens, by model family, in the order tried: the first key the
+# reduced model id contains wins, so `opus55` is tried before `opus`. Output is OUTPUT_MULTIPLIER times
+# input for every model here. Copied from INPUT_PRICES and OUTPUT_MULTIPLIER in the cache-guard plugin's
+# hooks/cache_guard.py; keep in step with it. A model this table cannot place has no price.
+INPUT_PRICES = (
+    ("fable51", 10.00), ("fable", 10.00),
+    ("opus55", 4.00), ("opus", 5.00),
+    ("sonnet5", 2.00), ("sonnet4", 3.00),
+    ("haiku55", 0.10),  # the list price up to 100k tokens of prompt; past that it is $0.50
+    ("haiku", 1.00),
+)
+OUTPUT_MULTIPLIER = 5.0
+
+
+def input_price(model):
+    name = "".join(ch for ch in str(model or "").lower() if ch.isalnum())
+    for family, price in INPUT_PRICES:
+        if family in name:
+            return price
+    return None
+
+
+def list_dollars(ie, output_tokens, model):
+    """One turn priced at list rates (`ie` already scales cache reads and writes against that model's
+    input price), or None when the model has no price."""
+    price = input_price(model)
+    if price is None:
+        return None
+    return price * (ie + OUTPUT_MULTIPLIER * output_tokens) / 1e6
+
+
+def sum_dollars(turns):
+    """List dollars over turns, counting the priced ones; None when none is priced."""
+    priced = [t["usd"] for t in turns if t.get("usd") is not None]
+    return sum(priced) if priced else None
+
+
+def fmt_usd(v):
+    if v is None:
+        return "-"
+    if v >= 1000:
+        return f"${v / 1000:.1f}k"
+    if v >= 10:
+        return f"${v:.0f}"
+    return f"${v:.2f}"
+
+
 def context_size(usage):
     return usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0) + usage.get("cache_creation_input_tokens", 0)
 
@@ -660,6 +707,7 @@ class Loaded:
         self.first_in_window = bool(ctx.turns) and since <= ctx.turns[0]["ts"] < until
         for t in self.window_turns:
             t["ie"] = input_equivalent(t["usage"], t.get("model"))
+            t["usd"] = list_dollars(t["ie"], t["usage"].get("output_tokens", 0), t.get("model"))
 
 
 def load_all(projects_dir, transcript, since, until, project=None):
@@ -712,7 +760,8 @@ def section_totals(out, loaded):
         raw = sum(t["ctx"] for l in group for t in l.window_turns)
         ie = sum(t["ie"] for l in group for t in l.window_turns)
         outp = sum(t["usage"].get("output_tokens", 0) for l in group for t in l.window_turns)
-        out.append(f"  {label:10} contexts {n_ctx:6}  turns {n_turns:7}  raw input {fmt_tok(raw):>8}  input-eq {fmt_tok(ie):>8}  output {fmt_tok(outp):>8}")
+        usd = sum_dollars([t for l in group for t in l.window_turns])
+        out.append(f"  {label:10} contexts {n_ctx:6}  turns {n_turns:7}  raw input {fmt_tok(raw):>8}  input-eq {fmt_tok(ie):>8}  output {fmt_tok(outp):>8}  list $ {fmt_usd(usd):>7}")
 
     out.append("")
     out.append("  by model:")
@@ -724,7 +773,8 @@ def section_totals(out, loaded):
     for model, group in sorted(by_model.items(), key=lambda kv: -sum(t["ie"] for l in kv[1] for t in l.window_turns)):
         ie = sum(t["ie"] for l in group for t in l.window_turns)
         starts = [l.ctx.turns[0]["ctx"] for l in group if l.first_in_window]
-        out.append(f"    {model:24} contexts {len(group):6}  input-eq {fmt_tok(ie):>8}  median start {fmt_tok(median(starts)):>8}")
+        usd = sum_dollars([t for l in group for t in l.window_turns])
+        out.append(f"    {model:24} contexts {len(group):6}  input-eq {fmt_tok(ie):>8}  list $ {fmt_usd(usd):>7}  median start {fmt_tok(median(starts)):>8}")
     out.append("")
 
 
@@ -755,7 +805,7 @@ def section_spend_by_type(out, loaded):
         return
     out.append("=== Spend by agent type ===")
     out.append(f"  {'type':20} {'contexts':>8} {'med turns':>9} {'med peak':>9} {'input-eq':>9} {'share':>6}"
-               f" {'avg/ctx':>8} {'output':>9} {'>=150k':>7} {'>=200k':>7}")
+               f" {'avg/ctx':>8} {'list $':>7} {'$/ctx':>7} {'output':>9} {'>=150k':>7} {'>=200k':>7}")
 
     def row(name, group, total_ie):
         peaks = [window_peak(l) for l in group]
@@ -763,16 +813,21 @@ def section_spend_by_type(out, loaded):
         outp = sum(t["usage"].get("output_tokens", 0) for l in group for t in l.window_turns)
         share = 100 * ie / total_ie if total_ie else 0
         med_turns = median(len(l.window_turns) for l in group)
-        return ie, (f"  {name_tail(name, 20):20} {len(group):8} {med_turns:9.0f} {fmt_tok(median(peaks)):>9}"
-                    f" {fmt_tok(ie):>9} {share:5.1f}% {fmt_tok(ie / len(group)):>8} {fmt_tok(outp):>9}"
+        usd = sum_dollars([t for l in group for t in l.window_turns])
+        per_ctx = None if usd is None else usd / len(group)
+        return (usd, ie), (f"  {name_tail(name, 20):20} {len(group):8} {med_turns:9.0f} {fmt_tok(median(peaks)):>9}"
+                    f" {fmt_tok(ie):>9} {share:5.1f}% {fmt_tok(ie / len(group)):>8}"
+                    f" {fmt_usd(usd):>7} {fmt_usd(per_ctx):>7} {fmt_tok(outp):>9}"
                     f" {sum(p >= 150_000 for p in peaks):7} {sum(p >= 200_000 for p in peaks):7}")
 
     every = [l for group in by_type.values() for l in group]
     total_ie = sum(t["ie"] for l in every for t in l.window_turns)
     rows = sorted((row(name, group, total_ie) + (name,) for name, group in by_type.items()),
-                  key=lambda r: (-r[0], r[2]))
+                  key=lambda r: (r[0][0] is None, -(r[0][0] if r[0][0] is not None else r[0][1]), r[2]))
     out.extend(line for _, line, _ in rows)
     out.append(row("total", every, total_ie)[1])
+    out.append("  list $ prices input-eq at each model's list input price and output at five times it; - where the")
+    out.append("  table has no price for the model. A price comparison at list rates, not a bill.")
     out.append("")
 
 
