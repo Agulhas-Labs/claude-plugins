@@ -73,7 +73,9 @@ Another hook watches subagents: it warns an agent as its context grows, in three
 
 - at 120k, freeze scope and start nothing new;
 - at 150k, finish the item in hand and hand the rest back;
-- at 200k, stop where it is and report, repeated every further 50k.
+- at 200k, stop and report, landing the item in hand only if its narrow check and the commit are all it still needs; repeated every further 50k.
+
+A `scout` runs on Haiku, whose list input price steps up five-fold past 100k tokens, so its marks are 60k, 80k and 95k.
 
 Separately, when one tool call outlives a subagent's five-minute prompt cache, whether it succeeded
 or failed, it adds a line telling the agent that each further turn now rewrites its whole

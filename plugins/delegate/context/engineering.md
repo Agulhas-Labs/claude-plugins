@@ -75,9 +75,10 @@ of all subagent spend: each one re-sent the whole context to do one small thing.
 - Your context has three budget marks, and a hook tells you as you pass each. They ask for different
   things, so read which one arrived. At 120k, freeze scope: start no new deliverable, and put
   everything into landing what is already open. At 150k, hand back: finish the item in hand, commit it
-  once verified, and end with the remaining items listed. At 200k, stop where you are: commit only what
-  is already verified and report, even mid-item, listing everything unfinished. Knowing the later marks
-  are coming is the point of the earlier ones — don't take on work you cannot land before the next.
+  once verified, and end with the remaining items listed. At 200k, stop: finish the item in hand only if
+  all it still needs is its narrow check and the commit; otherwise commit only what is already verified
+  and report mid-item, listing everything unfinished. Knowing the later marks are coming is the point of
+  the earlier ones — don't take on work you cannot land before the next.
 
 ## Shared machine
 

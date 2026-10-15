@@ -11,8 +11,17 @@ So the tiers differ in kind, and each says what the next one will ask for:
 
 - 120k, scope freeze: start no new deliverable; a hand-back is coming at 150k.
 - 150k, hand back: finish the item in hand, get it to a verified commit, end listing what remains.
-- 200k, stop: commit what is already verified and report now, even mid-item. Repeats every 50k
-  beyond as a backstop; the first two fire once each.
+- 200k, stop: land the item in hand only if its narrow check and the commit are all that is left,
+  otherwise commit what is already verified and report now, mid-item. Repeats every 50k beyond as a
+  backstop; the first two fire once each.
+
+The stop lets a nearly finished item land because, measured on one machine over 14 days, it fired on
+15 builders; 13 had already committed and went on a median of 7 more turns, and the stop came out
+cost-neutral.
+
+A `scout` gets lower marks, 60k, 80k and 95k, because it runs on Haiku, whose list input price steps
+up five-fold past 100k prompt tokens, so it hands back before that. Only this plugin's own scout:
+`agent_type` must be `<this plugin's name>:scout`. Every other type keeps 120k, 150k and 200k.
 
 Separately, a call that outlived the prompt cache gets one more line. A subagent's cache lasted five
 minutes where this was measured, so an agent that waits longer on one command rewrites its whole
@@ -52,6 +61,7 @@ HAND_BACK = 150_000
 STOP = 200_000
 MAIN_FIRST = 200_000  # the main session's first tier, then one level per MAIN_STEP
 MAIN_STEP = 100_000
+MARKS = {"scout": (60_000, 80_000, 95_000)}  # per rung: (freeze, hand back, stop); default (FREEZE, HAND_BACK, STOP)
 STEP = 50_000  # beyond STOP, the stop tier repeats at each step as a backstop
 TAIL = 1024 * 1024  # enough of the transcript's end to hold its tail of recent assistant turns
 CACHE_SECONDS = 300  # a subagent's prompt cache lifetime; DELEGATE_SUBAGENT_CACHE_SECONDS overrides
@@ -122,29 +132,45 @@ def main_transcript(payload):
     return path
 
 
-def level(size):
+def marks(payload, env):
+    """The (freeze, hand back, stop) marks for this subagent: a scout of this plugin has its own, every
+    other type, and any failure to read the plugin's name, the defaults."""
+    try:
+        rung = str(payload.get("agent_type") or "").split(":", 1)
+        root = (env or {}).get("CLAUDE_PLUGIN_ROOT")
+        if len(rung) == 2 and rung[1] in MARKS and root:
+            with open(os.path.join(root, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+                if json.load(f)["name"] == rung[0]:
+                    return MARKS[rung[1]]
+    except Exception:
+        pass
+    return FREEZE, HAND_BACK, STOP
+
+
+def level(size, mark=(FREEZE, HAND_BACK, STOP)):
     """0 below the first tier, then 1 freeze, 2 hand back, 3+ stop (one level per STEP beyond)."""
-    if size < FREEZE:
+    freeze, hand_back, stop = mark
+    if size < freeze:
         return 0
-    if size < HAND_BACK:
+    if size < hand_back:
         return 1
-    if size < STOP:
+    if size < stop:
         return 2
-    return 3 + (size - STOP) // STEP
+    return 3 + (size - stop) // STEP
 
 
-def nudge(size):
+def nudge(size, mark=(FREEZE, HAND_BACK, STOP)):
     """The tier's own words. They differ in kind, and the first two name what the next tier will ask."""
     opening = (
         f"Context budget: this agent's context is now {size // 1000}k tokens, and every further turn "
         "re-sends all of it. "
     )
-    tier = level(size)
+    tier = level(size, mark)
     if tier == 1:
         return opening + (
             "Scope freeze: start no new deliverable. Everything from here goes toward landing what is "
-            "already open — finishing it, verifying it, committing it. At 150k you will be asked to hand "
-            "back whatever is still unfinished, so take on nothing you cannot land before then."
+            f"already open — finishing it, verifying it, committing it. At {mark[1] // 1000}k you will be asked to "
+            "hand back whatever is still unfinished, so take on nothing you cannot land before then."
         )
     if tier == 2:
         return opening + (
@@ -153,9 +179,10 @@ def nudge(size):
             "to a fresh agent. Don't start another item."
         )
     return opening + (
-        "Stop here, even mid-item. Commit only what is already verified — start no further run to "
-        "verify the rest — and report now. List everything unfinished, with what you learned about "
-        "each, so the orchestrator can hand it to a fresh agent."
+        "Stop here. Finish the item in hand only if all it still needs is its narrow check and the commit; "
+        "otherwise stop mid-item and commit only what is already verified. Start no other run, and report "
+        "now. List everything unfinished, with what you learned about each, so the orchestrator can hand "
+        "it to a fresh agent."
     )
 
 
@@ -213,8 +240,9 @@ def advice(payload, env=None, now=None):
         return None
     said = []
     # The turn that issued this call; parallel calls share it, so only its first call speaks a tier.
-    if ids[0] == call and level(size) > level(before):
-        said.append(nudge(size))
+    mark = marks(payload, env)
+    if ids[0] == call and level(size, mark) > level(before, mark):
+        said.append(nudge(size, mark))
     # Any call can outlive the cache: the slow one of several parallel calls is not always the first.
     elapsed = waited(stamps.get(call), time.time() if now is None else now)
     if elapsed is not None and elapsed > cache_seconds(env or {}):

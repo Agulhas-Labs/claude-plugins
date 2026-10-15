@@ -565,7 +565,8 @@ def read_handoff(prompt):
 
 
 HAND_BACK_NUDGE = re.compile(r"Context budget: this agent's context is now \d+k tokens"
-                             r".*?(?:Finish only the item in hand|Stop here, even mid-item)")
+                             r".*?(?:Finish only the item in hand|Stop here, even mid-item"
+                             r"|Stop here\. Finish the item in hand only if)")
 
 
 def is_prompt(e):

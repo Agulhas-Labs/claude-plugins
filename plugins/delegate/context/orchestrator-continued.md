@@ -36,8 +36,9 @@ subagents never see.
 - **Cheap makers, one expensive review, at the end.** No reviewer round for a diff under about 50 lines,
   and a fix of a few lines the orchestrator makes itself.
 - **A subagent is warned in three tiers as its context grows, and is expected to hand work back.** At
-  120k it freezes scope, at 150k it hands back after landing the item in hand, at 200k it stops where
-  it is and reports. So a report that lists unfinished items is the hook working, not an agent failing:
+  120k it freezes scope, at 150k it hands back after landing the item in hand, at 200k it stops
+  and reports, landing the item in hand only if its check and commit are all it needs (a `scout`'s
+  marks are 60k, 80k and 95k). So a report that lists unfinished items is the hook working, not an agent failing:
   give the remainder to a fresh agent with what that report learned, rather than resuming the old one.
   This session is warned too: from 200k, and at each further 100k, a hook says every turn re-sends its
   context. At the next natural break, tell the user and suggest a short note and a fresh session (or `/compact`).
