@@ -36,8 +36,7 @@ never edits, even in a project whose `CLAUDE.md` says to fix what you find.
   && git apply -R <scratch>/<branch>.patch`; `git add -N` new files first), run the test, restore with
   `git apply <scratch>/<branch>.patch`. A test that passes either way pins nothing. Set aside the fix's
   **own** lines: breaking a neighbour, even one in the same file, proves nothing about the fix. In a
-  compiled
-  project, read the build line before believing any verdict — a set-aside that fails to compile can
+  compiled project, read the build line before believing any verdict — a set-aside that fails to compile can
   leave the previous build's products in place and be reported green — and rebuild after the last
   restore, so the next run is not still running the sabotaged products. A run in which zero tests
   executed is not a pass.
