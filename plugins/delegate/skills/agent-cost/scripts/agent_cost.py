@@ -453,6 +453,8 @@ class Context:
         self.start = None     # fixed-start composition dict, filled from attachments before first turn
         self.hand_back_nudge_turn = None   # len(turns) when the budget hook first asked it to hand back
         self.first_edit_turn = None        # index into turns of the first turn that called an edit tool
+        self.first_commit_turn = None      # index into turns of the first turn that ran a git commit
+        self.last_text = ""                # the last assistant text block, for a report that was not handed back
         self.handback_report = None        # the last SubagentHandback call's message, if it made one
         self.prompted_after_handback = False   # a prompt arrived after a SubagentHandback call
 
@@ -461,6 +463,7 @@ class Context:
 # as a hook attachment records them. Matched on attachment entries only: a file read that quotes the
 # hook is a tool result, not the hook speaking.
 EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
+GIT_COMMIT = re.compile(r"\bgit\b(?:\s+-[Cc]\s+\S+)*\s+commit(?![\w-])")
 
 HEREDOC = re.compile(r"(<<-?\s*(['\"]?)(\w+)\2[^\n]*\n).*?(?:\n\s*\3(?=\s|$)|\Z)", re.S)   # keeps the opening line
 UNQUOTE = re.compile(r"(>>?\s*|\bcd\s+|\btee\s+(?:-\w+\s+)*|\b\w+=)([\"'])([^\"'\s]*)\2")
@@ -565,7 +568,8 @@ def read_handoff(prompt):
 
 
 HAND_BACK_NUDGE = re.compile(r"Context budget: this agent's context is now \d+k tokens"
-                             r".*?(?:Finish only the item in hand|Stop here, even mid-item)")
+                             r".*?(?:Finish only the item in hand|Stop here, even mid-item"
+                             r"|Stop here\. Finish the item in hand only if)")
 
 
 def is_prompt(e):
@@ -697,9 +701,14 @@ def load_context(kind, path, project_dir, session_id, agent_id):
                                     b.get("name") in EDIT_TOOLS
                                     or (b.get("name") == "Bash" and edits_files((b.get("input") or {}).get("command")))):
                                 ctx.first_edit_turn = len(ctx.turns) - 1
+                            if (ctx.first_commit_turn is None and b.get("name") == "Bash"
+                                    and GIT_COMMIT.search((b.get("input") or {}).get("command") or "")):
+                                ctx.first_commit_turn = len(ctx.turns) - 1
                     ctx.events.append((len(ctx.turns), "assistant: tool-call inputs (edits, commands)", len(json.dumps(b.get("input")))))
                 elif b.get("type") == "text":
                     ctx.events.append((len(ctx.turns), "assistant: text", len(b.get("text", ""))))
+                    if b.get("text"):
+                        ctx.last_text = b["text"]
         elif etype == "user":
             if ctx.handback_report is not None and is_prompt(e):
                 ctx.prompted_after_handback = True
@@ -1387,6 +1396,10 @@ def section_fixed_start(out, loaded):
 BASELINE_TOP_DECILE_SHARE = 45.0    # % of subagent spend in the longest-running 10% of subagents
 BASELINE_COLD_SHARE = 7.5           # % of subagent spend on cold turns
 MAKER_TYPES = ("builder", "builder-lite", "mechanic")   # the agent types that edit, as folded_type names them
+# The maker run-up before the scout existed, measured on one machine over 14 days: the median list dollars of
+# the turns before a maker's first edit, per rung, and the text the scorecard prints for it.
+BASELINE_RUNUP = {"builder": 0.47, "builder-lite": 0.12}
+BASELINE_RUNUP_TEXT = "builder $0.47 over 13 turns, builder-lite $0.12 over 5"
 
 MODEL_FAMILIES = ("haiku", "sonnet", "opus", "fable")  # lowest first, as the model-ceiling hook ranks them
 
@@ -1558,7 +1571,164 @@ def section_review_by_rung(out, loaded):
     out.append("")
 
 
+# Budget marks: whether handing back at a mark pays. A subagent is warned at three context sizes; this
+# plugin's own scout's are lower. When an agent is told to hand back and its report lists work left, a fresh agent takes that
+# work. The fresh agent pays a run-up (its turns before its first edit) that the old agent, finishing in
+# place, would not; in exchange its context is smaller from its first edit on, and the old agent's would have
+# carried the difference. Whichever sum is larger is the cheaper road.
+BUDGET_MARKS = (("freeze", 120_000), ("hand-back", 150_000), ("stop", 200_000))
+SCOUT_BUDGET_MARKS = (("freeze", 60_000), ("hand-back", 80_000), ("stop", 95_000))
+WORK_LEFT_LINE = re.compile(r"(?im)^.{0,12}(remaining|remains|not done|unfinished|not started|left undone|still to do"
+                            r"|left to do|outstanding|not (?:yet )?(?:implemented|landed|addressed|fixed))\b.*$")
+OWED_TO_RUNNER = re.compile(r"(?i)(full|whole|complete)\s+(suite|run|test)|owed|runner")
+NOTHING_LEFT = re.compile(r"(?i)\b(none|nothing|no items?)\b")
+CONTINUATION = re.compile(r"(?i)\b(left off|handed (?:it |the work )?back|hand-back|pick(?:s|ing)? up (?:where|from)"
+                          r"|continu(?:e|es|ing) (?:from|where)|previous (?:agent|builder|maker)"
+                          r"|ran out of (?:context|budget|room))\b")
+
+
+def _plugin_name():
+    """This plugin's name from its plugin.json, three directories above this script, or None on any
+    failure; the budget hook reads it the same way to decide who gets the scout's marks."""
+    try:
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")
+        with open(os.path.join(root, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+            return json.load(f)["name"]
+    except Exception:
+        return None
+
+
+PLUGIN_NAME = _plugin_name()
+
+
+def marks_for(l):
+    """The budget marks the hook gave this agent: the scout's only for this plugin's own scout, the
+    defaults for every other type, a foreign or bare `scout` included."""
+    if PLUGIN_NAME and l.ctx.agent_type == f"{PLUGIN_NAME}:scout":
+        return SCOUT_BUDGET_MARKS
+    return BUDGET_MARKS
+
+
+def lists_work_left(l):
+    """Whether a subagent's report has a line that names work still to do. The report is its hand-back
+    message, or for an older transcript its last text. A line that is only about the full suite being owed
+    to a runner, or that says none, does not count."""
+    report = l.ctx.handback_report or l.ctx.last_text
+    return any(not OWED_TO_RUNNER.search(m.group(0)) and not NOTHING_LEFT.search(m.group(0))
+               for m in WORK_LEFT_LINE.finditer(report or ""))
+
+
+def follow_up_costs(l, group):
+    """(run-up $, old-context $) for the first maker of `group` that took over from `l`, or None when
+    none did. The follow-up is the first later maker of the session, started after `l`'s last turn, whose
+    handoff names one of `l`'s branches or whose first prompt has a phrase only a continuation uses (such as
+    "left off" or "previous builder"). Its run-up is the list $ of its turns before its first edit, output
+    included; the old context's figure is what its turns from the first edit on would have added had they
+    carried the lift `l`'s larger context holds. The lift is not in the follow-up's context, so a cold turn
+    weighs the full cache write, 1.25, and any other turn the cache read."""
+    mine = branches_named(l.ctx.handoff, l.ctx.worktree_branch)
+    end = l.ctx.turns[-1]["ts"]
+    nxt = next((f for f in group if f is not l and folded_type(f) in MAKER_TYPES and f.ctx.turns[0]["ts"] > end
+                and (mine & branches_named(f.ctx.handoff, f.ctx.worktree_branch)
+                     or CONTINUATION.search(f.ctx.first_prompt[:4000]))), None)
+    if nxt is None:
+        return None
+    turns = nxt.ctx.turns
+    first = nxt.ctx.first_edit_turn if nxt.ctx.first_edit_turn is not None else len(turns)
+    model = turns[0]["model"]
+    w = cache_read_weight(model)
+    runup = sum(input_equivalent(t["usage"], t.get("model")) for t in turns[:first])
+    runup_out = sum(t["usage"].get("output_tokens", 0) or 0 for t in turns[:first])
+    lift = max(0, l.ctx.turns[-1]["ctx"] - (turns[first]["ctx"] if first < len(turns) else turns[-1]["ctx"]))
+    cold = {id(r["turn"]) for r in cold_turns(turns)}
+    extra = sum(lift * (1.25 if id(t) in cold else w) for t in turns[first:])
+    return list_dollars(runup, runup_out, model) or 0.0, list_dollars(extra, 0, model) or 0.0
+
+
+def section_budget_marks(out, loaded):
+    sessions = collections.defaultdict(list)
+    for l in loaded:
+        if l.ctx.kind == "subagent" and l.ctx.turns:
+            sessions[(l.ctx.project_dir, l.ctx.session_id)].append(l)
+    for group in sessions.values():
+        group.sort(key=lambda l: l.ctx.turns[0]["ts"])
+    rows = []   # (rung, mark name, mark, [(agent, crossing turn, its session's group)])
+    types = {folded_type(l) for g in sessions.values() for l in g if l.window_turns}
+    order = [t for t in MAKER_TYPES if t in types] + [t for t in ("scout",) if t in types]
+    order += sorted(types - set(order))
+    for rung in order:
+        for marks in ((SCOUT_BUDGET_MARKS, BUDGET_MARKS) if rung == "scout" else (BUDGET_MARKS,)):
+            for name, mark in marks:
+                past = []
+                for g in sessions.values():
+                    for l in g:
+                        if folded_type(l) != rung or not l.window_turns or marks_for(l) is not marks:
+                            continue
+                        crossed = next((i for i, t in enumerate(l.ctx.turns) if t["ctx"] >= mark), None)
+                        if crossed is not None:
+                            past.append((l, crossed, g))
+                if past:
+                    rows.append((rung, name, mark, past))
+    if not rows:
+        return
+    out.append("=== Budget marks ===")
+    out.append("  agents whose context reached each budget mark, and for the hand-back and stop marks whether handing the"
+               " work left to a fresh agent cost less than finishing in place (this plugin's scout has lower marks; any other"
+               " scout has the defaults)")
+    width = max(13, *(len(rung) for rung, _, _, _ in rows))
+    out.append(f"  {'rung':{width}} {'mark':>14} {'past':>5} {'after, committed':>17} {'after, not':>11} {'left work':>10}"
+               f" {'linked':>7} {'run-ups $':>10} {'old context $':>14} {'cheaper':>8}")
+
+    def turns_after(agents, committed):
+        xs = [len(l.ctx.turns) - 1 - i for l, i, _ in agents
+              if (l.ctx.first_commit_turn is not None and l.ctx.first_commit_turn <= i) == committed]
+        return f"{median(xs):.0f} ({len(xs)})" if xs else "-"
+
+    for rung, name, mark, past in rows:
+        label = f"{name} {mark // 1000}k"
+        cells = [turns_after(past, True), turns_after(past, False)]
+        if name == "freeze":
+            cells += ["-"] * 5
+        else:
+            left = [(l, g) for l, _, g in past if lists_work_left(l)]
+            if rung not in MAKER_TYPES:   # only a maker's work passes to a follow-up maker
+                cells += [str(len(left))] + ["-"] * 4
+            else:
+                costs = [c for c in (follow_up_costs(l, g) for l, g in left) if c]
+                cells += [str(len(left)), str(len(costs)), fmt_usd(sum(r for r, _ in costs)),
+                          fmt_usd(sum(e for _, e in costs)), str(sum(e > r for r, e in costs))]
+        out.append(f"  {rung:{width}} {label:>14} {len(past):5} {cells[0]:>17} {cells[1]:>11} {cells[2]:>10}"
+                   f" {cells[3]:>7} {cells[4]:>10} {cells[5]:>14} {cells[6]:>8}")
+    out.append("  (heuristics: after-turns count the turns after the one that crossed the mark; left work is a report line"
+               " that starts with Remaining, not done, unfinished or similar, and is not only about the full suite owed to"
+               " a runner; linked is the first later maker whose handoff shares a branch or whose prompt has a phrase that reads as a"
+               " continuation, such as \"left off\" or \"previous builder\", and is counted for makers' hand-backs only. Run-ups $ is the follow-ups' list $ before their first edit; old context $ is what their turns from"
+               " the first edit on would have added in the larger context. Cheaper counts the linked hand-backs where the second"
+               " exceeds the first.)")
+    out.append("")
+
+
 GATE_LINE = re.compile(r"\bG\d+\b[^\n]*CHECK:")
+# Copied from hooks/handoff-gates.py; it must match that file's CLASS_LINE.
+CLASS_LINE = re.compile(r"(?im)^[^\w\n]*Rung:[^\w\n]*builder(?![\w-])[^\w\n]*"
+                        r"(?:sets? aside|restores? work|process lifecycle|security|classification|builder-lite failed)")
+
+
+def briefed_makers(subs):
+    """The makers whose first prompt names a .md/.txt path that an earlier scout's first prompt in the same
+    session also names: the brief the scout wrote for them."""
+    scouts = [l for l in subs if folded_type(l) == "scout" and l.ctx.turns]
+    briefed = []
+    for l in subs:
+        if folded_type(l) not in MAKER_TYPES or not l.ctx.turns:
+            continue
+        mine = {os.path.expanduser(p) for p in HANDOFF_FILE.findall(l.ctx.first_prompt or "")}
+        if mine and any(s.ctx.turns[0]["ts"] < l.ctx.turns[0]["ts"]
+                        and (s.ctx.project_dir, s.ctx.session_id) == (l.ctx.project_dir, l.ctx.session_id)
+                        and mine & {os.path.expanduser(p) for p in HANDOFF_FILE.findall(s.ctx.first_prompt or "")}
+                        for s in scouts):
+            briefed.append(l)
+    return briefed
 
 
 def section_rule_scorecard(out, loaded):
@@ -1604,12 +1774,46 @@ def section_rule_scorecard(out, loaded):
          f"{before} ({len(edited)} of {len(makers)} makers edited)" if makers else "n/a", None,
          "no baseline" if edited_ie else "n/a")
 
+    # a scout before the makers: the run-up of a maker given a scout's brief against one without
+    briefed = {id(l) for l in briefed_makers(subs)}
+    parts, verdicts = [], []
+    for rung in ("builder", "builder-lite"):
+        cells = []
+        for name, group in (("briefed", [l for l in edited if id(l) in briefed and folded_type(l) == rung]),
+                            ("not briefed", [l for l in edited if id(l) not in briefed and folded_type(l) == rung])):
+            runs = [(sum_dollars(l.ctx.turns[:l.ctx.first_edit_turn]), l.ctx.first_edit_turn) for l in group]
+            runs = [(usd, n) for usd, n in runs if usd is not None]
+            if runs:
+                usd = median(u for u, _ in runs)
+                cells.append(f"{name} ${usd:.2f} over {median(n for _, n in runs):.0f} turns ({len(runs)})")
+                if name == "briefed":
+                    verdicts.append(usd <= BASELINE_RUNUP[rung])
+        if cells:
+            parts.append(f"{rung} " + ", ".join(cells))
+    scouts = [l for l in subs if folded_type(l) == "scout"]
+    scout_usd = [u for u in (sum_dollars(l.ctx.turns) for l in scouts) if u is not None]
+    parts.append(f"{len(scouts)} scouts" + (f", median ${median(scout_usd):.2f} per context" if scout_usd else ""))
+    line("a scout before the makers", "maker run-up to the first edit, median", "; ".join(parts),
+         BASELINE_RUNUP_TEXT, "n/a" if not verdicts else "holds" if all(verdicts) else "not holding")
+
     # handoffs carry gates
     gated = [l for l in makers if GATE_LINE.search(l.ctx.handoff)]
     gone = sum(l.ctx.handoff_missing > 0 for l in makers)
     line("maker handoffs carry gates", "maker handoffs with a gate line",
          (f"{len(gated)} of {len(makers)}" + (f" ({gone} named a file no longer on disk)" if gone else ""))
          if makers else "n/a", None, "no baseline" if makers else "n/a")
+
+    # builder handoffs name a class
+    builders = [l for l in subs if folded_type(l) == "builder"]
+    classed = [l for l in builders if CLASS_LINE.search(l.ctx.handoff)]
+    spend = {id(l): sum_dollars(l.window_turns) or 0 for l in builders}
+    total = sum(spend.values())
+    bare = sum(spend[id(l)] for l in builders if l not in classed)
+    held = (f" (the {len(builders) - len(classed)} without held {100 * bare / total:.0f}% of builder spend)"
+            if total and len(classed) < len(builders) else "")
+    line("builder handoffs name a class", "builder handoffs with a class line",
+         f"{len(classed)} of {len(builders)}{held}" if builders else "n/a", None,
+         "no baseline" if builders else "n/a")
 
     # a fresh agent per round
     handed = [l for l in subs if l.ctx.handback_report is not None]
@@ -1718,6 +1922,7 @@ SECTIONS = (
     ("fixed-start", "Fixed start", lambda out, loaded, top_n: section_fixed_start(out, loaded)),
     ("rule-scorecard", "Rule scorecard", lambda out, loaded, top_n: section_rule_scorecard(out, loaded)),
     ("review-by-rung", "Review by rung", lambda out, loaded, top_n: section_review_by_rung(out, loaded)),
+    ("budget-marks", "Budget marks", lambda out, loaded, top_n: section_budget_marks(out, loaded)),
     ("largest-contexts", "Largest contexts", section_largest),
     ("tools-called", "Tools called", lambda out, loaded, top_n: section_tools(out, loaded)),
 )

@@ -73,7 +73,9 @@ Another hook watches subagents: it warns an agent as its context grows, in three
 
 - at 120k, freeze scope and start nothing new;
 - at 150k, finish the item in hand and hand the rest back;
-- at 200k, stop where it is and report, repeated every further 50k.
+- at 200k, stop and report, landing the item in hand only if its narrow check and the commit are all it still needs; repeated every further 50k.
+
+A `scout` runs on Haiku, whose list input price steps up five-fold past 100k tokens, so its marks are 60k, 80k and 95k.
 
 Separately, when one tool call outlives a subagent's five-minute prompt cache, whether it succeeded
 or failed, it adds a line telling the agent that each further turn now rewrites its whole
@@ -103,6 +105,13 @@ A fourth hook reads each handoff to a `builder` or `builder-lite`. One with no g
 prompt names by absolute or `~/` path, is refused once with the format; the identical call re-issued goes
 through. Measured on one machine over three days: 60% of `builder` and 42% of `builder-lite` prompts carried
 a gate line. `DELEGATE_HANDOFF_GATES=0` turns it off.
+
+The same hook asks a handoff to `builder` to say why it needs that rung, on a line of its own:
+`Rung: builder — <class>`, the class one of sets aside or restores work, process lifecycle, security,
+classification, or builder-lite failed its gates twice. A handoff missing both that line and its gates
+is refused once, naming both, and a call that names its own `model` is left alone. Measured on one
+machine over 14 days: a `builder` cost $1.84 at list price to a `builder-lite`'s $0.59, and 110 of 518
+`builder` handoffs named none of the classes. `DELEGATE_BUILDER_CLASS=0` turns this check off.
 
 Your own session gets a context-budget tier too: from 200k, and at each further 100k, it is told that
 every turn re-sends its context, and asked to suggest at the next natural break that you save a short note
@@ -139,8 +148,9 @@ Your numbers will differ; `agent-cost` shows you yours.
 | --- | --- | --- |
 | your session | yours (Sonnet, Opus or Fable) | Plans, picks the agent for each job, writes the handoff, re-runs the gates. |
 | `runner` | Haiku | A scripted list of commands whose output is the answer, such as running suites. It edits nothing. |
+| `scout` | Haiku | Runs before the makers: one brief per job, at the path the handoff names, quoting the lines the job changes and the signatures it calls, with the narrow test that covers it and the conventions in play. Facts only, no design; it writes nothing but its briefs. |
 | `builder-lite` | Sonnet | The default implementer: any change whose design the handoff has settled, from a feature slice to a round of review fixes, and mechanical, fully specified work: sweeps, renames, fixture edits, applying a reviewed diff. |
-| `builder` | Opus, or your session's model if lower | The exception: safety-critical code, classification subtleties, or a job `builder-lite` failed its gates on twice. |
+| `builder` | Opus, or your session's model if lower | The exception: safety-critical code, classification subtleties, or a job `builder-lite` failed its gates on twice. Its handoff says which, on a `Rung: builder — <class>` line. |
 | `reviewer` | Opus, or your session's model if lower | Sees the spec and the diff, never the reasoning that produced them. It ends with one line: `Verdict: merge-ready`, `merge-ready with lows`, `merge-ready after fixes` or `not merge-ready`, or one `Verdict (fix/name): …` line per branch when it reviewed several. |
 
 `mechanic` was retired in 2.0.0, its work folded into `builder-lite` and `runner`, and the report still shows its rows for transcripts from before.
@@ -187,12 +197,14 @@ isn't a positive integer means the default.
 run before the budget hook says the prompt cache has expired. Set it to match your cache lifetime;
 anything that isn't a positive integer means the default.
 
-Four more switches turn a hook off when set to `0`; any other value leaves it on:
+Five more switches turn a hook off when set to `0`; any other value leaves it on:
 
 - `DELEGATE_LONG_RUN_GUARD`: the refusal of a repeat of a build or test that already outlasted the cache.
 - `DELEGATE_REVIEWER_GUARD`: the block on a reviewer's git commands that move a checkout, or shared refs,
   that existed before it started.
-- `DELEGATE_HANDOFF_GATES`: the refusal of a maker handoff with no gate line.
+- `DELEGATE_HANDOFF_GATES`: the refusal of a maker handoff with no gate line (and of a `builder`
+  handoff with no class line).
+- `DELEGATE_BUILDER_CLASS`: the refusal of a `builder` handoff with no `Rung: builder — <class>` line.
 - `DELEGATE_MAIN_BUDGET`: the context-budget tier for your own session.
 
 To let agents run above your session's model, for instance Opus builders under a Sonnet session, switch
@@ -292,8 +304,9 @@ and each one says what to do about what it shows:
 | Cold cache | How much went on messages sent into a large context after its prompt cache expired, and whether your sessions get the five-minute or the one-hour cache lifetime. | [`cache-guard`](../cache-guard/README.md), a sibling plugin, which warns you with the cost before that message is sent. |
 | What fills the context | Which kind of content you keep re-sending, with your sessions' share and subagents' share side by side. | Reading files by range, and a code index in place of `cat` and `grep`. |
 | Fixed start | What every context pays before any work: instruction files, MCP tool listings, the skill listing. | Trimming the instruction files every session loads (and every subagent loads again), and disconnecting servers a coding session never calls. |
-| Rule scorecard | One line per rule this plugin states: the metric that measures it in the window, the measured baseline where there is one (a target for the model ceiling), and whether it holds. Its `handoffs carry the code` line is the share of maker spend (`builder`, `builder-lite`, and `mechanic` in older transcripts) before their first edit (an edit made through Bash counts), and `maker handoffs carry gates` is the share of maker handoffs with a gate line. | Running it over the windows before and after a change to see which rules your agents keep. A high share before the first edit means handoffs aren't carrying the code the job touches: quote it, or scout first. A low gates share means handoffs end without a check to run. |
+| Rule scorecard | One line per rule this plugin states: the metric that measures it in the window, the measured baseline where there is one (a target for the model ceiling), and whether it holds. Its `handoffs carry the code` line is the share of maker spend (`builder`, `builder-lite`, and `mechanic` in older transcripts) before their first edit (an edit made through Bash counts), `a scout before the makers` sets the median spend and turns before the first edit of `builder` and `builder-lite` runs briefed by a scout (a brief at a path both prompts name) against those that were not, with the scout count and their median spend, and holds when a briefed run-up is at or below the baseline measured on one machine over 14 days before the scout existed, `maker handoffs carry gates` is the share of maker handoffs with a gate line, and `builder handoffs name a class` is the share of `builder` handoffs with a `Rung: builder — <class>` line, with the share of builder spend held by those without one. | Running it over the windows before and after a change to see which rules your agents keep. A high share before the first edit means handoffs aren't carrying the code the job touches: quote it, or scout first. A low gates share means handoffs end without a check to run. A low class share means builders are chosen without naming why: add the line, or use `builder-lite`. An unbriefed run-up well above a briefed one means scouting pays: send a scout before the makers. |
 | Review by rung | For each maker type (`builder`, `builder-lite`) and round, how many makers a later reviewer passed or failed, linked by a branch name both handoffs state (a heuristic; unnamed or out-of-window reviews leave a maker unlinked), the fail share, and the mean input-eq per maker. A reviewer that gave one verdict line per branch gives each maker the line naming its branch. | Choosing between the dearer and the cheaper builder: if the cheaper rung's fail share matches the dearer one's in the same round, send it more of that work. |
+| Budget marks | For each rung with an agent past a budget mark (120k, 150k and 200k; a scout's are 60k, 80k and 95k), how many reached it, the median turns after it (split by whether the agent had already committed), and for the hand-back and stop marks how many reports list work left, how many of those a later maker took over (a heuristic: a shared branch name or a continuation prompt), what those follow-ups paid in run-ups before their first edit against what the same turns would have added in the larger old context, and in how many the hand-back was the cheaper road. | Judging whether hand-backs pay, and whether a rung's marks sit right: if the hand-back is cheaper in most linked cases, lower the mark; if rarely, raise it. |
 | Tools called (`--tools`) | The tools each agent type actually called. | Editing an agent definition's `tools:` or `disallowedTools:` line. |
 
 ### Asking for what you need

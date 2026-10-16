@@ -38,7 +38,7 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/agent_cost.py" [--since X] [--until X] [--p
   `.jsonl` file; any other name is refused before it is read.
 - `--sections NAMES` prints only those sections, comma-separated, each named by any prefix of it:
   `totals, spend-by-type, per-day, main-sessions, concentration, turn-shape, cold-cache, what-fills-the-context,
-  fixed-start, rule-scorecard, review-by-rung, largest-contexts, tools-called`. An unknown name fails before any transcript is read
+  fixed-start, rule-scorecard, review-by-rung, budget-marks, largest-contexts, tools-called`. An unknown name fails before any transcript is read
   and lists the ones that exist.
 - **Ask for the sections the question needs.** The full report is about 200 lines and every line of it
   lands in the context. "Why was yesterday expensive?" is `--sections totals,per-day,main-sessions`,
@@ -127,7 +127,13 @@ spend is all in their own sessions.
   and `.build/`, and a Python run that writes a file. The `maker handoffs carry gates` line is the share
   of maker handoffs with a gate line, and how many named a handoff file no longer on disk. Handoff files a
   prompt names (absolute or `~/` `.md`/`.txt`, up to five, 256 KB each) are read when the report runs, for
-  the gate line and for Review by rung's branch links. `calls requested together` has no baseline verdict,
+  the gate line, the class line and for Review by rung's branch links. The `builder handoffs name a class`
+  line counts `builder` handoffs with a `Rung: builder — <class>` line and the share of builder spend held by
+  those without one; a low count means builders are chosen without saying why. The `a scout before the makers`
+  line sets the median spend and turns before the first edit of makers briefed by an earlier scout in the
+  session (a `.md`/`.txt` path both first prompts name) against those not briefed, with the scout count and
+  median spend; it holds when a briefed run-up is at or below the baseline measured before the scout existed,
+  and an unbriefed run-up well above a briefed one means a scout pays. `calls requested together` has no baseline verdict,
   since its 70% baseline was measured on earlier models. `the model ceiling` leaves out subagents whose
   call named its own model, which the hook leaves alone, and says how many.
 - **Review by rung** — per maker type (`builder`, `builder-lite`) and round (first, or later
@@ -139,6 +145,14 @@ spend is all in their own sessions.
   (`Verdict (fix/name): …`) gives each maker the line naming its branch. **Action**: if the cheaper rung's fail share is no higher than
   the dearer one's in the same round, route more of that work to it; compare first rounds with first
   rounds, since the cheaper rung is mostly used for fix rounds.
+- **Budget marks** — one line per rung and budget mark (120k, 150k and 200k; this plugin's own scout's 60k, 80k and
+  95k): how many agents reached it, the median turns they took after it, split by whether they had
+  already committed, and for the hand-back and stop marks, how many reports listed work left. For a
+  maker, it also counts the hand-backs linked to a later maker in the session (a shared branch, or a
+  prompt that reads as a continuation), what those follow-ups paid to reach their first edit against
+  what their turns from the first edit on would have added in the old, larger context, and how many hand-backs were
+  cheaper. **Action**: if few hand-backs are cheaper, the run-ups are the cost to cut: quote the code in
+  the follow-up's handoff, or send a scout first.
 - **Largest contexts** — the worst individual offenders, for a closer look with `--transcript`.
 
 ## Caveats (the report states these too)

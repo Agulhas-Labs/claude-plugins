@@ -1448,6 +1448,7 @@ SECTION_HEADINGS = {
     "fixed-start": "=== Fixed start ===",
     "rule-scorecard": "=== Rule scorecard ===",
     "review-by-rung": "=== Review by rung ===",
+    "budget-marks": "=== Budget marks ===",
     "largest-contexts": "=== Largest contexts",
     "tools-called": "=== Tools called",
 }
@@ -1469,7 +1470,7 @@ class SectionSelectionTests(unittest.TestCase):
             deferred_attachment(ts_str(BASE), ["mcp__codeindex__digest"]),
             assistant("m1", ts_str(BASE), usage(cache_read=3000), content=[tool_use_block("t1")]),
             user_tool_result(ts_str(BASE + timedelta(seconds=1)), "t1", "result text"),
-            assistant("m2", ts_str(BASE + timedelta(seconds=2)), usage(cache_read=4000)),
+            assistant("m2", ts_str(BASE + timedelta(seconds=2)), usage(cache_read=130_000)),   # past the 120k mark
         ])
         self.fx = fx
         return ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
@@ -1861,6 +1862,18 @@ class RuleScorecardTests(unittest.TestCase):
         self.assertFalse(by_agent["r1"].prompted_after_handback)
         self.assertIsNone(by_agent["k0"].handback_report)
 
+    def test_the_stop_tiers_current_words_set_the_nudge_turn_too(self):
+        fx = FixtureRoot(self)
+        at = lambda s: ts_str(BASE + timedelta(seconds=s))
+        fx.subagent(agent="b2", agent_type="delegate:builder", entries=[
+            assistant("s1", at(60), usage(cache_creation=205_000), [tool_use_block("u1", "Bash", {"command": "make test"})], model=OPUS),
+            user_tool_result(at(61), "u1", "ok"),
+            budget_nudge(at(61), 205, "Stop here. Finish the item in hand only if all it still needs is its narrow check and the commit."),
+            assistant("s2", at(120), usage(cache_read=205_000), model=OPUS),
+        ])
+        loaded = ac.load_all(fx.root, None, BASE - timedelta(hours=1), BASE + timedelta(hours=1))
+        self.assertEqual({l.ctx.agent_id: l.ctx for l in loaded}["b2"].hand_back_nudge_turn, 1)
+
     def test_a_subagent_on_its_parents_family_or_below_is_within_the_ceiling(self):
         _, loaded = rule_tree(self)
         judged, above, _ = ac.above_ceiling(loaded)
@@ -1952,11 +1965,12 @@ class RuleScorecardTests(unittest.TestCase):
         report = ac.build_report(loaded, 12, sections=["rule-scorecard"])
         self.assertEqual(section_body(report, "Rule scorecard").splitlines()[0].strip(), "none in this window")
 
-    def test_in_the_default_report_just_before_review_by_rung_and_largest_contexts(self):
+    def test_in_the_default_report_just_before_review_by_rung_budget_marks_and_largest_contexts(self):
         _, loaded = rule_tree(self)
         headings = [l for l in ac.build_report(loaded, 12).splitlines() if l.startswith("=== ")]
-        self.assertEqual(headings[-3], "=== Rule scorecard ===")
-        self.assertEqual(headings[-2], "=== Review by rung ===")
+        self.assertEqual(headings[-4], "=== Rule scorecard ===")
+        self.assertEqual(headings[-3], "=== Review by rung ===")
+        self.assertEqual(headings[-2], "=== Budget marks ===")
         self.assertTrue(headings[-1].startswith("=== Largest contexts"))
 
     def test_asked_for_alone_with_sections(self):

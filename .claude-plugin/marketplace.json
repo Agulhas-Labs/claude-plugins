@@ -12,7 +12,7 @@
       "name": "delegate",
       "source": "./plugins/delegate",
       "description": "Your Claude Code session leads a team of agents, each on the cheapest model that can do its job. Work isn't accepted until a command proves it, and a built-in report shows where your tokens went.",
-      "version": "2.0.1",
+      "version": "2.1.0",
       "displayName": "Delegate: Agents Sized to the Job",
       "author": {
         "name": "Agulhas Labs"
@@ -53,7 +53,7 @@
       "displayName": "Logbook",
       "source": "./plugins/logbook",
       "description": "Keeps a live local page for a long Claude Code task: what needs you, what was built, what was verified, and what was decided without you. Hooks record it without spending model tokens, the page follows light, dark or your system's setting, and when the task ends the same page is the report.",
-      "version": "2.4.0",
+      "version": "2.5.0",
       "author": {
         "name": "Agulhas Labs"
       },

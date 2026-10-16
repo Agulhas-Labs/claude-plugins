@@ -16,6 +16,15 @@ transcript: an earlier Agent call with the same subagent_type and prompt whose r
 means the refusal was already given, so the call is allowed (the model-ceiling hook may add `model` on
 the re-issue, so only prompt and subagent_type are compared).
 
+A `builder` handoff must also name why it is the Opus rung: a line `Rung: builder \u2014 <class>`, the class
+one of: sets aside or restores work, process lifecycle, security, classification, builder-lite failed
+its gates twice. Measured on one machine over 14 days, 518 builder agents cost $1.84 each at list price
+against $0.59 for builder-lite, and 110 builder handoffs named none of the classes even by a loose match
+(a loose match is useless: a negative gate's "set the fix aside" reads as the safety class). The class is
+read from the same text as the gates, and a missing gate line and a missing class line are refused together
+in one reason, so a call is never refused twice. Calls that name a `model` are skipped, as the
+model-ceiling hook skips them, and DELEGATE_BUILDER_CLASS=0 turns the class check off.
+
 It leaves alone every subagent type other than this plugin's `builder` and `builder-lite`, every call
 made by a subagent (payload with `agent_id`), and everything when DELEGATE_HANDOFF_GATES=0 is set.
 Anything unexpected exits silently: a handoff check is never worth breaking an Agent call.
@@ -29,6 +38,8 @@ import sys
 TAG = "[delegate: handoff gates]"
 MAKERS = ("builder", "builder-lite")
 GATE = re.compile(r"\bG\d+\b[^\n]*CHECK:")
+CLASS_LINE = re.compile(r"(?im)^[^\w\n]*Rung:[^\w\n]*builder(?![\w-])[^\w\n]*"
+                        r"(?:sets? aside|restores? work|process lifecycle|security|classification|builder-lite failed)")
 # An absolute or ~/ path to a .md or .txt file, not part of a longer word or URL.
 PATH = re.compile(r"(?<![\w.:/~-])(?:~/|/)[^\s`'\"()\[\]<>]*?\.(?:md|txt)(?![\w/-])")
 FILE_MAX = 256 * 1024
@@ -115,17 +126,42 @@ def decision(payload, env):
     plugin, _, rung = subagent_type.partition(":")
     if rung not in MAKERS or plugin != own_name(root):
         return None
-    if GATE.search(handoff(prompt)):
+    text = handoff(prompt)
+    missing_gates = not GATE.search(text)
+    check_class = (rung == "builder" and not tool_input.get("model")
+                   and env.get("DELEGATE_BUILDER_CLASS", "").strip() != "0")
+    missing_class = check_class and not CLASS_LINE.search(text)
+    if not (missing_gates or missing_class):
         return None
     path = payload.get("transcript_path")
     if path and os.path.isfile(path) and already_refused(path, subagent_type, prompt):
         return None
-    reason = (
-        f"{TAG} this handoff to {subagent_type} has no gate line; end a maker handoff with one gate per "
-        "required outcome, `G<n> <outcome> \u2014 CHECK: <command> \u2014 EXPECT: <token>`, plus the "
-        "negative gate for each fix a test is said to pin; if no command can judge this job, re-issue "
-        "the identical call and it goes through."
+    gate_way = (
+        "end a maker handoff with one gate per required outcome, "
+        "`G<n> <outcome> \u2014 CHECK: <command> \u2014 EXPECT: <token>`, plus the negative gate for each fix a "
+        "test is said to pin"
     )
+    class_way = (
+        "add a line `Rung: builder \u2014 <class>`, the class one of: sets aside or restores work, process "
+        "lifecycle, security, classification, builder-lite failed its gates twice (a job in none of them goes "
+        "to builder-lite)"
+    )
+    if missing_gates and missing_class:
+        reason = (
+            f"{TAG} this handoff to {subagent_type} has no gate line and names no builder class; {gate_way}; "
+            f"and {class_way}. If no command can judge this job and it is one of those classes, re-issue the "
+            "identical call and it goes through."
+        )
+    elif missing_class:
+        reason = (
+            f"{TAG} this handoff to {subagent_type} names no builder class; {class_way}. If the job is one "
+            "of them, re-issue the identical call and it goes through."
+        )
+    else:
+        reason = (
+            f"{TAG} this handoff to {subagent_type} has no gate line; {gate_way}; if no command can judge "
+            "this job, re-issue the identical call and it goes through."
+        )
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
