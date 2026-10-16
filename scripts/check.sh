@@ -44,6 +44,7 @@ run_stage() {
 }
 fail_with_output() {
   printf '%s\n' "$out"
+  echo "check.sh: $1" >&2
   exit 1
 }
 
@@ -54,7 +55,7 @@ unit_suite() {
   if [ "$verbose" = 1 ]; then return 0; fi
   n=$(printf '%s\n' "$out" | sed -n 's/^Ran \([0-9][0-9]*\) tests\{0,1\} in .*/\1/p' | tail -n 1)
   if [ -z "$n" ] || [ "$n" -eq 0 ]; then
-    fail_with_output
+    fail_with_output "the $1 suite ran no tests"
   fi
   skipped=$(printf '%s\n' "$out" | sed -n 's/^OK (skipped=\([0-9][0-9]*\))$/\1/p' | tail -n 1)
   item="$1 $n OK"
@@ -105,7 +106,7 @@ if command -v claude >/dev/null 2>&1; then
         pass=$(printf '%s\n' "$out" | sed -n 's/^ *\([0-9][0-9]*\) pass$/\1/p' | tail -n 1)
         fail=$(printf '%s\n' "$out" | sed -n 's/^ *\([0-9][0-9]*\) fail$/\1/p' | tail -n 1)
         if [ -z "$pass" ] || [ "$pass" -eq 0 ] || [ "${fail:-1}" -ne 0 ]; then
-          fail_with_output
+          fail_with_output "$(basename "${plugin%/}")'s mod tests: no passing count, or a failure, in the summary"
         fi
         mod_line="${mod_line:+$mod_line, }$(basename "${plugin%/}") $pass pass"
       fi
@@ -113,7 +114,7 @@ if command -v claude >/dev/null 2>&1; then
   done
   if [ "$verbose" = 0 ]; then
     echo "validate: $validated OK"
-    echo "mod tests: $mod_line"
+    if [ -n "$mod_line" ]; then echo "mod tests: $mod_line"; fi
   fi
 else
   echo "manifest validation: claude CLI not found — skipped" >&2

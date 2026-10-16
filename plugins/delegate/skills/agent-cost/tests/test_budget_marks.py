@@ -102,7 +102,7 @@ class BudgetMarksTests(unittest.TestCase):
 
     def test_a_scout_at_80k_is_on_the_scouts_hand_back_line_and_a_builder_is_not(self):
         fx = FixtureRoot(self)
-        agent(fx, "s", "delegate:scout", 0, "x", [(85_000, None, None)])
+        agent(fx, "s", f"{ac.PLUGIN_NAME}:scout", 0, "x", [(85_000, None, None)])
         agent(fx, "b", "builder", 10, "x", [(85_000, None, None)])
         found = rows(fx)
         self.assertEqual(found[("scout", "hand-back")][0], "1")
@@ -141,7 +141,7 @@ class BudgetMarksTests(unittest.TestCase):
         fx = FixtureRoot(self)
         agent(fx, "f", "other:scout", 0, "x", [(85_000, None, None), (125_000, None, None)])
         agent(fx, "b", "scout", 10, "x", [(85_000, None, None), (125_000, None, None)])
-        agent(fx, "o", "delegate:scout", 20, "x", [(85_000, None, None)])
+        agent(fx, "o", f"{ac.PLUGIN_NAME}:scout", 20, "x", [(85_000, None, None)])
         found = rows(fx, by_size=True)
         self.assertEqual(found[("scout", "freeze", "60")][0], "1")       # only delegate:scout
         self.assertEqual(found[("scout", "hand-back", "80")][0], "1")

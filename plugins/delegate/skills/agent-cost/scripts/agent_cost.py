@@ -1571,10 +1571,10 @@ def section_review_by_rung(out, loaded):
     out.append("")
 
 
-# Budget marks: whether handing back at a mark pays. A subagent is warned at three context sizes; a scout's
-# are lower. When an agent is told to hand back and its report lists work left, a fresh agent takes that
+# Budget marks: whether handing back at a mark pays. A subagent is warned at three context sizes; this
+# plugin's own scout's are lower. When an agent is told to hand back and its report lists work left, a fresh agent takes that
 # work. The fresh agent pays a run-up (its turns before its first edit) that the old agent, finishing in
-# place, would not; in exchange its context is smaller on every turn after, and the old agent's would have
+# place, would not; in exchange its context is smaller from its first edit on, and the old agent's would have
 # carried the difference. Whichever sum is larger is the cheaper road.
 BUDGET_MARKS = (("freeze", 120_000), ("hand-back", 150_000), ("stop", 200_000))
 SCOUT_BUDGET_MARKS = (("freeze", 60_000), ("hand-back", 80_000), ("stop", 95_000))
@@ -1702,8 +1702,8 @@ def section_budget_marks(out, loaded):
     out.append("  (heuristics: after-turns count the turns after the one that crossed the mark; left work is a report line"
                " that starts with Remaining, not done, unfinished or similar, and is not only about the full suite owed to"
                " a runner; linked is the first later maker whose handoff shares a branch or whose prompt has a phrase that reads as a"
-               " continuation, such as \"left off\" or \"previous builder\", and is counted for makers' hand-backs only. Run-ups $ is the follow-ups' list $ before their first edit; old context $ is what their later"
-               " turns would have added in the larger context. Cheaper counts the linked hand-backs where the second"
+               " continuation, such as \"left off\" or \"previous builder\", and is counted for makers' hand-backs only. Run-ups $ is the follow-ups' list $ before their first edit; old context $ is what their turns from"
+               " the first edit on would have added in the larger context. Cheaper counts the linked hand-backs where the second"
                " exceeds the first.)")
     out.append("")
 

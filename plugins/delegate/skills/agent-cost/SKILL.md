@@ -150,7 +150,7 @@ spend is all in their own sessions.
   already committed, and for the hand-back and stop marks, how many reports listed work left. For a
   maker, it also counts the hand-backs linked to a later maker in the session (a shared branch, or a
   prompt that reads as a continuation), what those follow-ups paid to reach their first edit against
-  what their later turns would have added in the old, larger context, and how many hand-backs were
+  what their turns from the first edit on would have added in the old, larger context, and how many hand-backs were
   cheaper. **Action**: if few hand-backs are cheaper, the run-ups are the cost to cut: quote the code in
   the follow-up's handoff, or send a scout first.
 - **Largest contexts** — the worst individual offenders, for a closer look with `--transcript`.
