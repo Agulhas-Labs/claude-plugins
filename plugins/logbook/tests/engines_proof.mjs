@@ -221,7 +221,7 @@ async function proveEngine(playwright, engine) {
   let before = null;
   let refreshed = false;
   await check(2, 'the board refreshes in place', async () => {
-    await click(page, 'toggle-decisions');
+    await click(page, 'toggle-needs');
     before = await page.evaluate((y) => {
       window.__proofMarker = 'unchanged';
       window.scrollTo(0, y);
@@ -248,9 +248,9 @@ async function proveEngine(playwright, engine) {
 
   await check(4, 'a collapsed section stays collapsed across the refresh', async () => {
     if (!refreshed) return [false, 'no refresh in place happened to survive'];
-    const r = await page.evaluate(() => ({ expanded: document.querySelector('[data-key="toggle-decisions"]').getAttribute('aria-expanded'),
-      hidden: document.getElementById('b-decisions').hidden }));
-    return [r.expanded === 'false' && r.hidden === true, `Decisions aria-expanded=${r.expanded}, body hidden=${r.hidden}`];
+    const r = await page.evaluate(() => ({ expanded: document.querySelector('[data-key="toggle-needs"]').getAttribute('aria-expanded'),
+      hidden: document.getElementById('b-needs').hidden }));
+    return [r.expanded === 'false' && r.hidden === true, `Needs you aria-expanded=${r.expanded}, body hidden=${r.hidden}`];
   });
 
   // The Commands tab is not the one showing at first; a viewer who picks it keeps it showing.

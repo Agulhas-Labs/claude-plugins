@@ -43,12 +43,12 @@ class Sections(unittest.TestCase):
         state = live(changes=[change("src/a.py", "2026-01-05T09:10:00Z", "2026-01-05T09:10:00Z")],
                      commands=[command("git status", "2026-01-05T09:11:00Z")], commandsTotal=1)
         self.assertEqual(pb("PB.sections(s, now)", s=state, now=NOW),
-                         ["needs", "stuck", "steps", "built", "changed", "verified", "decisions", "commands", "agents"])
+                         ["needs", "rulings", "stuck", "steps", "built", "changed", "verified", "commands", "agents"])
 
     def test_each_is_hidden_when_empty_or_missing(self):
         empty = live(changes=[], commands=[], commandsTotal=0)
         missing = live()
-        before = ["needs", "stuck", "steps", "built", "verified", "decisions", "agents"]
+        before = ["needs", "rulings", "stuck", "steps", "built", "verified", "agents"]
         self.assertEqual(pb("PB.sections(s, now)", s=empty, now=NOW), before)
         self.assertEqual(pb("PB.sections(s, now)", s=missing, now=NOW), before)
 
@@ -64,9 +64,9 @@ class Sections(unittest.TestCase):
     def test_a_state_without_the_new_keys_renders_the_same_sections_as_before(self):
         cases = {
             "state-started.json": ["steps"],
-            "state-live.json": ["needs", "stuck", "steps", "built", "verified", "decisions", "agents"],
+            "state-live.json": ["needs", "rulings", "stuck", "steps", "built", "verified", "agents"],
             "state-stuck.json": ["stuck", "steps", "built", "verified", "agents"],
-            "state-finished.json": ["steps", "built", "verified", "decisions", "agents"],
+            "state-finished.json": ["rulings", "steps", "built", "verified", "agents"],
         }
         for name, expected in cases.items():
             state = without_work(fixture(name))
