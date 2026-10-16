@@ -15,12 +15,15 @@ COMMIT = {"command": "git commit -m done"}
 EDIT = {"file_path": "/x.py", "old_string": "a", "new_string": "b"}
 
 
-def agent(fx, name, agent_type, secs, prompt, turns, report=None):
+def agent(fx, name, agent_type, secs, prompt, turns, report=None, gaps=None):
     """A subagent starting `secs` after BASE. `turns` is one (context size, tool name, tool input or None) per
-    turn, a second apart; the last turn carries `report` as its hand-back when one is given."""
+    turn, a second apart plus `gaps[i]` extra seconds before turn i when given; the last turn carries `report`
+    as its hand-back when one is given."""
     entries = [user_text(ts_str(BASE + timedelta(seconds=secs)), prompt)]
+    late = 0
     for i, (size, tool, inp) in enumerate(turns):
-        at = ts_str(BASE + timedelta(seconds=secs + i))
+        late += (gaps or {}).get(i, 0)
+        at = ts_str(BASE + timedelta(seconds=secs + i + late))
         content = [tool_use_block(f"{name}-{i}", tool, inp)] if tool else []
         if report is not None and i == len(turns) - 1:
             content.append(handback(f"{name}-hb", report))
@@ -28,15 +31,16 @@ def agent(fx, name, agent_type, secs, prompt, turns, report=None):
     fx.subagent(agent=name, agent_type=agent_type, entries=entries)
 
 
-def rows(fx):
-    """The section's rows keyed by (rung, mark), each the list of cells that follow."""
+def rows(fx, by_size=False):
+    """The section's rows keyed by (rung, mark name), or (rung, mark name, size in k) when `by_size`, each the
+    list of cells that follow."""
     loaded = ac.load_all(fx.root, None, *WINDOW)
     body = section_body(ac.build_report(loaded, 12, sections=["budget-marks"]), "Budget marks")
     found = {}
     for line in body.splitlines():
-        m = re.match(r"\s+(\S+)\s+(freeze|hand-back|stop) \d+k\s+(.*)$", line)
+        m = re.match(r"\s+(\S+)\s+(freeze|hand-back|stop) (\d+)k\s+(.*)$", line)
         if m:
-            found[(m.group(1), m.group(2))] = re.split(r"\s{2,}|\s(?=\$)", m.group(3).strip())
+            found[(m.group(1), m.group(2)) + ((m.group(3),) if by_size else ())] = re.split(r"\s{2,}|\s(?=\$)", m.group(4).strip())
     return found
 
 
@@ -79,10 +83,10 @@ class BudgetMarksTests(unittest.TestCase):
         new = next(l for l in loaded if l.ctx.agent_id == "new")
         old = next(l for l in loaded if l.ctx.agent_id == "old")
         self.assertEqual(new.ctx.first_edit_turn, 2)
-        runup = ac.list_dollars(20_000, 0, "claude-sonnet-5")
+        runup = ac.list_dollars(20_000, 2, "claude-sonnet-5")   # two turns, one output token each
         lift = 160_000 - 12_000
         w = ac.cache_read_weight("claude-sonnet-5")
-        extra = ac.list_dollars(lift * w * 2, 0, "claude-sonnet-5")
+        extra = ac.list_dollars(lift * w * 3, 0, "claude-sonnet-5")   # the first edit's turn and the two after
         self.assertEqual(ac.follow_up_costs(old, loaded), (runup, extra))
         self.assertEqual(row[3:5], ["1", "1"])             # left work, linked
         self.assertEqual(row[5:7], [ac.fmt_usd(runup), ac.fmt_usd(extra)])
@@ -98,7 +102,7 @@ class BudgetMarksTests(unittest.TestCase):
 
     def test_a_scout_at_80k_is_on_the_scouts_hand_back_line_and_a_builder_is_not(self):
         fx = FixtureRoot(self)
-        agent(fx, "s", "scout", 0, "x", [(85_000, None, None)])
+        agent(fx, "s", "delegate:scout", 0, "x", [(85_000, None, None)])
         agent(fx, "b", "builder", 10, "x", [(85_000, None, None)])
         found = rows(fx)
         self.assertEqual(found[("scout", "hand-back")][0], "1")
@@ -106,6 +110,44 @@ class BudgetMarksTests(unittest.TestCase):
         self.assertNotIn(("scout", "stop"), found)
         self.assertNotIn(("builder", "freeze"), found)
         self.assertNotIn(("builder", "hand-back"), found)
+
+    def test_a_cold_follow_up_turn_weighs_the_lift_at_the_full_cache_write(self):
+        fx = FixtureRoot(self)
+        agent(fx, "old", "builder", 0, "Build `feat/thing`.", [(100_000, None, None), (160_000, None, None)],
+              report="Remaining: the docs.")
+        # edits at turn 1; turn 2 follows a gap past the cache lifetime, so it is cold, and turn 3 is warm
+        agent(fx, "new", "builder", 20, "Finish `feat/thing`.",
+              [(10_000, None, None), (12_000, "Edit", EDIT), (12_000, None, None), (12_000, None, None)],
+              gaps={2: ac.COLD_GAP_SECONDS})
+        loaded = ac.load_all(fx.root, None, *WINDOW)
+        old = next(l for l in loaded if l.ctx.agent_id == "old")
+        model = "claude-sonnet-5"
+        w = ac.cache_read_weight(model)
+        lift = 160_000 - 12_000
+        _, extra = ac.follow_up_costs(old, loaded)
+        self.assertAlmostEqual(extra, ac.list_dollars(lift * (w + 1.25 + w), 0, model), places=9)
+
+    def test_only_a_phrase_a_continuation_uses_links_a_follow_up_with_no_shared_branch(self):
+        for prompt, linked in (("Run the remaining tests within budget and continue.", "0"),
+                               ("Pick up where the previous builder left off.", "1")):
+            with self.subTest(prompt=prompt):
+                fx = FixtureRoot(self)
+                agent(fx, "old", "builder", 0, "Build `feat/thing`.", [(100_000, None, None), (160_000, None, None)],
+                      report="Remaining: the docs.")
+                agent(fx, "new", "builder", 20, prompt, [(10_000, "Edit", EDIT)])
+                self.assertEqual(rows(fx)[("builder", "hand-back")][3:5], ["1", linked])
+
+    def test_only_this_plugins_scout_gets_the_scouts_marks(self):
+        fx = FixtureRoot(self)
+        agent(fx, "f", "other:scout", 0, "x", [(85_000, None, None), (125_000, None, None)])
+        agent(fx, "b", "scout", 10, "x", [(85_000, None, None), (125_000, None, None)])
+        agent(fx, "o", "delegate:scout", 20, "x", [(85_000, None, None)])
+        found = rows(fx, by_size=True)
+        self.assertEqual(found[("scout", "freeze", "60")][0], "1")       # only delegate:scout
+        self.assertEqual(found[("scout", "hand-back", "80")][0], "1")
+        self.assertEqual(found[("scout", "freeze", "120")][0], "2")      # the foreign and the bare scout
+        self.assertNotIn(("scout", "hand-back", "150"), found)
+        self.assertNotIn(("scout", "stop", "95"), found)
 
     def test_the_section_is_named_budget(self):
         self.assertEqual(ac.resolve_sections("budget"), ["budget-marks"])

@@ -145,7 +145,7 @@ spend is all in their own sessions.
   (`Verdict (fix/name): …`) gives each maker the line naming its branch. **Action**: if the cheaper rung's fail share is no higher than
   the dearer one's in the same round, route more of that work to it; compare first rounds with first
   rounds, since the cheaper rung is mostly used for fix rounds.
-- **Budget marks** — one line per rung and budget mark (120k, 150k and 200k; a scout's 60k, 80k and
+- **Budget marks** — one line per rung and budget mark (120k, 150k and 200k; this plugin's own scout's 60k, 80k and
   95k): how many agents reached it, the median turns they took after it, split by whether they had
   already committed, and for the hand-back and stop marks, how many reports listed work left. For a
   maker, it also counts the hand-backs linked to a later maker in the session (a shared branch, or a

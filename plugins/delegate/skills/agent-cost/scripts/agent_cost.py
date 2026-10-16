@@ -1582,8 +1582,31 @@ WORK_LEFT_LINE = re.compile(r"(?im)^.{0,12}(remaining|remains|not done|unfinishe
                             r"|left to do|outstanding|not (?:yet )?(?:implemented|landed|addressed|fixed))\b.*$")
 OWED_TO_RUNNER = re.compile(r"(?i)(full|whole|complete)\s+(suite|run|test)|owed|runner")
 NOTHING_LEFT = re.compile(r"(?i)\b(none|nothing|no items?)\b")
-CONTINUATION = re.compile(r"(?i)\b(remaining|continu\w*|pick(?:s|ing)? up|handed back|hand-back|left off"
-                          r"|previous (?:agent|builder)|ran out|budget)\b")
+CONTINUATION = re.compile(r"(?i)\b(left off|handed (?:it |the work )?back|hand-back|pick(?:s|ing)? up (?:where|from)"
+                          r"|continu(?:e|es|ing) (?:from|where)|previous (?:agent|builder|maker)"
+                          r"|ran out of (?:context|budget|room))\b")
+
+
+def _plugin_name():
+    """This plugin's name from its plugin.json, three directories above this script, or None on any
+    failure; the budget hook reads it the same way to decide who gets the scout's marks."""
+    try:
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")
+        with open(os.path.join(root, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+            return json.load(f)["name"]
+    except Exception:
+        return None
+
+
+PLUGIN_NAME = _plugin_name()
+
+
+def marks_for(l):
+    """The budget marks the hook gave this agent: the scout's only for this plugin's own scout, the
+    defaults for every other type, a foreign or bare `scout` included."""
+    if PLUGIN_NAME and l.ctx.agent_type == f"{PLUGIN_NAME}:scout":
+        return SCOUT_BUDGET_MARKS
+    return BUDGET_MARKS
 
 
 def lists_work_left(l):
@@ -1598,9 +1621,11 @@ def lists_work_left(l):
 def follow_up_costs(l, group):
     """(run-up $, old-context $) for the first maker of `group` that took over from `l`, or None when
     none did. The follow-up is the first later maker of the session, started after `l`'s last turn, whose
-    handoff names one of `l`'s branches or whose first prompt reads as a continuation. Its run-up is the
-    list $ of its turns before its first edit; the old context's figure is what those later turns would have
-    added had they carried `l`'s larger context, a cold turn weighing what a rewrite costs."""
+    handoff names one of `l`'s branches or whose first prompt has a phrase only a continuation uses (such as
+    "left off" or "previous builder"). Its run-up is the list $ of its turns before its first edit, output
+    included; the old context's figure is what its turns from the first edit on would have added had they
+    carried the lift `l`'s larger context holds. The lift is not in the follow-up's context, so a cold turn
+    weighs the full cache write, 1.25, and any other turn the cache read."""
     mine = branches_named(l.ctx.handoff, l.ctx.worktree_branch)
     end = l.ctx.turns[-1]["ts"]
     nxt = next((f for f in group if f is not l and folded_type(f) in MAKER_TYPES and f.ctx.turns[0]["ts"] > end
@@ -1613,10 +1638,11 @@ def follow_up_costs(l, group):
     model = turns[0]["model"]
     w = cache_read_weight(model)
     runup = sum(input_equivalent(t["usage"], t.get("model")) for t in turns[:first])
+    runup_out = sum(t["usage"].get("output_tokens", 0) or 0 for t in turns[:first])
     lift = max(0, l.ctx.turns[-1]["ctx"] - (turns[first]["ctx"] if first < len(turns) else turns[-1]["ctx"]))
     cold = {id(r["turn"]) for r in cold_turns(turns)}
-    extra = sum(lift * ((1.25 - w) if id(t) in cold else w) for t in turns[first + 1:])
-    return list_dollars(runup, 0, model) or 0.0, list_dollars(extra, 0, model) or 0.0
+    extra = sum(lift * (1.25 if id(t) in cold else w) for t in turns[first:])
+    return list_dollars(runup, runup_out, model) or 0.0, list_dollars(extra, 0, model) or 0.0
 
 
 def section_budget_marks(out, loaded):
@@ -1631,23 +1657,24 @@ def section_budget_marks(out, loaded):
     order = [t for t in MAKER_TYPES if t in types] + [t for t in ("scout",) if t in types]
     order += sorted(types - set(order))
     for rung in order:
-        marks = SCOUT_BUDGET_MARKS if rung == "scout" else BUDGET_MARKS
-        for name, mark in marks:
-            past = []
-            for g in sessions.values():
-                for l in g:
-                    if folded_type(l) != rung or not l.window_turns:
-                        continue
-                    crossed = next((i for i, t in enumerate(l.ctx.turns) if t["ctx"] >= mark), None)
-                    if crossed is not None:
-                        past.append((l, crossed, g))
-            if past:
-                rows.append((rung, name, mark, past))
+        for marks in ((SCOUT_BUDGET_MARKS, BUDGET_MARKS) if rung == "scout" else (BUDGET_MARKS,)):
+            for name, mark in marks:
+                past = []
+                for g in sessions.values():
+                    for l in g:
+                        if folded_type(l) != rung or not l.window_turns or marks_for(l) is not marks:
+                            continue
+                        crossed = next((i for i, t in enumerate(l.ctx.turns) if t["ctx"] >= mark), None)
+                        if crossed is not None:
+                            past.append((l, crossed, g))
+                if past:
+                    rows.append((rung, name, mark, past))
     if not rows:
         return
     out.append("=== Budget marks ===")
     out.append("  agents whose context reached each budget mark, and for the hand-back and stop marks whether handing the"
-               " work left to a fresh agent cost less than finishing in place (a scout's marks are lower)")
+               " work left to a fresh agent cost less than finishing in place (this plugin's scout has lower marks; any other"
+               " scout has the defaults)")
     width = max(13, *(len(rung) for rung, _, _, _ in rows))
     out.append(f"  {'rung':{width}} {'mark':>14} {'past':>5} {'after, committed':>17} {'after, not':>11} {'left work':>10}"
                f" {'linked':>7} {'run-ups $':>10} {'old context $':>14} {'cheaper':>8}")
@@ -1674,8 +1701,8 @@ def section_budget_marks(out, loaded):
                    f" {cells[3]:>7} {cells[4]:>10} {cells[5]:>14} {cells[6]:>8}")
     out.append("  (heuristics: after-turns count the turns after the one that crossed the mark; left work is a report line"
                " that starts with Remaining, not done, unfinished or similar, and is not only about the full suite owed to"
-               " a runner; linked is the first later maker whose handoff shares a branch or whose prompt reads as a"
-               " continuation, and is counted for makers' hand-backs only. Run-ups $ is the follow-ups' list $ before their first edit; old context $ is what their later"
+               " a runner; linked is the first later maker whose handoff shares a branch or whose prompt has a phrase that reads as a"
+               " continuation, such as \"left off\" or \"previous builder\", and is counted for makers' hand-backs only. Run-ups $ is the follow-ups' list $ before their first edit; old context $ is what their later"
                " turns would have added in the larger context. Cheaper counts the linked hand-backs where the second"
                " exceeds the first.)")
     out.append("")
