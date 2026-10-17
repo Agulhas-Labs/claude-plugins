@@ -158,8 +158,12 @@ Your numbers will differ; `agent-cost` shows you yours.
 The agents are namespaced (`delegate:runner` and so on). The plugin never changes your session's
 model, only what the subagents run on, and it never runs one above your session's model. Where a pin is
 higher, a hook passes your session's model as a per-call override, so on Sonnet the `builder` and
-`reviewer` are Sonnet agents (still at high effort, which a call cannot change) and `builder-lite`
+`reviewer` are Sonnet agents (still at their pinned high effort) and `builder-lite`
 takes whatever fits it. Start on Opus for the full ladder.
+
+Each rung also pins an effort: `runner` and `scout` low, `builder-lite` medium, `builder` and
+`reviewer` high. A pin overrides your session's effort, but the `CLAUDE_CODE_EFFORT_LEVEL` environment
+variable overrides every pin: with it set, every rung runs at that one effort.
 
 ## The model you start on is the ceiling
 
@@ -168,7 +172,7 @@ on `delegate:` rungs, read before each call: a call that names its own `model`, 
 another name, a machine without Python, or a model id the hook cannot place is not capped, and the
 first call after a model change can still be judged by the model before it. Start on Opus and the whole
 ladder is available. Start on Sonnet and a hook adds `model: "sonnet"` to any call whose agent is pinned higher, so `builder` and
-`reviewer` run on Sonnet (at their high effort, which a call cannot change) and `builder-lite`
+`reviewer` run on Sonnet (at their pinned high effort) and `builder-lite`
 takes whatever fits it. Start on Haiku and everything runs on Haiku. The reviewer always
 runs: it is the only reader that sees just the spec and the diff.
 
