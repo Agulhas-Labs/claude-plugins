@@ -157,6 +157,7 @@ class Derive(unittest.TestCase):
         state = self.derive(
             event("question", 1, text="first"), event("decision", 2, text="d-one"),
             event("check", 3, proves="x", result="fail"), event("question", 4, text="second"),
+            event("agent-start", 5, id="a", type="general-purpose"),
             event("agent-stop", 5, id="a", message="- **G1** unit tests — passed"),
             event("decision", 6, text="d-two"), event("check", 7, proves="y", result="pass"),
         )

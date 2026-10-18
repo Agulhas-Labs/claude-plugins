@@ -629,7 +629,11 @@ class Derivation:
         agent_id = text(event.get("id"))
         if not agent_id:
             return False
-        agent = self.agent(agent_id, t)
+        if agent_id not in self.agents:
+            # Claude Code's own side agents (activity labels, prompt suggestions, compaction summaries) fire
+            # SubagentStop with no SubagentStart: no start or info means no subagent, so no row and no checks.
+            return False
+        agent = self.agents[agent_id]
         parsed = gates(text(event.get("message")))
         agent["ended"] = t
         agent["tokens"] = whole(event.get("tokens")) if whole(event.get("tokens")) is not None else agent["tokens"]

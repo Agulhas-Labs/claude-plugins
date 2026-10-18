@@ -149,6 +149,7 @@ class Commands(Workspace):
         self.refused("check", "x", "--result", "pass", code=2)
 
     def test_the_id_printed_is_the_one_the_state_gives(self):
+        board.append(self.board, "agent-start", at(0), id="a1", type="general-purpose")
         board.append(self.board, "agent-stop", at(0), id="a1", message="G1 the tests pass: passed")
         self.assertEqual(self.ok("check", "Lint is clean", "--command", "make lint", "--result", "pass"),
                          "C2 recorded: pass\n")
