@@ -32,6 +32,10 @@ fi
 # switched off for the stage and stripped again before parsing, so a coloured summary reads the same.
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
+# dash runs no EXIT trap when a signal kills it, so turn the signals into exits (measured: a SIGTERM
+# under dash left the scratch directory behind).
+trap 'exit 130' INT
+trap 'exit 143' TERM
 esc=$(printf '\033')
 out=
 run_stage() {
