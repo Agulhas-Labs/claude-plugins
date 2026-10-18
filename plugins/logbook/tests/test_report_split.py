@@ -11,7 +11,7 @@ import os
 import re
 import sys
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -91,29 +91,46 @@ class ReportFiles(Workspace):
         state = {"commands": commands(3), "commandsTotal": 3}
         self.assertEqual(board.report_state(state), state)
 
+    def test_every_test_row_stays_in_the_report_and_only_the_others_are_cut(self):
+        rows = commands(60)
+        rows[0].update(test=True, fails=1, result="fail", command="pytest")
+        slim = board.report_state({"commands": rows, "commandsTotal": 60})
+        self.assertEqual(len(slim["commands"]), board.REPORT_COMMAND_ROWS + 1)
+        self.assertEqual(slim["commands"][0]["command"], "pytest")
+        self.assertEqual(slim["commandsTotal"], 60)
+        others = [c for c in slim["commands"] if c.get("test") is not True]
+        self.assertEqual([c["latestRun"] for c in others], list(range(11, 61)))
+
+    def test_a_failing_early_test_run_still_counts_in_the_reports_verified(self):
+        rows = commands(60)
+        rows[0].update(test=True, result="fail", command="pytest")
+        slim = board.report_state({"commands": rows, "commandsTotal": 60})
+        self.assertEqual(sum(1 for c in slim["commands"] if c.get("test") is True and c.get("result") == "fail"), 1)
+
 
 class PublishCall(Workspace):
     def setUp(self):
         super().setUp()
-        self.data = os.path.join(self.tmp.name, "data")
-        os.mkdir(self.data)
         self.folder = board.start(self.project, SESSION, NOW, "Publish", env={}, template=self.template)
         os.mkdir(os.path.join(self.folder, board.IMAGES_DIR))
         self.write(os.path.join(self.folder, board.IMAGES_DIR, "1-shot.png"), "png")
 
-    def run_cli(self, *argv, data=True):
-        env = {"CLAUDE_PLUGIN_DATA": self.data} if data else {}
+    def run_cli(self, *argv, expect=0):
+        """Run a command the way the model's Bash tool does: no plugin variable in the environment."""
         out = io.StringIO()
-        with mock.patch.dict(os.environ, env, clear=False), redirect_stdout(out):
-            if not data:
-                os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE_PLUGIN_")}
+        with mock.patch.dict(os.environ, env, clear=True), redirect_stdout(out), redirect_stderr(io.StringIO()):
             code = board.main(list(argv))
-        self.assertEqual(code, 0)
+        self.assertEqual(code, expect)
         return out.getvalue()
 
-    def close_out(self, data=True):
-        with mock.patch.object(board, "DEFAULT_TEMPLATE", self.template):
-            return self.run_cli("close", "--board", self.folder, data=data)
+    def close_out(self, folder=None, template=None):
+        with mock.patch.object(board, "DEFAULT_TEMPLATE", template or self.template):
+            return self.run_cli("close", "--board", folder or self.folder)
+
+    def second_board(self, template=None):
+        folder = board.start(self.project, "22222222-2222-4222-8222-222222222222", NOW, "Second", env={}, template=template or self.template)
+        return folder
 
     def files_of(self, out):
         return json.loads(re.search(r"^files = (.*)$", out, re.M).group(1))
@@ -128,41 +145,60 @@ class PublishCall(Workspace):
             "logbook.js": os.path.join(folder, "logbook.js"),
         })
         self.assertIn(f"file_path = {os.path.join(folder, 'report.html')}", out)
-        self.assertIn("template-url <the published url>, so later reports copy", out)
+        self.assertIn(f'template-url --board "{folder}" <the published url>, so later reports copy', out)
 
-    def test_a_recorded_url_makes_the_style_and_script_copies_from_that_artifact(self):
-        with mock.patch.object(board, "DEFAULT_TEMPLATE", self.template):
-            self.run_cli("template-url", "https://example.test/a/1")
-        out = self.close_out()
+    def test_with_no_plugin_variable_the_recorded_url_reaches_the_next_boards_close(self):
+        self.close_out()
+        self.run_cli("template-url", "--board", self.folder, "https://example.test/a/1")
+        self.assertTrue(os.path.isfile(os.path.join(self.project, board.BOARDS_DIR, board.TEMPLATE_URL_FILE)))
+        second = self.second_board()
+        out = self.close_out(second)
         files = self.files_of(out)
         self.assertEqual(files["logbook.css"], {"artifact": "https://example.test/a/1", "path": "logbook.css"})
         self.assertEqual(files["logbook.js"], {"artifact": "https://example.test/a/1", "path": "logbook.js"})
-        self.assertTrue(files["images/1-shot.png"].endswith("1-shot.png"))
         self.assertIn("is refused (it was deleted)", out)
         self.assertNotIn("so later reports copy", out)
 
-    def test_a_changed_template_does_not_use_the_old_url(self):
-        with mock.patch.object(board, "DEFAULT_TEMPLATE", self.template):
-            self.run_cli("template-url", "https://example.test/a/1")
+    def test_the_record_is_not_a_board_and_pruning_keeps_it(self):
+        self.close_out()
+        self.run_cli("template-url", "--board", self.folder, "https://example.test/a/1")
+        boards = os.path.join(self.project, board.BOARDS_DIR)
+        self.assertNotIn(board.TEMPLATE_URL_FILE, [r["name"] for r in board.board_rows(boards)])
+        board.prune(self.project, NOW.replace(year=NOW.year + 5), env={})
+        self.assertTrue(os.path.isfile(os.path.join(boards, board.TEMPLATE_URL_FILE)))
+
+    def test_a_url_recorded_for_one_template_is_not_used_by_a_board_holding_another(self):
+        self.close_out()
+        self.run_cli("template-url", "--board", self.folder, "https://example.test/a/1")
         changed = self.write(
             os.path.join(self.tmp.name, "changed.html"),
             "<html><head><style>b{}</style>\n  " + board.TEMPLATE_MARKER + "\n<script>var x;</script></head></html>\n",
         )
-        with mock.patch.object(board, "DEFAULT_TEMPLATE", changed):
-            out = self.run_cli("close", "--board", self.folder)
-        self.assertEqual(self.files_of(out)["logbook.css"], os.path.join(os.path.abspath(self.folder), "logbook.css"))
+        second = self.second_board(changed)
+        out = self.close_out(second, template=changed)
+        self.assertEqual(self.files_of(out)["logbook.css"], os.path.join(os.path.abspath(second), "logbook.css"))
 
-    def test_without_a_data_folder_nothing_is_recorded_and_close_gives_the_local_form(self):
-        with mock.patch.object(board, "DEFAULT_TEMPLATE", self.template):
-            self.assertIn("no record kept", self.run_cli("template-url", "https://example.test/a/1", data=False))
-        self.assertEqual(os.listdir(self.data), [])
-        out = self.close_out(data=False)
-        self.assertEqual(self.files_of(out)["logbook.js"], os.path.join(os.path.abspath(self.folder), "logbook.js"))
+    def test_the_hash_is_of_the_files_on_disk_not_of_the_current_template(self):
+        self.close_out()  # this board keeps its v1 logbook.css and logbook.js
+        v2 = self.write(
+            os.path.join(self.tmp.name, "v2.html"),
+            "<html><head><style>b{}</style>\n  " + board.TEMPLATE_MARKER + "\n<script>var x;</script></head></html>\n",
+        )
+        # After a plugin update the old board's artifact is recorded: it must be recorded as v1's.
+        with mock.patch.object(board, "DEFAULT_TEMPLATE", v2):
+            self.run_cli("template-url", "--board", self.folder, "https://example.test/v1")
+        second = self.second_board(v2)
+        out = self.close_out(second, template=v2)
+        self.assertEqual(self.files_of(out)["logbook.js"], os.path.join(os.path.abspath(second), "logbook.js"))
+        # A v1 board's own repeat close still finds the v1 record.
+        again = self.close_out()
+        self.assertEqual(self.files_of(again)["logbook.js"]["artifact"], "https://example.test/v1")
 
-    def test_a_url_with_a_space_is_refused(self):
-        with mock.patch.object(board, "DEFAULT_TEMPLATE", self.template), mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_DATA": self.data}):
-            self.assertEqual(board.main(["template-url", "a b"]), 1)
-        self.assertEqual(os.listdir(self.data), [])
+    def test_a_url_that_is_not_https_is_refused_and_nothing_is_recorded(self):
+        self.close_out()
+        for url in ("a b", "http://example.test/a", "ftp://x", "example.test/a", "https://a b", "https://"):
+            self.run_cli("template-url", "--board", self.folder, url, expect=1)
+        self.assertFalse(os.path.exists(os.path.join(self.project, board.BOARDS_DIR, board.TEMPLATE_URL_FILE)))
 
 
 if __name__ == "__main__":
