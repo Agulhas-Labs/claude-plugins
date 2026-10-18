@@ -131,8 +131,8 @@ CONTEXT = (
     "different for them if reversed, --group as the topic, and --yours when the user made the call. A "
     "screenshot recorded as a deliverable shows on the page. When the work is done, before your last "
     "report: revise any decision written in shorthand, write summary (what exists now, in a few plain "
-    "sentences; --facts: branch, commit, test counts), then close; if you have an Artifact tool, publish "
-    "the report.html close prints, with its images/ folder as files, and give the user the link. A line "
+    "sentences; --facts: branch, commit, test counts), then close; if you have an Artifact tool, make "
+    "the publish call close prints, and give the user the link. A line "
     "like Logbook \"…\": reverse D4 means reverse those decisions before anything else, skipping any "
     "already reversed; revise each one you reverse on this board to say what now holds."
 )

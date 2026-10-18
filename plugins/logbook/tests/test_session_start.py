@@ -111,7 +111,7 @@ class SessionStartHook(Hooks):
             '--group "G" [--yours]', 'revise D4', 'summary "TEXT" --facts "F"',
             "--reverse as what would be different for them if reversed",
             'A line like Logbook "…": reverse D4 means reverse those decisions before anything else',
-            "then close; if you have an Artifact tool, publish the report.html close prints",
+            "then close; if you have an Artifact tool, make the publish call close prints",
         ):
             with self.subTest(part=part):
                 self.assertIn(part, text)
@@ -352,14 +352,16 @@ class ByHand(Hooks):
         inner = os.path.join(self.project, "src")
         os.mkdir(inner)
         report = self.page("report.html")
-        self.assertEqual(self.cli("close", cwd=inner), (0, f"report written: {report}\n", ""))
+        code, out, err = self.cli("close", cwd=inner)
+        self.assertEqual((code, out.split("\n")[0], err), (0, f"report written: {report}", ""))
         self.assertTrue(os.path.isfile(report))
         self.assertEqual(self.kinds()[-1], "close")
 
     def test_close_with_a_board_prints_the_same_line(self):
         self.cli("start", "Hand test")
         report = self.page("report.html")
-        self.assertEqual(self.cli("close", "--board", self.folder, session=OTHER), (0, f"report written: {report}\n", ""))
+        code, out, err = self.cli("close", "--board", self.folder, session=OTHER)
+        self.assertEqual((code, out.split("\n")[0], err), (0, f"report written: {report}", ""))
 
     def test_close_without_a_board_is_one_line_and_exit_1(self):
         code, out, err = self.cli("close")

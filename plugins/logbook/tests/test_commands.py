@@ -219,7 +219,7 @@ class Commands(Workspace):
         before_log = board.events(self.board)
         before_report = self.read(report_path)
         expected = os.path.join(os.path.abspath(os.getcwd()), board.BOARDS_DIR, SESSION, board.REPORT_FILE)
-        self.assertEqual(self.ok("close"), f"report written: {expected}\n")
+        self.assertEqual(self.ok("close").split("\n")[0], f"report written: {expected}")
         self.assertEqual(board.events(self.board), before_log)
         self.assertEqual(self.read(report_path), before_report)
 

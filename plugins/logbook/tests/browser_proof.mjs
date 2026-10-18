@@ -8,7 +8,7 @@
 // board.py rewrites state.js, keeping the scroll position and a collapsed section; the colour switch
 // in the header offers light, dark and system and remembers the choice; the copy button beside a
 // question works or says it could not; text from the state stays text; nothing is requested from any
-// network; and report.html, closed and copied away on its own, still opens and never looks for state.js.
+// network; and report.html, closed and copied away with its style and script, still opens and never looks for state.js.
 // Then, on a board written from fixtures/state-rulings.json: the rulings are drawn by group, with the
 // board's two images and no image whose path leaves the board; unticking a ruling and typing a note make
 // the answers line; the ticks and the note survive a redraw and a reload; Copy answers copies the line or
@@ -156,7 +156,7 @@ folder = ${JSON.stringify(folder)}
 template = board.read_text(board.DEFAULT_TEMPLATE)
 open(os.path.join(folder, 'board.html'), 'w', encoding='utf-8').write(board.board_page(template))
 open(os.path.join(folder, 'state.js'), 'w', encoding='utf-8').write('window.BOARD = ' + board.inline_json(st) + ';\\n')
-open(os.path.join(folder, 'report.html'), 'w', encoding='utf-8').write(board.report_page(template, st))
+board.write_report(folder, template, st)
 `);
 }
 function buildRulings() {
@@ -546,13 +546,13 @@ async function main() {
       `in print the bar is display:${printed.bar}, ${printed.rows} rows drawn, ticks ${printed.boxes}`];
   });
 
-  // The report is closed, then copied on its own into a folder with nothing beside it.
+  // The report is closed, then copied with logbook.css and logbook.js into a folder with nothing else beside it.
   let reportRequests = 0;
-  await check(9, 'report.html stands alone', async () => {
+  await check(9, 'report.html stands with its two files', async () => {
     closeBoard();
     const alone = path.join(scratch.root, 'report-alone');
     fs.mkdirSync(alone);
-    fs.copyFileSync(path.join(folder, 'report.html'), path.join(alone, 'report.html'));
+    for (const name of ['report.html', 'logbook.css', 'logbook.js']) fs.copyFileSync(path.join(folder, name), path.join(alone, name));
     const from = requests.length;
     await page.open(pathToFileURL(path.join(alone, 'report.html')).href);
     const text = await page.text();
