@@ -27,23 +27,26 @@ if [ -z "$py" ]; then
   exit 1
 fi
 
-# Quiet mode captures a stage's output into $out and shows it only if the stage fails, with the
-# stage's exit status; --verbose runs the stage uncaptured.
+# Every stage's output is captured into a scratch file and parsed the same way in both modes; --verbose
+# also shows it live. A failing stage fails the run in both modes, with its exit status. ANSI colour is
+# switched off for the stage and stripped again before parsing, so a coloured summary reads the same.
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+esc=$(printf '\033')
 out=
 run_stage() {
-  if [ "$verbose" = 1 ]; then
-    "$@"
-    return 0
-  fi
-  rc=0
-  out=$("$@" 2>&1) || rc=$?
+  { rc=0; env -u FORCE_COLOR NO_COLOR=1 "$@" 2>&1 || rc=$?; echo "$rc" >"$scratch/rc"; } | {
+    if [ "$verbose" = 1 ]; then tee "$scratch/raw"; else cat >"$scratch/raw"; fi
+  }
+  rc=$(cat "$scratch/rc")
+  out=$(sed "s/${esc}\[[0-9;]*[A-Za-z]//g" "$scratch/raw")
   if [ "$rc" -ne 0 ]; then
-    printf '%s\n' "$out"
+    if [ "$verbose" = 0 ]; then printf '%s\n' "$out"; fi
     exit "$rc"
   fi
 }
 fail_with_output() {
-  printf '%s\n' "$out"
+  if [ "$verbose" = 0 ]; then printf '%s\n' "$out"; fi
   echo "check.sh: $1" >&2
   exit 1
 }
@@ -52,12 +55,11 @@ fail_with_output() {
 unit_line=
 unit_suite() {
   run_stage "$py" -m unittest discover -s "$2"
-  if [ "$verbose" = 1 ]; then return 0; fi
   n=$(printf '%s\n' "$out" | sed -n 's/^Ran \([0-9][0-9]*\) tests\{0,1\} in .*/\1/p' | tail -n 1)
   if [ -z "$n" ] || [ "$n" -eq 0 ]; then
     fail_with_output "the $1 suite ran no tests"
   fi
-  skipped=$(printf '%s\n' "$out" | sed -n 's/^OK (skipped=\([0-9][0-9]*\))$/\1/p' | tail -n 1)
+  skipped=$(printf '%s\n' "$out" | sed -n 's/^[A-Z][A-Z]* (.*skipped=\([0-9][0-9]*\)[,)].*$/\1/p' | tail -n 1)
   item="$1 $n OK"
   if [ -n "$skipped" ]; then item="$item ($skipped skipped)"; fi
   unit_line="${unit_line:+$unit_line, }$item"
@@ -102,14 +104,12 @@ if command -v claude >/dev/null 2>&1; then
     # A mod's tests (*.test.ts) run on the engine itself; the unit-test runs above do not see them.
     if [ -n "$(find "${plugin%/}" -name '*.test.ts' -print -quit)" ]; then
       run_stage claude plugin test "${plugin%/}"
-      if [ "$verbose" = 0 ]; then
-        pass=$(printf '%s\n' "$out" | sed -n 's/^ *\([0-9][0-9]*\) pass$/\1/p' | tail -n 1)
-        fail=$(printf '%s\n' "$out" | sed -n 's/^ *\([0-9][0-9]*\) fail$/\1/p' | tail -n 1)
-        if [ -z "$pass" ] || [ "$pass" -eq 0 ] || [ "${fail:-1}" -ne 0 ]; then
-          fail_with_output "$(basename "${plugin%/}")'s mod tests: no passing count, or a failure, in the summary"
-        fi
-        mod_line="${mod_line:+$mod_line, }$(basename "${plugin%/}") $pass pass"
+      pass=$(printf '%s\n' "$out" | sed -n 's/^ *\([0-9][0-9]*\) pass$/\1/p' | tail -n 1)
+      fail=$(printf '%s\n' "$out" | sed -n 's/^ *\([0-9][0-9]*\) fail$/\1/p' | tail -n 1)
+      if [ -z "$pass" ] || [ "$pass" -eq 0 ] || [ "${fail:-1}" -ne 0 ]; then
+        fail_with_output "$(basename "${plugin%/}")'s mod tests: no passing count, or a failure, in the summary"
       fi
+      mod_line="${mod_line:+$mod_line, }$(basename "${plugin%/}") $pass pass"
     fi
   done
   if [ "$verbose" = 0 ]; then
