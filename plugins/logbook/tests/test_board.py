@@ -157,6 +157,7 @@ class Derive(unittest.TestCase):
         state = self.derive(
             event("question", 1, text="first"), event("decision", 2, text="d-one"),
             event("check", 3, proves="x", result="fail"), event("question", 4, text="second"),
+            event("agent-start", 5, id="a", type="general-purpose"),
             event("agent-stop", 5, id="a", message="- **G1** unit tests — passed"),
             event("decision", 6, text="d-two"), event("check", 7, proves="y", result="pass"),
         )
@@ -314,7 +315,7 @@ class Files(Workspace):
         for written in (state_js, inline):
             for bad in ("</script", "<script", "<!--", "&", " ", " "):
                 self.assertNotIn(bad, written)
-        self.assertEqual(report.count("</script>"), 1)
+        self.assertEqual(report.count("</script>"), 1 + report.count('<script src="logbook.js"></script>'))
         self.assertEqual(json.loads(re.match(r"window\.BOARD = (.*);\n$", state_js, re.S).group(1))["title"], hostile)
 
     def test_the_pages_are_what_the_page_expects(self):
@@ -336,6 +337,7 @@ class Files(Workspace):
         board.close(folder, at(2), env={}, template=self.template)
         self.assertEqual(sorted(os.listdir(folder)), sorted([
             board.MARKER_FILE, board.EVENTS_FILE, board.STATE_FILE, board.BOARD_FILE, board.REPORT_FILE,
+            board.CSS_FILE, board.JS_FILE,
         ]))
 
     def test_a_failed_write_removes_its_temporary_file(self):

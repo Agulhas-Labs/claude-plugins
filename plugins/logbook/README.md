@@ -2,7 +2,7 @@
 
 A plugin for Claude Code: a live page in your browser for a long task, so you can see what's waiting on you and what
 Claude has built, checked and decided without asking. When the session ends, the page becomes a
-self-contained `report.html`. It does not work in claude.ai chat or Cowork: its hooks run on your
+`report.html` (with its style and script beside it). It does not work in claude.ai chat or Cowork: its hooks run on your
 machine, in Claude Code.
 
 ```text
@@ -123,9 +123,10 @@ Each session gets its own folder:
 ```text
 <project>/.logbook/
   index.html              every board, newest first
+  template-url.json       where a report's style and script were last published, so the next copies them
   <session-id>/
     board.html            the live page
-    report.html           written when the session ends; self-contained
+    report.html           written when the session ends, with logbook.css and logbook.js beside it
 ```
 
 The folder carries its own ignore file, so it stays out of `git status` and your `.gitignore` is never

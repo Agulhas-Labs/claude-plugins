@@ -81,9 +81,12 @@ what it did.
   eight-item handoff with a plan to read spent 160k tokens and delivered the first item; the same work
   re-cut into three-item briefs, with the reading already done, went through.
 - **Send a scout before the makers:** before a wave, before any maker whose handoff cannot quote its
-  code, and before a hand-back's follow-up whose report quotes none. Give the `scout` the jobs (and the
-  spec, if there is one) and, per job, an absolute brief path in your scratch directory named after its
-  branch (`<scratch>/briefs/feat-x.md`); each maker's handoff names its own brief. Don't read code
+  code, and before a hand-back's follow-up whose report quotes none. Give each `scout` one job (two at
+  most, when both are small), the spec if there is one, and an absolute brief path in your scratch
+  directory named after the job's branch (`<scratch>/briefs/feat-x.md`); a wave's scouts run in
+  parallel, one per job, and each maker's handoff names its own brief. Measured in a mid-sized package:
+  one brief cost a scout about 80k tokens, so a scout given three jobs wrote one brief before its 80k
+  mark and handed the other two back as line references for the orchestrator to finish. Don't read code
   yourself just to write a handoff: read the scout's index, and open a brief only when designing the
   job needs it. Measured on one machine over 14 days: 47% of makers' file-read cost went on files another
   maker in the session also read, and improvised scouts cost about $0.75 each, where the Haiku

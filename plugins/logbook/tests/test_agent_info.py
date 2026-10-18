@@ -209,6 +209,34 @@ class Derived(unittest.TestCase):
         )
         self.assertEqual((agent["model"], agent["description"]), ("hooked-model", "From the hook"))
 
+    def derived(self, *events):
+        return board.derive([event("start", 0, session="s", title="t"), *events], [], board.settings({}))
+
+    def test_a_stop_for_an_id_that_never_started_makes_no_row(self):
+        state = self.derived(event("agent-stop", 2, id="orphan", message="Reading files", tokens=10))
+        self.assertEqual(state["agents"], [])
+
+    def test_an_orphan_stop_with_gate_lines_adds_no_checks(self):
+        message = "G1 — CHECK: make test — EXPECT: pass\nG1: PASS"
+        state = self.derived(event("agent-stop", 2, id="orphan", message=message))
+        self.assertEqual((state["agents"], state["checks"]), ([], []))
+
+    def test_a_stop_after_a_start_finishes_the_row_with_its_gates_and_tokens(self):
+        message = "G1 — CHECK: make test — EXPECT: pass\nG1: PASS"
+        agent = self.agent(
+            event("agent-start", 1, id=BACKGROUND, type="general-purpose"),
+            event("agent-stop", 3, id=BACKGROUND, message=message, tokens=42),
+        )
+        self.assertEqual((agent["outcome"], agent["tokens"], agent["ended"]), ("finished", 42, board.utc(at(3))))
+        self.assertEqual([g["id"] for g in agent["gates"]], ["G1"])
+
+    def test_a_stop_after_only_an_info_still_finishes_the_row(self):
+        agent = self.agent(
+            event("agent-info", 1, id=BACKGROUND, model=MODEL, description="d", use=LAUNCH),
+            event("agent-stop", 3, id=BACKGROUND, message="done", tokens=7),
+        )
+        self.assertEqual((agent["outcome"], agent["tokens"]), ("finished", 7))
+
 
 if __name__ == "__main__":
     unittest.main()

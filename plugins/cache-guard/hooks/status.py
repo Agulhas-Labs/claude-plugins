@@ -48,9 +48,10 @@ def status(request, env):
     path = cache_guard.transcript_of(request, env)
     if not path or not os.path.isfile(path):
         return out
-    found = cache_guard.turns(cache_guard.read_tail(path))
-    if not found:
-        return out
+    lines = cache_guard.read_tail(path)
+    found = cache_guard.turns(lines)
+    if not found or cache_guard.last_compaction(lines) > found[-1].position:
+        return out  # a compaction after the last turn replaced the context that turn measured
     last = found[-1]
     lifetime = cache_guard.positive_int(env, "CACHE_GUARD_LIFETIME_SECONDS", 0) or cache_guard.lifetime_of(found)
     write, read = cache_guard.prices(last.model, lifetime, env)

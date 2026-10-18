@@ -149,6 +149,7 @@ class Commands(Workspace):
         self.refused("check", "x", "--result", "pass", code=2)
 
     def test_the_id_printed_is_the_one_the_state_gives(self):
+        board.append(self.board, "agent-start", at(0), id="a1", type="general-purpose")
         board.append(self.board, "agent-stop", at(0), id="a1", message="G1 the tests pass: passed")
         self.assertEqual(self.ok("check", "Lint is clean", "--command", "make lint", "--result", "pass"),
                          "C2 recorded: pass\n")
@@ -218,7 +219,7 @@ class Commands(Workspace):
         before_log = board.events(self.board)
         before_report = self.read(report_path)
         expected = os.path.join(os.path.abspath(os.getcwd()), board.BOARDS_DIR, SESSION, board.REPORT_FILE)
-        self.assertEqual(self.ok("close"), f"report written: {expected}\n")
+        self.assertEqual(self.ok("close").split("\n")[0], f"report written: {expected}")
         self.assertEqual(board.events(self.board), before_log)
         self.assertEqual(self.read(report_path), before_report)
 

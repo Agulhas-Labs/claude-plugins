@@ -18,7 +18,7 @@ the first), the window-vs-mtime prefilter, and the pricing formula below.
 
 ```
 python3 "${CLAUDE_SKILL_DIR}/scripts/agent_cost.py" [--since X] [--until X] [--projects DIR]
-        [--project NAME] [--transcript PATH] [--top N] [--tools] [--sections NAMES]
+        [--project NAME] [--transcript PATH...] [--top N] [--tools] [--sections NAMES] [--rows]
 ```
 
 - The script needs Python 3 and the standard library only; without `python3` the shell fails with exit 127.
@@ -33,9 +33,16 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/agent_cost.py" [--since X] [--until X] [--p
   context re-sent on every one of its turns, and a tool its jobs need but its list drops is a failure.
 - `--project NAME` reports on one project: its path, or the path's trailing part (`App`,
   `work/App`). `--projects` is not that filter: it is the folder that holds every project's transcripts.
-- `--transcript PATH` reports on one session (its `subagents/` come along) or one subagent file,
+- `--transcript PATH...` takes several paths and shell-style globs (expanded by the script, so a quoted glob
+  works); a session named twice loads once. One path reports on one session (its `subagents/` come along) or one subagent file,
   ignoring the window — use it to inspect a single agent's start or shape. A transcript is a
   `.jsonl` file; any other name is refused before it is read.
+- `--rows` prints JSONL instead of the report, one object per context (main session or subagent), for an A/B
+  of an agent change or any per-agent table. It takes the same options; a row always covers a whole context, so with a window it lists the contexts whose first turn falls inside it (all their turns, even ones after `--until`), and with `--transcript` the window and `--project` are ignored and a path matching no file is an error. Fields: `session_id`, `agent_id` (null for a main session), `kind`, `project`, `agent_type`,
+  `model`, `turns`, `input_equivalent`, `usd` (list price), `peak_context`, `wall_seconds` (first to last
+  turn), `turns_before_first_edit` and `usd_before_first_edit` (null when it never edited or a turn before the edit is unpriced; 0 when it edited on its first turn),
+  `first_commit_turn` (null when it never committed), `report_chars` (its hand-back message or last text;
+  null when it has none). Example: `... --rows --since 1d | jq -s 'group_by(.agent_type)[] | {t: .[0].agent_type, usd: (map(.usd) | add)}'`
 - `--sections NAMES` prints only those sections, comma-separated, each named by any prefix of it:
   `totals, spend-by-type, per-day, main-sessions, concentration, turn-shape, cold-cache, what-fills-the-context,
   fixed-start, rule-scorecard, review-by-rung, budget-marks, largest-contexts, tools-called`. An unknown name fails before any transcript is read

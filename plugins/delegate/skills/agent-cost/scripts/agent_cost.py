@@ -451,6 +451,7 @@ class Context:
         self.events = []      # list of (turn_index, category, chars) turn_index = len(turns) at event time
         self.versions = set()
         self.start = None     # fixed-start composition dict, filled from attachments before first turn
+        self.warned_hand_back = None       # the hand-back mark (tokens) its scope-freeze warning named, if it got one
         self.hand_back_nudge_turn = None   # len(turns) when the budget hook first asked it to hand back
         self.first_edit_turn = None        # index into turns of the first turn that called an edit tool
         self.first_commit_turn = None      # index into turns of the first turn that ran a git commit
@@ -572,6 +573,16 @@ HAND_BACK_NUDGE = re.compile(r"Context budget: this agent's context is now \d+k 
                              r"|Stop here\. Finish the item in hand only if)")
 
 
+# The scope-freeze warning names the hand-back mark ("At 150k you will be asked to hand back"), which
+# tells which ladder the hook gave the agent; every wording the hook has had carries that sentence.
+FREEZE_NUDGE = re.compile(r"Context budget: this agent's context is now \d+k tokens.*?Scope freeze:.*?"
+                          r"\bAt (\d+)k you will be asked to hand back")
+
+
+# Only the hook's own attachments count: a queued command or an @-file attachment may quote a warning.
+FREEZE_ATTACHMENTS = ("hook_success", "hook_additional_context")
+
+
 def is_prompt(e):
     """A user entry that gives the context a prompt: a person's message, or the parent's message to a
     subagent (an entry of coordinator origin), not a tool result or a hook's or the harness's own text."""
@@ -615,6 +626,12 @@ def load_context(kind, path, project_dir, session_id, agent_id):
 
         if etype == "attachment" and ctx.hand_back_nudge_turn is None and HAND_BACK_NUDGE.search(ln):
             ctx.hand_back_nudge_turn = len(ctx.turns)
+
+        if (etype == "attachment" and ctx.warned_hand_back is None and "Scope freeze" in ln
+                and (e.get("attachment") or {}).get("type") in FREEZE_ATTACHMENTS):
+            fm = FREEZE_NUDGE.search(ln)
+            if fm:
+                ctx.warned_hand_back = int(fm.group(1)) * 1000
 
         if etype == "attachment" and not first_turn_seen:
             a = e.get("attachment") or {}
@@ -758,7 +775,13 @@ class Loaded:
 
 def load_all(projects_dir, transcript, since, until, project=None):
     if transcript:
-        specs = contexts_for_transcript(transcript)  # window ignored in --transcript mode
+        paths = [transcript] if isinstance(transcript, str) else transcript
+        specs, seen = [], set()
+        for one in paths:   # window ignored in --transcript mode
+            for spec in contexts_for_transcript(one):
+                if spec[1] not in seen:   # a session and its own subagent file named together load once
+                    seen.add(spec[1])
+                    specs.append(spec)
     else:
         specs = None
     loaded = []
@@ -1602,8 +1625,14 @@ PLUGIN_NAME = _plugin_name()
 
 
 def marks_for(l):
-    """The budget marks the hook gave this agent: the scout's only for this plugin's own scout, the
-    defaults for every other type, a foreign or bare `scout` included."""
+    """The budget marks the hook gave this agent. Its scope-freeze warning, when the transcript holds one,
+    names the hand-back mark and so the ladder, whatever the agent's type is called or which version of
+    the hook spoke. With none (it never reached its first mark, or the mark is not one this report knows),
+    the type decides: the scout's only for this plugin's own scout, the defaults for every other type, a
+    foreign or bare `scout` included."""
+    for marks in (SCOUT_BUDGET_MARKS, BUDGET_MARKS):
+        if l.ctx.warned_hand_back == marks[1][1]:
+            return marks
     if PLUGIN_NAME and l.ctx.agent_type == f"{PLUGIN_NAME}:scout":
         return SCOUT_BUDGET_MARKS
     return BUDGET_MARKS
@@ -1657,7 +1686,7 @@ def section_budget_marks(out, loaded):
     order = [t for t in MAKER_TYPES if t in types] + [t for t in ("scout",) if t in types]
     order += sorted(types - set(order))
     for rung in order:
-        for marks in ((SCOUT_BUDGET_MARKS, BUDGET_MARKS) if rung == "scout" else (BUDGET_MARKS,)):
+        for marks in (SCOUT_BUDGET_MARKS, BUDGET_MARKS):
             for name, mark in marks:
                 past = []
                 for g in sessions.values():
@@ -1673,8 +1702,8 @@ def section_budget_marks(out, loaded):
         return
     out.append("=== Budget marks ===")
     out.append("  agents whose context reached each budget mark, and for the hand-back and stop marks whether handing the"
-               " work left to a fresh agent cost less than finishing in place (this plugin's scout has lower marks; any other"
-               " scout has the defaults)")
+               " work left to a fresh agent cost less than finishing in place (marks are read from the agent's own"
+               " scope-freeze warning, else this plugin's scout has lower marks and every other type the defaults)")
     width = max(13, *(len(rung) for rung, _, _, _ in rows))
     out.append(f"  {'rung':{width}} {'mark':>14} {'past':>5} {'after, committed':>17} {'after, not':>11} {'left work':>10}"
                f" {'linked':>7} {'run-ups $':>10} {'old context $':>14} {'cheaper':>8}")
@@ -1977,6 +2006,47 @@ def build_report(loaded, top_n, tools=False, sections=None):
     return "\n".join(out)
 
 
+def expand_transcripts(values):
+    """The --transcript values with any shell-style glob expanded here, so a quoted glob works. A value
+    with no match stays as given and is reported the way a missing transcript is."""
+    out = []
+    for v in values:
+        hits = sorted(glob.glob(os.path.expanduser(v))) if glob.has_magic(v) else []
+        out.extend(hits or [v])
+    return out
+
+
+def context_rows(loaded):
+    """One dict per context, for --rows; each covers the whole context, not the report window. A value the
+    report does not compute is None."""
+    rows = []
+    for l in loaded:
+        ctx, turns = l.ctx, l.ctx.turns
+        for t in turns:  # Loaded priced only the window's turns
+            if "ie" not in t:
+                t["ie"] = input_equivalent(t["usage"], t.get("model"))
+                t["usd"] = list_dollars(t["ie"], t["usage"].get("output_tokens", 0), t.get("model"))
+        first = ctx.first_edit_turn
+        if first is None:
+            usd_before = None
+        else:  # 0.0 when it edited on its first turn; None when a turn before the edit is unpriced
+            head = turns[:first]
+            usd_before = sum(t["usd"] for t in head) if all(t.get("usd") is not None for t in head) else None
+        report = ctx.handback_report or ctx.last_text
+        rows.append(dict(
+            session_id=ctx.session_id, agent_id=ctx.agent_id, kind=ctx.kind,
+            project=project_display_name(ctx.project_dir), agent_type=ctx.agent_type,
+            model=turns[0]["model"], turns=len(turns),
+            input_equivalent=sum(t["ie"] for t in turns), usd=sum_dollars(turns),
+            peak_context=max(t["ctx"] for t in turns),
+            wall_seconds=(turns[-1]["ts"] - turns[0]["ts"]).total_seconds(),
+            turns_before_first_edit=first,
+            usd_before_first_edit=usd_before,
+            first_commit_turn=ctx.first_commit_turn,
+            report_chars=len(report) if report else None))
+    return rows
+
+
 def main(argv=None):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")  # an ASCII-only terminal shows ? for the report's glyphs, not a crash
@@ -1987,7 +2057,10 @@ def main(argv=None):
     p.add_argument("--projects", default=default_projects_dir())
     p.add_argument("--project", default=None,
                    help="report on one project only: its path or the path's trailing part (e.g. App)")
-    p.add_argument("--transcript", default=None)
+    p.add_argument("--transcript", nargs="+", default=None, metavar="PATH",
+                   help="report on these transcripts only (shell-style globs are expanded)")
+    p.add_argument("--rows", action="store_true",
+                   help="print one JSON object per context (main session or subagent) instead of the report")
     p.add_argument("--top", type=int, default=12)
     p.add_argument("--tools", action="store_true",
                    help="add a section listing the tools each agent type actually called")
@@ -2010,11 +2083,26 @@ def main(argv=None):
                 "use today, yesterday, <N>d, <N>h, <N>m, YYYY-MM-DD, or an ISO datetime")
 
     try:
-        loaded = load_all(args.projects, args.transcript, since, until, project=args.project)
+        transcripts = expand_transcripts(args.transcript) if args.transcript else None
+        if args.rows and transcripts:
+            missing = [t for t in transcripts if not os.path.isfile(t)]
+            if missing:
+                p.error("--transcript: no such transcript: " + ", ".join(missing))
+        loaded = load_all(args.projects, transcripts, since, until, project=args.project)
     except ValueError as e:
         p.error(str(e))
+    if args.rows:
+        # a row is a whole context: with a window, the contexts whose first turn falls inside it
+        mine = [l for l in loaded if args.transcript or l.first_in_window]
+        if not mine:
+            print(f"no contexts begun between {since:%Y-%m-%d %H:%M} and {until:%Y-%m-%d %H:%M}: nothing to report",
+                  file=sys.stderr)
+            return
+        for row in context_rows(mine):
+            print(json.dumps(row))
+        return
     if not any(l.window_turns for l in loaded):
-        where = args.transcript or args.projects
+        where = " ".join(args.transcript) if args.transcript else args.projects
         if args.project and not args.transcript:
             where += f" for project {args.project}"
         print(f"no turns between {since:%Y-%m-%d %H:%M} and {until:%Y-%m-%d %H:%M} under {where}: "

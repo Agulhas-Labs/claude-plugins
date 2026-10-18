@@ -47,10 +47,12 @@ folder's own `state.js` whenever a board starts, changes title or state, or clos
 that finds the index does not list its board.
 """
 import argparse
+import hashlib
 import html
 import json
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -65,18 +67,25 @@ EVENTS_FILE = "events.jsonl"
 STATE_FILE = "state.js"
 BOARD_FILE = "board.html"
 REPORT_FILE = "report.html"
+# The report's page keeps no style or script of its own: they sit beside it, so a session that publishes
+# the report can copy these two from an artifact it already published instead of reading them again.
+CSS_FILE = "logbook.css"
+JS_FILE = "logbook.js"
 INDEX_FILE = "index.html"
 ANNOUNCED_FILE = "announced"
 CATCH_UP_FILE = "catch-up"
+# The file in the boards folder recording where the report's style and script were published, by hash.
+# Not a board: pruning and the index look only at folders.
+TEMPLATE_URL_FILE = "template-url.json"
 # The next-session setting, in the boards folder, and the brief's path when the setting names none.
 NEXT_SESSION_FILE = "next-session.json"
 DEFAULT_BRIEF = "NEXT_SESSION.md"
 # Every file a board folder holds, by exact name: all that pruning ever deletes, the marker last.
-BOARD_FILES = (ANNOUNCED_FILE, CATCH_UP_FILE, EVENTS_FILE, STATE_FILE, BOARD_FILE, REPORT_FILE, MARKER_FILE)
+BOARD_FILES = (ANNOUNCED_FILE, CATCH_UP_FILE, EVENTS_FILE, STATE_FILE, BOARD_FILE, REPORT_FILE, CSS_FILE, JS_FILE, MARKER_FILE)
 # The temporary file `write_atomic` makes beside a board file: `tempfile.mkstemp` puts eight characters
 # from this set between the prefix and the suffix. A name that is not exactly this is left alone.
 TEMPORARY_FILE = re.compile(
-    r"\.(?:" + "|".join(re.escape(n) for n in (STATE_FILE, BOARD_FILE, REPORT_FILE, CATCH_UP_FILE)) + r")\.[a-z0-9_]{8}\.tmp"
+    r"\.(?:" + "|".join(re.escape(n) for n in (STATE_FILE, BOARD_FILE, REPORT_FILE, CSS_FILE, JS_FILE, CATCH_UP_FILE, TEMPLATE_URL_FILE)) + r")\.[a-z0-9_]{8}\.tmp"
 )
 # A deliverable that is an image is copied into this folder of its board as `<n>-<file name>`, n its
 # 1-based position among the deliverables, so the page and the report show it beside themselves.
@@ -125,6 +134,10 @@ EARLY_COMMITS = 10
 COMMAND_RESULTS = ("pass", "fail", "background")
 # The most command rows the state carries: those run most recently. `commandsTotal` counts every run.
 COMMAND_ROWS = 200
+# What the closed report carries of the commands: the most recent rows, each cut to this many characters.
+# The live board keeps COMMAND_ROWS rows whole; a report is read in full by whoever publishes it.
+REPORT_COMMAND_ROWS = 50
+REPORT_COMMAND_CHARS = 200
 # The folder under `CLAUDE_PLUGIN_DATA` where the gate counts each session's work calls, one byte a call.
 CALLS_DIR = "calls"
 # Set to 1 to use a project or data folder outside the home and temporary folders (see `contained`).
@@ -629,7 +642,11 @@ class Derivation:
         agent_id = text(event.get("id"))
         if not agent_id:
             return False
-        agent = self.agent(agent_id, t)
+        if agent_id not in self.agents:
+            # Claude Code's own side agents (activity labels, prompt suggestions, compaction summaries) fire
+            # SubagentStop with no SubagentStart: no start or info means no subagent, so no row and no checks.
+            return False
+        agent = self.agents[agent_id]
         parsed = gates(text(event.get("message")))
         agent["ended"] = t
         agent["tokens"] = whole(event.get("tokens")) if whole(event.get("tokens")) is not None else agent["tokens"]
@@ -1170,10 +1187,80 @@ def board_page(template_text):
     return fill_template(template_text, None)
 
 
+def split_template(template_text):
+    """(page, css, js): the template with its `<style>` block replaced by a link to `logbook.css` and the
+    main `<script>` after the marker by a reference to `logbook.js`, and the two blocks' contents as
+    written. A block the template lacks is left out and its text is empty. The marker stays in the page."""
+    css = js = ""
+    marker = template_text.find(TEMPLATE_MARKER)
+    start = template_text.find("<style>")
+    end = template_text.find("</style>", start) if start != -1 else -1
+    if start != -1 and end != -1 and (marker == -1 or end < marker):
+        css = template_text[start + len("<style>"):end]
+        template_text = (
+            template_text[:start] + f'<link rel="stylesheet" href="{CSS_FILE}">' + template_text[end + len("</style>"):]
+        )
+    marker = template_text.find(TEMPLATE_MARKER)
+    start = template_text.find("<script>", marker) if marker != -1 else -1
+    end = template_text.find("</script>", start) if start != -1 else -1
+    if start != -1 and end != -1:
+        js = template_text[start + len("<script>"):end]
+        template_text = (
+            template_text[:start] + f'<script src="{JS_FILE}"></script>' + template_text[end + len("</script>"):]
+        )
+    return template_text, css, js
+
+
+def report_state(state):
+    """The state as a closed report carries it: every command marked a test (the Verified section is built
+    from them), and of the others the most recent REPORT_COMMAND_ROWS, each text cut to REPORT_COMMAND_CHARS
+    characters. `commandsTotal` is untouched, so the page still says
+    how many runs it does not list."""
+    rows = state.get("commands")
+    if not isinstance(rows, list):
+        return state
+    others = [i for i in range(len(rows)) if rows[i].get("test") is not True]
+    newest = sorted(others, key=lambda i: rows[i].get("latestRun") or 0)[-REPORT_COMMAND_ROWS:]
+    tests = [i for i in range(len(rows)) if rows[i].get("test") is True]
+    kept = []
+    for i in sorted(newest + tests):
+        row = dict(rows[i])
+        text = row.get("command")
+        if isinstance(text, str) and len(text) > REPORT_COMMAND_CHARS:
+            row["command"] = text[:REPORT_COMMAND_CHARS] + "\u2026"
+        kept.append(row)
+    return dict(state, commands=kept)
+
+
 def report_page(template_text, state):
+    """The report's page: the frozen state inlined ahead of the reference to `logbook.js`."""
+    page, _, _ = split_template(template_text)
     return fill_template(
-        template_text, f"<script>window.BOARD = {inline_json(state)}; window.BOARD_FROZEN = true;</script>"
+        page, f"<script>window.BOARD = {inline_json(report_state(state))}; window.BOARD_FROZEN = true;</script>"
     )
+
+
+def template_hash(template_text):
+    """A short hash of the style and script a report links, which is what tells one template from another."""
+    _, css, js = split_template(template_text)
+    return style_hash(css, js)
+
+
+def style_hash(css, js):
+    return hashlib.sha256(f"{css}\0{js}".encode("utf-8")).hexdigest()[:12]
+
+
+def board_style_hash(board):
+    """The hash of the `logbook.css` and `logbook.js` on disk in a board, which are what get published."""
+    return style_hash(read_text(os.path.join(board, CSS_FILE)), read_text(os.path.join(board, JS_FILE)))
+
+
+def write_report(board, template_text, state):
+    """Write `report.html`, `logbook.css` and `logbook.js`."""
+    _, css, js = split_template(template_text)
+    write_atomic(os.path.join(board, CSS_FILE), css)
+    write_atomic(os.path.join(board, JS_FILE), js)
+    write_atomic(os.path.join(board, REPORT_FILE), report_page(template_text, state))
 
 
 def current_state(board, now, env, before=None):
@@ -1241,7 +1328,8 @@ def render(board, now, env=None, template=None):
 
 
 def close(board, now, env=None, template=None, by="hand"):
-    """Append `close`, render, write `report.html` (the page with the state inlined and frozen), then the index.
+    """Append `close`, render, write `report.html` (the page with the state inlined and frozen, and its
+    style and script beside it as `logbook.css` and `logbook.js`), then the index.
 
     `by` says who closed it: `session-end` for the `SessionEnd` hook, `hand` for the `close` command.
     A board the session's end closed is reopened by the next event from that session; one closed by
@@ -1250,15 +1338,14 @@ def close(board, now, env=None, template=None, by="hand"):
     back. A board that was reopened since its last close is closed again, and its `report.html` is
     rewritten.
     """
-    report = os.path.join(board, REPORT_FILE)
     if is_closed(events(board)):
         state = current_state(board, now, env, before=read_state(board))
-        if not os.path.isfile(report):
-            write_atomic(report, report_page(read_text(template or DEFAULT_TEMPLATE), state))
+        if not all(os.path.isfile(os.path.join(board, n)) for n in (REPORT_FILE, CSS_FILE, JS_FILE)):
+            write_report(board, read_text(template or DEFAULT_TEMPLATE), state)
         return state
     append(board, "close", now, by=by)
     state, _ = write_state(board, now, env, template)
-    write_atomic(report, report_page(read_text(template or DEFAULT_TEMPLATE), state))
+    write_report(board, read_text(template or DEFAULT_TEMPLATE), state)
     update_index(board, env)
     return state
 
@@ -2074,9 +2161,74 @@ def command_render(args, board, now):
     render(board, now)
 
 
+def template_urls_file(board):
+    """The record of where the style and script were published: `template-url.json` in the folder that holds
+    the board, so no environment variable is needed to find it."""
+    return os.path.join(boards_of(board), TEMPLATE_URL_FILE)
+
+
+def recorded_template_url(board, key):
+    try:
+        with open(template_urls_file(board), encoding="utf-8") as f:
+            record = json.load(f)
+    except (OSError, ValueError, TypeError):
+        return None
+    url = record.get(key) if isinstance(record, dict) else None
+    return url if isinstance(url, str) and url else None
+
+
+def command_template_url(args, board, now):
+    if not re.fullmatch(r"https://\S+", args.url):
+        raise Refused("the url must be an https:// address with no spaces")
+    if not all(os.path.isfile(os.path.join(board, name)) for name in (CSS_FILE, JS_FILE)):
+        raise Refused(f"this board has no {CSS_FILE} and {JS_FILE} yet: close it, publish its report, then record the url")
+    write_atomic(template_urls_file(board), json.dumps({board_style_hash(board): args.url}) + "\n")
+    return "template url recorded"
+
+
+def image_files(board):
+    """The board's images, as (path in the folder, path on disk): regular files only, no link followed."""
+    folder = os.path.join(board, IMAGES_DIR)
+    if not os.path.isdir(folder) or os.path.islink(folder):
+        return []
+    return [
+        (f"{IMAGES_DIR}/{name}", os.path.join(folder, name))
+        for name in sorted(os.listdir(folder))
+        if is_regular(os.path.join(folder, name))
+    ]
+
+
+def publish_call(board):
+    """The Artifact call to make for the report, as text to follow word for word."""
+    board = os.path.abspath(board)
+    url = recorded_template_url(board, board_style_hash(board))
+    files = {name: path for name, path in image_files(board)}
+    for name in (CSS_FILE, JS_FILE):
+        files[name] = {"artifact": url, "path": name} if url else os.path.join(board, name)
+    lines = [
+        f"publish: file_path = {os.path.join(board, REPORT_FILE)}",
+        f"files = {json.dumps(files, ensure_ascii=False)}",
+    ]
+    # Quoted for a shell, so a project path holding `$`, a backtick or a quote runs as written; the url goes
+    # in single quotes too, since zsh reads a `?` in a bare word as a pattern.
+    script, folder = shlex.quote(os.path.abspath(__file__)), shlex.quote(board)
+    record = f"python3 {script} template-url --board {folder} '<the published url>'"
+    if url:
+        lines.append(
+            f"If a copy from that artifact is refused (it was deleted), publish the local paths of {CSS_FILE} and "
+            f"{JS_FILE} under {board} instead, then run: {record}"
+        )
+    else:
+        lines.append(
+            f"after publishing, run: {record}, so later reports copy {CSS_FILE} and {JS_FILE} instead of re-reading them"
+        )
+    return "\n".join(lines)
+
+
 def command_close(args, board, now):
     close(board, now)
-    return f"report written: {os.path.join(os.path.abspath(board), REPORT_FILE)}"
+    report = f"report written: {os.path.join(os.path.abspath(board), REPORT_FILE)}"
+    return f"{report}\n{publish_call(board)}"
 
 
 def command_title(args, board, now):
@@ -2291,6 +2443,10 @@ def parser():
         return sub
 
     model_command("close", command_close, "record the end of the task and write report.html")
+    sub = commands.add_parser("template-url", help="record where logbook.css and logbook.js were published")
+    sub.add_argument("--board", help="the board folder whose logbook.css and logbook.js were published (default: this session's board)")
+    sub.add_argument("url")
+    sub.set_defaults(run=command_template_url, needs_board=True)
 
     sub = model_command("title", command_title, "set the board's title")
     sub.add_argument("text", type=entry_text)

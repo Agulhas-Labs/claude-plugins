@@ -219,6 +219,25 @@ def turns(lines):
     return found
 
 
+def last_compaction(lines):
+    """Position of the main session's latest compaction in the tail, or -1 when the tail holds none.
+
+    A compaction writes a boundary line and no assistant turn, so the last turn still describes the
+    context it replaced.
+    """
+    found = -1
+    for position, raw in enumerate(lines):
+        if b'"compact_boundary"' not in raw:
+            continue
+        try:
+            entry = json.loads(raw)
+        except ValueError:
+            continue
+        if entry.get("subtype") == "compact_boundary" and not entry.get("isSidechain"):
+            found = position
+    return found
+
+
 def lifetime_of(found):
     """The cache lifetime this session is buying, from the most recent turn that wrote to cache.
 
@@ -762,6 +781,14 @@ def decide(payload, now, env, marker_dir):
             return None
 
         last = found[-1]
+        if last_compaction(lines) > last.position:
+            # The context was replaced after the last turn: there is no warm cache to lose and the
+            # last turn's size describes something that no longer exists.
+            try:
+                os.remove(marker)
+            except OSError:
+                pass
+            return None
         size = last.size
         lifetime = positive_int(env, "CACHE_GUARD_LIFETIME_SECONDS", 0) or lifetime_of(found)
         idle = (now - last.time).total_seconds()

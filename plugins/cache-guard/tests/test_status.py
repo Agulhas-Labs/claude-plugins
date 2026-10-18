@@ -42,6 +42,17 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(out["min_tokens"], 100_000)  # the guard's default floor, with no setting
         self.assertFalse(out["disabled"])
 
+    def test_a_compaction_after_the_last_turn_leaves_no_stale_reading(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "t.jsonl")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(TURN) + "\n")
+                f.write(json.dumps({"type": "system", "subtype": "compact_boundary", "isSidechain": False,
+                                    "timestamp": "2026-10-01T12:30:00Z"}) + "\n")
+            out = run({"transcript_path": path})
+        self.assertIsNone(out["last_turn_at"])
+        self.assertIsNone(out["context_tokens"])
+
     def test_no_transcript_is_no_reading(self):
         out = run({"transcript_path": "/nonexistent/t.jsonl"}, CACHE_GUARD_DISABLE="1")
         self.assertIsNone(out["last_turn_at"])

@@ -39,9 +39,8 @@ python3 "${CLAUDE_SKILL_DIR}/../../board/board.py" close
 ```
 
 This writes `report.html`, so give the user its path. A closed board records nothing more. If you have
-an Artifact tool, also publish `report.html` as a private artifact, with every file under the board's
-`images/` folder passed as a supporting file at the same relative path, and give the user the link: it
-opens on their phone, and the local file does not.
+an Artifact tool, also make the publish call close prints (a private artifact), and give the user the
+link: it opens on their phone, and the local file does not.
 
 ## While a board is running
 

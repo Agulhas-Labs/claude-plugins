@@ -47,6 +47,19 @@ def split_5m(tokens=90_000):
     return {"ephemeral_1h_input_tokens": 0, "ephemeral_5m_input_tokens": tokens}
 
 
+def compact_boundary(when, sidechain=False):
+    """What a compaction leaves in the transcript: a boundary line, and no assistant turn."""
+    entry = {
+        "type": "system",
+        "subtype": "compact_boundary",
+        "content": "Conversation compacted",
+        "timestamp": when.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "isSidechain": sidechain,
+        "compactMetadata": {"trigger": "auto", "preTokens": LARGE},
+    }
+    return entry
+
+
 def model_set(name, sidechain=False):
     """What `/model` leaves in the transcript: the command's own output, as a plain string."""
     return local_command(
@@ -782,6 +795,42 @@ class EndToEndTests(GuardTestCase):
         )
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
+
+
+class CompactionTests(GuardTestCase):
+    """A compaction replaces the context the last turn measured, so there is no warm cache to lose."""
+
+    def cold_turn(self):
+        return assistant(NOW - timedelta(hours=2), LARGE, split_1h())
+
+    def test_a_compaction_after_the_last_turn_allows_the_message(self):
+        entries = [self.cold_turn(), compact_boundary(NOW - timedelta(minutes=1))]
+        self.assertIsNone(self.decide(entries))
+        self.assertEqual(self.marker_count(), 0)
+
+    def test_a_compaction_clears_a_marker_an_earlier_cold_warning_left(self):
+        self.assertIsNotNone(self.decide([self.cold_turn()]))
+        self.assertEqual(self.marker_count(), 1)
+        entries = [self.cold_turn(), compact_boundary(NOW - timedelta(minutes=1))]
+        self.assertIsNone(self.decide(entries))
+        self.assertEqual(self.marker_count(), 0)
+
+    def test_a_compaction_before_the_last_turn_changes_nothing(self):
+        entries = [compact_boundary(NOW - timedelta(hours=3)), self.cold_turn()]
+        self.assertIn("idle 2h", self.decide(entries))
+
+    def test_a_subagents_compaction_is_ignored(self):
+        entries = [self.cold_turn(), compact_boundary(NOW - timedelta(minutes=1), sidechain=True)]
+        self.assertIn("idle 2h", self.decide(entries))
+
+    def test_a_pending_model_change_after_a_compaction_is_allowed(self):
+        entries = [
+            assistant(NOW - timedelta(minutes=5), LARGE, split_1h()),
+            compact_boundary(NOW - timedelta(minutes=4)),
+            model_set("sonnet"),
+        ]
+        self.assertIsNone(self.decide(entries))
+        self.assertEqual(self.marker_count(), 0)
 
 
 if __name__ == "__main__":
