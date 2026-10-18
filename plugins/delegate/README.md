@@ -322,8 +322,8 @@ of it once and then for the one section a follow-up question is about.
 The report takes these options, and you can name one when you ask:
 
 ```text
-agent-cost [--since X] [--until X] [--projects DIR] [--transcript PATH] [--top N] [--tools]
-           [--sections NAMES]
+agent-cost [--since X] [--until X] [--projects DIR] [--transcript PATH...] [--top N] [--tools]
+           [--sections NAMES] [--rows]
 ```
 
 - `--since` and `--until` take `today`, `yesterday`, `<N>d`, a date or an ISO datetime. The default is
@@ -332,6 +332,9 @@ agent-cost [--since X] [--until X] [--projects DIR] [--transcript PATH] [--top N
   is a `.jsonl` file; any other name is refused before it is read.
 - `--sections` prints only the sections you name, such as `--sections totals,main,cold`. Any prefix of a
   heading works.
+- `--rows` prints one JSON object per session or subagent instead of the report (turns, input-equivalent,
+  list dollars, peak context, wall seconds, turns before the first edit, report length), for comparing agents.
+  `--transcript` then takes several paths or quoted globs.
 - `--tools` adds the Tools called section.
 - `--top` sets how long the largest-sessions and largest-contexts lists are.
 - `--projects` reads transcripts from another directory instead of Claude Code's own.

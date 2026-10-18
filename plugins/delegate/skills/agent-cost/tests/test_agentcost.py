@@ -2205,3 +2205,86 @@ class BranchesNamedTests(unittest.TestCase):
     def test_bare_paths_are_not_branches_but_bare_branches_are(self):
         text = "Edit docs/Plan/x.md, test/fixtures/cart.json and fix/thing.py; branch fix/cart-total."
         self.assertEqual(ac.branches_named(text), {"fix/cart-total"})
+
+
+class RowsFlagTests(unittest.TestCase):
+    """--rows prints one JSON object per context instead of the report."""
+    KEYS = {"session_id", "agent_id", "kind", "project", "agent_type", "model", "turns", "input_equivalent",
+            "usd", "peak_context", "wall_seconds", "turns_before_first_edit", "usd_before_first_edit",
+            "first_commit_turn", "report_chars"}
+
+    def setUp(self):
+        self.fx = FixtureRoot(self)
+        self.session = self.fx.main_session(entries=[
+            assistant("m1", ts_str(BASE), usage(cache_read=5000)),
+            assistant("m2", ts_str(BASE + timedelta(seconds=30)), usage(cache_read=6000))])
+        self.sub = self.fx.subagent(agent_type="builder", entries=[
+            assistant("m1", ts_str(BASE), usage(cache_read=1000), content=[tool_use_block("t1")]),
+            assistant("m2", ts_str(BASE + timedelta(seconds=10)), usage(cache_read=2000),
+                      content=[tool_use_block("t2", "Edit")]),
+            assistant("m3", ts_str(BASE + timedelta(seconds=20)), usage(cache_read=3000),
+                      content=[tool_use_block("t3", "Bash", {"command": "git commit -m x"}),
+                               tool_use_block("t4", "SubagentHandback", {"message": "done: 123456"})])])
+        self.window = ["--since", ts_str(BASE - timedelta(hours=1)), "--until", ts_str(BASE + timedelta(hours=1))]
+
+    def run_main(self, args):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            ac.main(args)
+        return out.getvalue()
+
+    def rows(self, args):
+        return [json.loads(line) for line in self.run_main(args).splitlines()]
+
+    def test_one_row_per_context_with_every_key(self):
+        rows = self.rows(["--projects", self.fx.root, "--rows"] + self.window)
+        self.assertEqual(sorted((r["kind"], r["agent_id"]) for r in rows), [("main", None), ("subagent", "a1")])
+        for r in rows:
+            self.assertEqual(set(r), self.KEYS)
+        sub = next(r for r in rows if r["kind"] == "subagent")
+        self.assertEqual((sub["agent_type"], sub["session_id"], sub["turns"]), ("builder", "sess1", 3))
+        self.assertEqual((sub["turns_before_first_edit"], sub["first_commit_turn"]), (1, 2))
+        self.assertEqual((sub["wall_seconds"], sub["peak_context"], sub["report_chars"]), (20.0, 3002, 12))
+        self.assertAlmostEqual(sub["usd_before_first_edit"], ac.sum_dollars(
+            [dict(usd=ac.list_dollars(ac.input_equivalent(usage(cache_read=1000), "claude-sonnet-5"), 10,
+                                      "claude-sonnet-5"))]))
+        main = next(r for r in rows if r["kind"] == "main")
+        self.assertEqual((main["agent_type"], main["turns_before_first_edit"], main["first_commit_turn"],
+                          main["usd_before_first_edit"], main["report_chars"]), ("main", None, None, None, None))
+
+    def test_rows_agree_with_the_aggregate_report(self):
+        rows = self.rows(["--projects", self.fx.root, "--rows"] + self.window)
+        report = self.run_main(["--projects", self.fx.root, "--sections", "totals"] + self.window)
+        for kind in ("main", "subagent"):
+            mine = [r for r in rows if r["kind"] == kind]
+            line = next(l for l in report.splitlines() if l.strip().startswith(kind + " "))
+            self.assertIn(f"turns {sum(r['turns'] for r in mine):7}", line)
+            self.assertIn(f"list $ {ac.fmt_usd(sum(r['usd'] for r in mine)):>7}", line)
+            self.assertIn(f"input-eq {ac.fmt_tok(sum(r['input_equivalent'] for r in mine)):>8}", line)
+
+    def test_several_transcript_paths_and_a_glob(self):
+        other = self.fx.main_session(session="sess2", entries=[assistant("m1", ts_str(BASE), usage(cache_read=1))])
+        two = self.rows(["--transcript", self.sub, other, "--rows"])
+        self.assertEqual(sorted(r["session_id"] for r in two), ["sess1", "sess2"])
+        both = self.rows(["--transcript", os.path.join(self.fx.root, "*", "sess*.jsonl"), "--rows"])
+        self.assertEqual(sorted((r["session_id"], r["kind"]) for r in both),
+                         [("sess1", "main"), ("sess1", "subagent"), ("sess2", "main")])
+        dup = self.rows(["--transcript", self.session, self.sub, "--rows"])
+        self.assertEqual(len(dup), 2)
+
+    def test_the_window_excludes_contexts_outside_it(self):
+        self.fx.main_session(session="late", entries=[assistant("m1", ts_str(BASE + timedelta(hours=5)),
+                                                                 usage(cache_read=9))])
+        rows = self.rows(["--projects", self.fx.root, "--rows"] + self.window)
+        self.assertNotIn("late", {r["session_id"] for r in rows})
+        self.assertEqual(len(rows), 2)
+
+    def test_the_project_filter_applies(self):
+        self.fx.main_session(project="-Users-x-Developer-Other", session="o1",
+                             entries=[assistant("m1", ts_str(BASE), usage(cache_read=9))])
+        rows = self.rows(["--projects", self.fx.root, "--project", "Other", "--rows"] + self.window)
+        self.assertEqual([r["session_id"] for r in rows], ["o1"])
+
+    def test_without_rows_the_report_is_printed_not_json(self):
+        out = self.run_main(["--projects", self.fx.root, "--sections", "totals"] + self.window)
+        self.assertTrue(out.startswith("=== Totals ==="))

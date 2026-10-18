@@ -758,7 +758,13 @@ class Loaded:
 
 def load_all(projects_dir, transcript, since, until, project=None):
     if transcript:
-        specs = contexts_for_transcript(transcript)  # window ignored in --transcript mode
+        paths = [transcript] if isinstance(transcript, str) else transcript
+        specs, seen = [], set()
+        for one in paths:   # window ignored in --transcript mode
+            for spec in contexts_for_transcript(one):
+                if spec[1] not in seen:   # a session and its own subagent file named together load once
+                    seen.add(spec[1])
+                    specs.append(spec)
     else:
         specs = None
     loaded = []
@@ -1977,6 +1983,37 @@ def build_report(loaded, top_n, tools=False, sections=None):
     return "\n".join(out)
 
 
+def expand_transcripts(values):
+    """The --transcript values with any shell-style glob expanded here, so a quoted glob works. A value
+    with no match stays as given and is reported the way a missing transcript is."""
+    out = []
+    for v in values:
+        hits = sorted(glob.glob(os.path.expanduser(v))) if glob.has_magic(v) else []
+        out.extend(hits or [v])
+    return out
+
+
+def context_rows(loaded):
+    """One dict per context in the window, for --rows. A value the report does not compute is None."""
+    rows = []
+    for l in loaded:
+        ctx, wt = l.ctx, l.window_turns
+        first = ctx.first_edit_turn
+        before = [t for t in ctx.turns[:first] if "usd" in t] if first is not None else None
+        report = ctx.handback_report or ctx.last_text
+        rows.append(dict(
+            session_id=ctx.session_id, agent_id=ctx.agent_id, kind=ctx.kind,
+            project=project_display_name(ctx.project_dir), agent_type=ctx.agent_type,
+            model=wt[0]["model"], turns=len(wt),
+            input_equivalent=sum(t["ie"] for t in wt), usd=sum_dollars(wt), peak_context=window_peak(l),
+            wall_seconds=(wt[-1]["ts"] - wt[0]["ts"]).total_seconds(),
+            turns_before_first_edit=first,
+            usd_before_first_edit=sum_dollars(before) if before else None,
+            first_commit_turn=ctx.first_commit_turn,
+            report_chars=len(report) if report else None))
+    return rows
+
+
 def main(argv=None):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")  # an ASCII-only terminal shows ? for the report's glyphs, not a crash
@@ -1987,7 +2024,10 @@ def main(argv=None):
     p.add_argument("--projects", default=default_projects_dir())
     p.add_argument("--project", default=None,
                    help="report on one project only: its path or the path's trailing part (e.g. App)")
-    p.add_argument("--transcript", default=None)
+    p.add_argument("--transcript", nargs="+", default=None, metavar="PATH",
+                   help="report on these transcripts only (shell-style globs are expanded)")
+    p.add_argument("--rows", action="store_true",
+                   help="print one JSON object per context (main session or subagent) instead of the report")
     p.add_argument("--top", type=int, default=12)
     p.add_argument("--tools", action="store_true",
                    help="add a section listing the tools each agent type actually called")
@@ -2010,15 +2050,20 @@ def main(argv=None):
                 "use today, yesterday, <N>d, <N>h, <N>m, YYYY-MM-DD, or an ISO datetime")
 
     try:
-        loaded = load_all(args.projects, args.transcript, since, until, project=args.project)
+        transcripts = expand_transcripts(args.transcript) if args.transcript else None
+        loaded = load_all(args.projects, transcripts, since, until, project=args.project)
     except ValueError as e:
         p.error(str(e))
     if not any(l.window_turns for l in loaded):
-        where = args.transcript or args.projects
+        where = " ".join(args.transcript) if args.transcript else args.projects
         if args.project and not args.transcript:
             where += f" for project {args.project}"
         print(f"no turns between {since:%Y-%m-%d %H:%M} and {until:%Y-%m-%d %H:%M} under {where}: "
               "nothing to report (check --projects, --project, --since and --until)")
+        return
+    if args.rows:
+        for row in context_rows([l for l in loaded if l.window_turns]):
+            print(json.dumps(row))
         return
     print(build_report(loaded, args.top, tools=args.tools, sections=sections))
 
