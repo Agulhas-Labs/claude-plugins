@@ -579,6 +579,10 @@ FREEZE_NUDGE = re.compile(r"Context budget: this agent's context is now \d+k tok
                           r"\bAt (\d+)k you will be asked to hand back")
 
 
+# Only the hook's own attachments count: a queued command or an @-file attachment may quote a warning.
+FREEZE_ATTACHMENTS = ("hook_success", "hook_additional_context")
+
+
 def is_prompt(e):
     """A user entry that gives the context a prompt: a person's message, or the parent's message to a
     subagent (an entry of coordinator origin), not a tool result or a hook's or the harness's own text."""
@@ -623,7 +627,8 @@ def load_context(kind, path, project_dir, session_id, agent_id):
         if etype == "attachment" and ctx.hand_back_nudge_turn is None and HAND_BACK_NUDGE.search(ln):
             ctx.hand_back_nudge_turn = len(ctx.turns)
 
-        if etype == "attachment" and ctx.warned_hand_back is None and "Scope freeze" in ln:
+        if (etype == "attachment" and ctx.warned_hand_back is None and "Scope freeze" in ln
+                and (e.get("attachment") or {}).get("type") in FREEZE_ATTACHMENTS):
             fm = FREEZE_NUDGE.search(ln)
             if fm:
                 ctx.warned_hand_back = int(fm.group(1)) * 1000
@@ -1697,8 +1702,8 @@ def section_budget_marks(out, loaded):
         return
     out.append("=== Budget marks ===")
     out.append("  agents whose context reached each budget mark, and for the hand-back and stop marks whether handing the"
-               " work left to a fresh agent cost less than finishing in place (this plugin's scout has lower marks; any other"
-               " scout has the defaults)")
+               " work left to a fresh agent cost less than finishing in place (marks are read from the agent's own"
+               " scope-freeze warning, else this plugin's scout has lower marks and every other type the defaults)")
     width = max(13, *(len(rung) for rung, _, _, _ in rows))
     out.append(f"  {'rung':{width}} {'mark':>14} {'past':>5} {'after, committed':>17} {'after, not':>11} {'left work':>10}"
                f" {'linked':>7} {'run-ups $':>10} {'old context $':>14} {'cheaper':>8}")
@@ -2012,21 +2017,31 @@ def expand_transcripts(values):
 
 
 def context_rows(loaded):
-    """One dict per context in the window, for --rows. A value the report does not compute is None."""
+    """One dict per context, for --rows; each covers the whole context, not the report window. A value the
+    report does not compute is None."""
     rows = []
     for l in loaded:
-        ctx, wt = l.ctx, l.window_turns
+        ctx, turns = l.ctx, l.ctx.turns
+        for t in turns:  # Loaded priced only the window's turns
+            if "ie" not in t:
+                t["ie"] = input_equivalent(t["usage"], t.get("model"))
+                t["usd"] = list_dollars(t["ie"], t["usage"].get("output_tokens", 0), t.get("model"))
         first = ctx.first_edit_turn
-        before = [t for t in ctx.turns[:first] if "usd" in t] if first is not None else None
+        if first is None:
+            usd_before = None
+        else:  # 0.0 when it edited on its first turn; None when a turn before the edit is unpriced
+            head = turns[:first]
+            usd_before = sum(t["usd"] for t in head) if all(t.get("usd") is not None for t in head) else None
         report = ctx.handback_report or ctx.last_text
         rows.append(dict(
             session_id=ctx.session_id, agent_id=ctx.agent_id, kind=ctx.kind,
             project=project_display_name(ctx.project_dir), agent_type=ctx.agent_type,
-            model=wt[0]["model"], turns=len(wt),
-            input_equivalent=sum(t["ie"] for t in wt), usd=sum_dollars(wt), peak_context=window_peak(l),
-            wall_seconds=(wt[-1]["ts"] - wt[0]["ts"]).total_seconds(),
+            model=turns[0]["model"], turns=len(turns),
+            input_equivalent=sum(t["ie"] for t in turns), usd=sum_dollars(turns),
+            peak_context=max(t["ctx"] for t in turns),
+            wall_seconds=(turns[-1]["ts"] - turns[0]["ts"]).total_seconds(),
             turns_before_first_edit=first,
-            usd_before_first_edit=sum_dollars(before) if before else None,
+            usd_before_first_edit=usd_before,
             first_commit_turn=ctx.first_commit_turn,
             report_chars=len(report) if report else None))
     return rows
@@ -2069,19 +2084,29 @@ def main(argv=None):
 
     try:
         transcripts = expand_transcripts(args.transcript) if args.transcript else None
+        if args.rows and transcripts:
+            missing = [t for t in transcripts if not os.path.isfile(t)]
+            if missing:
+                p.error("--transcript: no such transcript: " + ", ".join(missing))
         loaded = load_all(args.projects, transcripts, since, until, project=args.project)
     except ValueError as e:
         p.error(str(e))
+    if args.rows:
+        # a row is a whole context: with a window, the contexts whose first turn falls inside it
+        mine = [l for l in loaded if args.transcript or l.first_in_window]
+        if not mine:
+            print(f"no contexts begun between {since:%Y-%m-%d %H:%M} and {until:%Y-%m-%d %H:%M}: nothing to report",
+                  file=sys.stderr)
+            return
+        for row in context_rows(mine):
+            print(json.dumps(row))
+        return
     if not any(l.window_turns for l in loaded):
         where = " ".join(args.transcript) if args.transcript else args.projects
         if args.project and not args.transcript:
             where += f" for project {args.project}"
         print(f"no turns between {since:%Y-%m-%d %H:%M} and {until:%Y-%m-%d %H:%M} under {where}: "
               "nothing to report (check --projects, --project, --since and --until)")
-        return
-    if args.rows:
-        for row in context_rows([l for l in loaded if l.window_turns]):
-            print(json.dumps(row))
         return
     print(build_report(loaded, args.top, tools=args.tools, sections=sections))
 

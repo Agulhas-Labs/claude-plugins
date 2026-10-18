@@ -204,6 +204,16 @@ class BudgetMarksTests(unittest.TestCase):
         loaded = ac.load_all(fx.root, None, *WINDOW)
         self.assertEqual({l.ctx.agent_id: l.ctx.warned_hand_back for l in loaded}, {"a": 80_000, "b": 80_000})
 
+    def test_only_the_hooks_own_attachments_count_as_the_warning(self):
+        fx = FixtureRoot(self)
+        for name, att in (("q", {"type": "queued_command", "prompt": freeze_text(80)}),
+                          ("f", {"type": "file", "content": freeze_text(80)})):
+            fx.subagent(agent=name, agent_type="other:scout", entries=[
+                user_text(ts_str(BASE), "x"), attachment(ts_str(BASE), att),
+                assistant(f"{name}-m", ts_str(BASE + timedelta(seconds=1)), usage(input_tokens=85_000, output_tokens=1), [])])
+        loaded = ac.load_all(fx.root, None, *WINDOW)
+        self.assertEqual({l.ctx.agent_id: l.ctx.warned_hand_back for l in loaded}, {"q": None, "f": None})
+
     def test_the_section_is_named_budget(self):
         self.assertEqual(ac.resolve_sections("budget"), ["budget-marks"])
         self.assertIn("budget-marks", ac.DEFAULT_SECTIONS)

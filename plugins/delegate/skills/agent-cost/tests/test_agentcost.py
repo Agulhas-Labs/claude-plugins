@@ -2285,6 +2285,41 @@ class RowsFlagTests(unittest.TestCase):
         rows = self.rows(["--projects", self.fx.root, "--project", "Other", "--rows"] + self.window)
         self.assertEqual([r["session_id"] for r in rows], ["o1"])
 
+    def test_an_agent_that_edits_on_its_first_turn_costs_zero_before_the_edit(self):
+        self.fx.subagent(agent="a2", agent_type="builder", entries=[
+            assistant("m1", ts_str(BASE), usage(cache_read=1000), content=[tool_use_block("t1", "Edit")])])
+        rows = self.rows(["--projects", self.fx.root, "--rows"] + self.window)
+        row = next(r for r in rows if r["agent_id"] == "a2")
+        self.assertEqual((row["turns_before_first_edit"], row["usd_before_first_edit"]), (0, 0.0))
+        self.assertEqual(next(r for r in rows if r["agent_id"] == "a1")["usd_before_first_edit"] > 0, True)
+
+    def test_a_row_covers_the_whole_context_and_a_window_picks_by_first_turn(self):
+        self.fx.main_session(session="early", entries=[
+            assistant("m1", ts_str(BASE - timedelta(days=2)), usage(cache_read=1)),
+            assistant("m2", ts_str(BASE), usage(cache_read=1))])
+        self.fx.main_session(session="spill", entries=[
+            assistant("m1", ts_str(BASE), usage(cache_read=1), content=[tool_use_block("t1", "Edit")]),
+            assistant("m2", ts_str(BASE + timedelta(hours=3)), usage(cache_read=1))])
+        rows = self.rows(["--projects", self.fx.root, "--rows"] + self.window)
+        by = {r["session_id"]: r for r in rows if r["kind"] == "main"}
+        self.assertNotIn("early", by)
+        self.assertEqual((by["spill"]["turns"], by["spill"]["turns_before_first_edit"]), (2, 0))
+        self.assertEqual(by["spill"]["wall_seconds"], 3 * 3600.0)
+
+    def test_rows_keep_stdout_json_only_and_a_missing_transcript_is_an_error(self):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            ac.main(["--projects", self.fx.root, "--rows", "--since", "2001-01-01", "--until", "2001-01-02"])
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("nothing to report", err.getvalue())
+        for arg in (os.path.join(self.fx.root, "nope", "*.jsonl"), os.path.join(self.fx.root, "gone.jsonl")):
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err), self.assertRaises(SystemExit) as cm:
+                ac.main(["--transcript", self.sub, arg, "--rows"])
+            self.assertNotEqual(cm.exception.code, 0)
+            self.assertIn(arg, err.getvalue())
+            self.assertEqual(out.getvalue(), "")
+
     def test_without_rows_the_report_is_printed_not_json(self):
         out = self.run_main(["--projects", self.fx.root, "--sections", "totals"] + self.window)
         self.assertTrue(out.startswith("=== Totals ==="))

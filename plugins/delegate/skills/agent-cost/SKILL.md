@@ -38,10 +38,9 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/agent_cost.py" [--since X] [--until X] [--p
   ignoring the window — use it to inspect a single agent's start or shape. A transcript is a
   `.jsonl` file; any other name is refused before it is read.
 - `--rows` prints JSONL instead of the report, one object per context (main session or subagent), for an A/B
-  of an agent change or any per-agent table. It takes the same window, `--project` and `--transcript`
-  options. Fields: `session_id`, `agent_id` (null for a main session), `kind`, `project`, `agent_type`,
+  of an agent change or any per-agent table. It takes the same options; a row always covers a whole context, so with a window it lists the contexts whose first turn falls inside it (all their turns, even ones after `--until`), and with `--transcript` the window and `--project` are ignored and a path matching no file is an error. Fields: `session_id`, `agent_id` (null for a main session), `kind`, `project`, `agent_type`,
   `model`, `turns`, `input_equivalent`, `usd` (list price), `peak_context`, `wall_seconds` (first to last
-  turn), `turns_before_first_edit` and `usd_before_first_edit` (null when it never edited),
+  turn), `turns_before_first_edit` and `usd_before_first_edit` (null when it never edited or a turn before the edit is unpriced; 0 when it edited on its first turn),
   `first_commit_turn` (null when it never committed), `report_chars` (its hand-back message or last text;
   null when it has none). Example: `... --rows --since 1d | jq -s 'group_by(.agent_type)[] | {t: .[0].agent_type, usd: (map(.usd) | add)}'`
 - `--sections NAMES` prints only those sections, comma-separated, each named by any prefix of it:
