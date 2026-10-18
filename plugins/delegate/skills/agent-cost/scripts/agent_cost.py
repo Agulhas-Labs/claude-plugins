@@ -451,6 +451,7 @@ class Context:
         self.events = []      # list of (turn_index, category, chars) turn_index = len(turns) at event time
         self.versions = set()
         self.start = None     # fixed-start composition dict, filled from attachments before first turn
+        self.warned_hand_back = None       # the hand-back mark (tokens) its scope-freeze warning named, if it got one
         self.hand_back_nudge_turn = None   # len(turns) when the budget hook first asked it to hand back
         self.first_edit_turn = None        # index into turns of the first turn that called an edit tool
         self.first_commit_turn = None      # index into turns of the first turn that ran a git commit
@@ -572,6 +573,12 @@ HAND_BACK_NUDGE = re.compile(r"Context budget: this agent's context is now \d+k 
                              r"|Stop here\. Finish the item in hand only if)")
 
 
+# The scope-freeze warning names the hand-back mark ("At 150k you will be asked to hand back"), which
+# tells which ladder the hook gave the agent; every wording the hook has had carries that sentence.
+FREEZE_NUDGE = re.compile(r"Context budget: this agent's context is now \d+k tokens.*?Scope freeze:.*?"
+                          r"\bAt (\d+)k you will be asked to hand back")
+
+
 def is_prompt(e):
     """A user entry that gives the context a prompt: a person's message, or the parent's message to a
     subagent (an entry of coordinator origin), not a tool result or a hook's or the harness's own text."""
@@ -615,6 +622,11 @@ def load_context(kind, path, project_dir, session_id, agent_id):
 
         if etype == "attachment" and ctx.hand_back_nudge_turn is None and HAND_BACK_NUDGE.search(ln):
             ctx.hand_back_nudge_turn = len(ctx.turns)
+
+        if etype == "attachment" and ctx.warned_hand_back is None and "Scope freeze" in ln:
+            fm = FREEZE_NUDGE.search(ln)
+            if fm:
+                ctx.warned_hand_back = int(fm.group(1)) * 1000
 
         if etype == "attachment" and not first_turn_seen:
             a = e.get("attachment") or {}
@@ -1608,8 +1620,14 @@ PLUGIN_NAME = _plugin_name()
 
 
 def marks_for(l):
-    """The budget marks the hook gave this agent: the scout's only for this plugin's own scout, the
-    defaults for every other type, a foreign or bare `scout` included."""
+    """The budget marks the hook gave this agent. Its scope-freeze warning, when the transcript holds one,
+    names the hand-back mark and so the ladder, whatever the agent's type is called or which version of
+    the hook spoke. With none (it never reached its first mark, or the mark is not one this report knows),
+    the type decides: the scout's only for this plugin's own scout, the defaults for every other type, a
+    foreign or bare `scout` included."""
+    for marks in (SCOUT_BUDGET_MARKS, BUDGET_MARKS):
+        if l.ctx.warned_hand_back == marks[1][1]:
+            return marks
     if PLUGIN_NAME and l.ctx.agent_type == f"{PLUGIN_NAME}:scout":
         return SCOUT_BUDGET_MARKS
     return BUDGET_MARKS
@@ -1663,7 +1681,7 @@ def section_budget_marks(out, loaded):
     order = [t for t in MAKER_TYPES if t in types] + [t for t in ("scout",) if t in types]
     order += sorted(types - set(order))
     for rung in order:
-        for marks in ((SCOUT_BUDGET_MARKS, BUDGET_MARKS) if rung == "scout" else (BUDGET_MARKS,)):
+        for marks in (SCOUT_BUDGET_MARKS, BUDGET_MARKS):
             for name, mark in marks:
                 past = []
                 for g in sessions.values():

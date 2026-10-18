@@ -2,11 +2,12 @@
 after it (split by a commit already made), the work left in their reports, and what a follow-up maker's
 run-up cost against the larger context it replaced.
 Run: python3 -m unittest discover -s plugins/delegate/skills/agent-cost/tests -p 'test_budget_marks.py'"""
+import json
 import re
 import unittest
 from datetime import timedelta
 
-from test_agentcost import (BASE, FixtureRoot, ac, assistant, section_body, tool_use_block, ts_str, usage,
+from test_agentcost import (BASE, FixtureRoot, attachment, ac, assistant, section_body, tool_use_block, ts_str, usage,
                             user_text)
 from test_agentcost import handback
 
@@ -28,6 +29,27 @@ def agent(fx, name, agent_type, secs, prompt, turns, report=None, gaps=None):
         if report is not None and i == len(turns) - 1:
             content.append(handback(f"{name}-hb", report))
         entries.append(assistant(f"{name}-m{i}", at, usage(input_tokens=size, output_tokens=1), content))
+    fx.subagent(agent=name, agent_type=agent_type, entries=entries)
+
+
+def freeze_text(hand_back_k):
+    """The hook's scope-freeze warning as it lands in a transcript; the sentence is the same in every version
+    of the hook, only the mark it names differs."""
+    return ("Context budget: this agent's context is now 61k tokens, and every further turn re-sends all of it. "
+            "Scope freeze: start no new deliverable. Everything from here goes toward landing what is already open "
+            "\u2014 finishing it, verifying it, committing it. "
+            f"At {hand_back_k}k you will be asked to hand back whatever is still unfinished, so take on nothing "
+            "you cannot land before then.")
+
+
+def warned(fx, name, agent_type, secs, hand_back_k):
+    """A subagent that the hook warned and that went on to 85k or, on the defaults, 155k."""
+    size = 85_000 if hand_back_k == 80 else 155_000
+    entries = [user_text(ts_str(BASE + timedelta(seconds=secs)), "x"),
+               attachment(ts_str(BASE + timedelta(seconds=secs)),
+                          {"type": "hook_additional_context", "content": [freeze_text(hand_back_k)]}),
+               assistant(f"{name}-m", ts_str(BASE + timedelta(seconds=secs + 1)),
+                         usage(input_tokens=size, output_tokens=1), [])]
     fx.subagent(agent=name, agent_type=agent_type, entries=entries)
 
 
@@ -148,6 +170,39 @@ class BudgetMarksTests(unittest.TestCase):
         self.assertEqual(found[("scout", "freeze", "120")][0], "2")      # the foreign and the bare scout
         self.assertNotIn(("scout", "hand-back", "150"), found)
         self.assertNotIn(("scout", "stop", "95"), found)
+
+    def test_a_warning_in_the_transcript_decides_the_ladder_over_the_type_name(self):
+        fx = FixtureRoot(self)
+        warned(fx, "r", "other:scout", 0, 80)        # a renamed scout the hook warned at 60k
+        warned(fx, "w", "scout", 10, 80)             # a bare name, warned the same
+        warned(fx, "b", "builder", 20, 150)          # a builder on the defaults
+        agent(fx, "o", f"{ac.PLUGIN_NAME}:scout", 30, "x", [(85_000, None, None)])   # never warned: the type rule
+        found = rows(fx, by_size=True)
+        self.assertEqual(found[("scout", "freeze", "60")][0], "3")
+        self.assertEqual(found[("scout", "hand-back", "80")][0], "3")
+        self.assertNotIn(("scout", "freeze", "120"), found)
+        self.assertEqual(found[("builder", "hand-back", "150")][0], "1")
+        self.assertNotIn(("builder", "hand-back", "80"), found)
+
+    def test_a_scout_warned_at_the_defaults_is_measured_on_them_and_an_unknown_mark_falls_back_to_the_type(self):
+        fx = FixtureRoot(self)
+        warned(fx, "d", f"{ac.PLUGIN_NAME}:scout", 0, 150)   # an older hook gave it the defaults
+        warned(fx, "u", f"{ac.PLUGIN_NAME}:scout", 10, 111)  # a mark this report does not know
+        found = rows(fx, by_size=True)
+        self.assertEqual(found[("scout", "hand-back", "150")][0], "1")
+        self.assertEqual(found[("scout", "hand-back", "80")][0], "1")
+
+    def test_both_attachment_shapes_of_the_warning_are_read(self):
+        fx = FixtureRoot(self)
+        text = freeze_text(80)
+        stdout = json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": text}})
+        for name, att in (("a", {"type": "hook_success", "hookName": "PostToolUse:Bash", "stdout": stdout}),
+                          ("b", {"type": "hook_additional_context", "content": [text]})):
+            fx.subagent(agent=name, agent_type="other:scout", entries=[
+                user_text(ts_str(BASE), "x"), attachment(ts_str(BASE), att),
+                assistant(f"{name}-m", ts_str(BASE + timedelta(seconds=1)), usage(input_tokens=85_000, output_tokens=1), [])])
+        loaded = ac.load_all(fx.root, None, *WINDOW)
+        self.assertEqual({l.ctx.agent_id: l.ctx.warned_hand_back for l in loaded}, {"a": 80_000, "b": 80_000})
 
     def test_the_section_is_named_budget(self):
         self.assertEqual(ac.resolve_sections("budget"), ["budget-marks"])
