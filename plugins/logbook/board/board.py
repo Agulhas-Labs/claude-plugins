@@ -52,6 +52,7 @@ import html
 import json
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -2179,6 +2180,8 @@ def recorded_template_url(board, key):
 def command_template_url(args, board, now):
     if not re.fullmatch(r"https://\S+", args.url):
         raise Refused("the url must be an https:// address with no spaces")
+    if not all(os.path.isfile(os.path.join(board, name)) for name in (CSS_FILE, JS_FILE)):
+        raise Refused(f"this board has no {CSS_FILE} and {JS_FILE} yet: close it, publish its report, then record the url")
     write_atomic(template_urls_file(board), json.dumps({board_style_hash(board): args.url}) + "\n")
     return "template url recorded"
 
@@ -2206,7 +2209,10 @@ def publish_call(board):
         f"publish: file_path = {os.path.join(board, REPORT_FILE)}",
         f"files = {json.dumps(files, ensure_ascii=False)}",
     ]
-    record = f'python3 "{os.path.abspath(__file__)}" template-url --board "{board}" <the published url>'
+    # Quoted for a shell, so a project path holding `$`, a backtick or a quote runs as written; the url goes
+    # in single quotes too, since zsh reads a `?` in a bare word as a pattern.
+    script, folder = shlex.quote(os.path.abspath(__file__)), shlex.quote(board)
+    record = f"python3 {script} template-url --board {folder} '<the published url>'"
     if url:
         lines.append(
             f"If a copy from that artifact is refused (it was deleted), publish the local paths of {CSS_FILE} and "

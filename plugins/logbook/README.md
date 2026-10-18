@@ -123,6 +123,7 @@ Each session gets its own folder:
 ```text
 <project>/.logbook/
   index.html              every board, newest first
+  template-url.json       where a report's style and script were last published, so the next copies them
   <session-id>/
     board.html            the live page
     report.html           written when the session ends, with logbook.css and logbook.js beside it

@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+import shlex
 import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -145,7 +146,7 @@ class PublishCall(Workspace):
             "logbook.js": os.path.join(folder, "logbook.js"),
         })
         self.assertIn(f"file_path = {os.path.join(folder, 'report.html')}", out)
-        self.assertIn(f'template-url --board "{folder}" <the published url>, so later reports copy', out)
+        self.assertIn(f"template-url --board {shlex.quote(folder)} '<the published url>', so later reports copy", out)
 
     def test_with_no_plugin_variable_the_recorded_url_reaches_the_next_boards_close(self):
         self.close_out()
@@ -193,6 +194,26 @@ class PublishCall(Workspace):
         # A v1 board's own repeat close still finds the v1 record.
         again = self.close_out()
         self.assertEqual(self.files_of(again)["logbook.js"]["artifact"], "https://example.test/v1")
+
+    def test_a_board_never_closed_is_refused_with_a_sentence_and_nothing_is_recorded(self):
+        err = io.StringIO()
+        with redirect_stderr(err), redirect_stdout(io.StringIO()):
+            code = board.main(["template-url", "--board", self.folder, "https://example.test/a/1"])
+        self.assertEqual(code, 1)
+        self.assertIn("close it, publish its report", err.getvalue())
+        self.assertFalse(os.path.exists(os.path.join(self.project, board.BOARDS_DIR, board.TEMPLATE_URL_FILE)))
+
+    def test_the_printed_command_splits_back_into_the_board_path_however_odd_the_path(self):
+        odd = os.path.join(self.project, 'it\'s $HOME `x` "q"')
+        os.makedirs(odd)
+        with mock.patch.object(board, "boards_of", lambda _: odd), \
+                mock.patch.object(board, "recorded_template_url", lambda *_: None), \
+                mock.patch.object(board, "board_style_hash", lambda _: "h"), \
+                mock.patch.object(board, "image_files", lambda _: []):
+            line = board.publish_call(odd).splitlines()[-1]
+        words = shlex.split(line.removeprefix("after publishing, run: ").split(", so later")[0])
+        self.assertEqual(words[2:5], ["template-url", "--board", odd])
+        self.assertEqual(words[5], "<the published url>")
 
     def test_a_url_that_is_not_https_is_refused_and_nothing_is_recorded(self):
         self.close_out()
