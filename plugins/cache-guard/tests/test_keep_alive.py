@@ -292,6 +292,10 @@ class RunningWorkTests(KeepAliveTestCase):
         entries = [monitor(T0 - timedelta(minutes=5)), assistant(T0, msg_id="msg_last")]
         self.assertIn("(1 monitor)", self.run_hook(entries))
 
+    def test_persistent_monitor_is_not_running_work(self):
+        started = tool_result(T0 - timedelta(minutes=5), {"taskId": "m1", "timeoutMs": 0, "persistent": True})
+        self.assertIsNone(self.run_hook([started, assistant(T0, msg_id="msg_last")]))
+
     def test_counts_are_given_by_kind(self):
         entries = self.busy(background_agent(T0 - timedelta(minutes=8), "a1"),
                             background_agent(T0 - timedelta(minutes=7), "a2"))

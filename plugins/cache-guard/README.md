@@ -125,7 +125,7 @@ each and no network. It writes one thing: the paths of the handoffs you dismisse
 When Claude starts work in the background, a command, an agent or a monitor, the result comes back as a
 new turn, and that turn re-sends the whole context. If the work takes longer than the cache lasts, the
 result lands on an expired cache and pays the full write. A 90-minute build on a session with the one-hour
-cache always does.
+cache always does. (A monitor started as persistent watches with no end, so it doesn't count.)
 
 So when a turn ends with background work from this session still running, Cache Guard waits in the
 background until just before the cache would expire: 54 minutes after the last turn on the one-hour cache,

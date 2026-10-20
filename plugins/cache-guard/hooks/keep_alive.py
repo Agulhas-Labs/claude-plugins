@@ -132,8 +132,8 @@ def started_task(result):
         return str(result["backgroundTaskId"]), "command"  # also a command its timeout moved there
     if result.get("isAsync") is True and result.get("agentId"):
         return str(result["agentId"]), "agent"
-    if result.get("taskId") and "timeoutMs" in result:
-        return str(result["taskId"]), "monitor"
+    if result.get("taskId") and "timeoutMs" in result and result.get("persistent") is not True:
+        return str(result["taskId"]), "monitor"  # a persistent one watches with no end in sight
     return None
 
 
