@@ -83,31 +83,8 @@ def background_command(when, task="b1", sidechain=False):
                        sidechain=sidechain)
 
 
-def timed_out_command(when, task="b2"):
-    return tool_result(when, {"stdout": "", "backgroundTaskId": task, "timedOutAfterMs": 120000})
-
-
-def background_agent(when, agent="a1"):
-    return tool_result(when, {"isAsync": True, "status": "async_launched", "agentId": agent})
-
-
-def foreground_agent(when, agent="a9"):
-    return tool_result(when, {"status": "completed", "agentId": agent, "content": []})
-
-
-def monitor(when, task="m1"):
-    return tool_result(when, {"taskId": task, "timeoutMs": 600000, "persistent": False})
-
-
-def task_stopped(when, task="b1"):
-    return tool_result(when, {"message": f"Successfully stopped task: {task} (sleep 999)", "task_id": task,
-                              "task_type": "local_bash"})
-
-
-def send_message(when, to):
-    block = {"type": "tool_use", "id": "toolu_send", "name": "SendMessage",
-             "input": {"to": to, "summary": "more", "message": "one more thing"}}
-    return assistant(when, msg_id="msg_send", content=[block])
+def persistent_monitor(when, task="m1"):
+    return tool_result(when, {"taskId": task, "timeoutMs": 0, "persistent": True})
 
 
 def notification(task, status="completed"):
@@ -116,9 +93,24 @@ def notification(task, status="completed"):
             f"{status_line}<summary>finished</summary>\n</task-notification>")
 
 
-def monitor_event(task="m1"):
-    return (f"<task-notification>\n<task-id>{task}</task-id>\n<summary>Monitor event: \"x\"</summary>\n"
-            "<event>line</event>\n</task-notification>")
+def task(task_id="b1", kind="shell", status="running", **extra):
+    """One item of the Stop hook's `background_tasks`, as Claude Code lists it."""
+    return {"id": task_id, "type": kind, "status": status, "description": f"{kind} {task_id}", **extra}
+
+
+def shell(task_id="b1", status="running"):
+    return task(task_id, "shell", status, command="make all")
+
+
+def last_text(entries):
+    """The text Claude Code sends as `last_assistant_message` for a transcript, or None when it has none."""
+    main = [e for e in entries if e.get("type") == "assistant" and not e.get("isSidechain")]
+    if not main:
+        return None
+    wanted = main[-1]["message"]["id"]
+    texts = [block["text"] for e in main if e["message"]["id"] == wanted
+             for block in e["message"]["content"] if block.get("type") == "text"]
+    return "\n".join(texts).strip() or None
 
 
 def queued(when, text):
@@ -139,7 +131,7 @@ def ping_records(when, shape="idle"):
     """One wake-up as Claude Code stores it: the idle shape, or the one delivered in the middle of a turn."""
     text = ("<task-notification>\n<summary>cache-guard: kept the prompt cache warm</summary>\n"
             "</task-notification>\n<system-reminder>\nA cache-guard hook woke this session: "
-            + keep_alive.wake_message({"b1": "command"}) + "\n</system-reminder>")
+            + keep_alive.wake_message(["shell"]) + "\n</system-reminder>")
     second = {"type": "queue-operation", "operation": "dequeue" if shape == "idle" else "remove",
               "timestamp": stamp(when)}
     third = user_text(when, text) if shape == "idle" else attached(when, text)
@@ -179,6 +171,10 @@ class FakeClock:
         self.scheduled.append((when, change))
 
 
+FROM_ENTRIES = object()  # run_hook: send the text of the given transcript's last message, as Claude Code does
+OMITTED = object()  # run_hook: leave `background_tasks` out of the hook's input
+
+
 class KeepAliveTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="cache-guard-keep-alive-test-")
@@ -212,10 +208,23 @@ class KeepAliveTestCase(unittest.TestCase):
             for entry in entries:
                 f.write(json.dumps(entry) + "\n")
 
-    def run_hook(self, entries=None, env=None, session=SESSION):
+    def payload(self, entries=None, session=SESSION, tasks=None, last_message=FROM_ENTRIES):
+        """The Stop hook's input: one running command unless `tasks` says otherwise, and the text of
+        the last message of `entries` when they are given (a test that writes the transcript itself and
+        adds the turn later sends no text unless it passes `last_message`)."""
+        payload = {"session_id": session, "transcript_path": self.path, "hook_event_name": "Stop"}
+        if tasks is not OMITTED:
+            payload["background_tasks"] = [shell()] if tasks is None else tasks
+        if last_message is FROM_ENTRIES:
+            last_message = last_text(entries) if entries is not None else None
+        if last_message is not None:
+            payload["last_assistant_message"] = last_message
+        return payload
+
+    def run_hook(self, entries=None, env=None, session=SESSION, tasks=None, last_message=FROM_ENTRIES):
         if entries is not None:
             self.write(entries)
-        payload = {"session_id": session, "transcript_path": self.path, "hook_event_name": "Stop"}
+        payload = self.payload(entries, session, tasks, last_message)
         return keep_alive.run(payload, env or self.env, clock=self.clock, sleep=self.clock.sleep,
                               alive=lambda pid: self.alive)
 
@@ -227,6 +236,10 @@ class KeepAliveTestCase(unittest.TestCase):
             *extra,
             last or assistant(T0, msg_id="msg_last"),
         ]
+
+    def assertWokeAt(self, out, seconds_after_t0):
+        self.assertIsNotNone(out)
+        self.assertAlmostEqual((self.clock.now - T0).total_seconds(), seconds_after_t0, delta=1)
 
 
 class GateTests(KeepAliveTestCase):
@@ -280,6 +293,11 @@ class GateTests(KeepAliveTestCase):
         self.record("someone-else", SINCE)
         self.assertIsNone(self.run_hook(self.busy()))
 
+    def test_process_record_without_a_start_time_is_enough(self):
+        with open(self.record_path(), "w", encoding="utf-8") as f:
+            json.dump({"session_id": SESSION}, f)
+        self.assertIsNotNone(self.run_hook(self.busy()))
+
     def test_matching_process_record_is_touched(self):
         os.utime(self.record_path(), (1, 1))
         self.run_hook(self.busy())
@@ -287,143 +305,228 @@ class GateTests(KeepAliveTestCase):
 
 
 class RunningWorkTests(KeepAliveTestCase):
-    def test_background_command_is_running_work(self):
-        self.assertIn("(1 command)", self.run_hook(self.busy()))
+    """What is running is what Claude Code lists in the hook's input as `background_tasks`."""
 
-    def test_command_moved_to_the_background_by_its_timeout_is_running_work(self):
-        entries = [timed_out_command(T0 - timedelta(minutes=5)), assistant(T0, msg_id="msg_last")]
-        self.assertIn("(1 command)", self.run_hook(entries))
+    def test_running_command_is_running_work(self):
+        self.assertIn("(1 command)", self.run_hook(self.busy(), tasks=[shell()]))
 
-    def test_background_agent_is_running_work(self):
-        entries = [background_agent(T0 - timedelta(minutes=5)), assistant(T0, msg_id="msg_last")]
-        self.assertIn("(1 agent)", self.run_hook(entries))
+    def test_pending_task_is_running_work(self):
+        self.assertIn("(1 agent)", self.run_hook(self.busy(), tasks=[task("a1", "subagent", "pending")]))
 
-    def test_monitor_is_running_work(self):
-        entries = [monitor(T0 - timedelta(minutes=5)), assistant(T0, msg_id="msg_last")]
-        self.assertIn("(1 monitor)", self.run_hook(entries))
+    def test_finished_task_is_not_running_work(self):
+        for status in ("completed", "failed", "killed"):
+            with self.subTest(status=status):
+                self.assertIsNone(self.run_hook(self.busy(), tasks=[shell(status=status)]))
+                self.assertEqual(self.clock.sleeps, 0)
+
+    def test_nothing_in_flight_is_no_wake_up(self):
+        self.assertIsNone(self.run_hook(self.busy(), tasks=[]))
+        self.assertEqual(self.clock.sleeps, 0)
+
+    def test_claude_codes_own_housekeeping_is_not_running_work(self):
+        tasks = [task("d1", "dream"), task("s1", "auto-mode scan"), task("i1", "memory import")]
+        self.assertIsNone(self.run_hook(self.busy(), tasks=tasks))
+        self.assertEqual(self.clock.sleeps, 0)
+
+    def test_missing_task_list_is_no_wake_up(self):
+        self.assertIsNone(self.run_hook(self.busy(), tasks=OMITTED))
+        self.assertEqual(self.clock.sleeps, 0)
+
+    def test_task_list_that_is_not_a_list_is_no_wake_up(self):
+        self.assertIsNone(self.run_hook(self.busy(), tasks={"b1": shell()}))
 
     def test_persistent_monitor_is_not_running_work(self):
-        started = tool_result(T0 - timedelta(minutes=5), {"taskId": "m1", "timeoutMs": 0, "persistent": True})
-        self.assertIsNone(self.run_hook([started, assistant(T0, msg_id="msg_last")]))
+        entries = self.busy(persistent_monitor(T0 - timedelta(minutes=5), "m1"))
+        self.assertIsNone(self.run_hook(entries, tasks=[task("m1", "monitor")]))
 
-    def test_counts_are_given_by_kind(self):
-        entries = self.busy(background_agent(T0 - timedelta(minutes=8), "a1"),
-                            background_agent(T0 - timedelta(minutes=7), "a2"))
-        self.assertIn("(1 command, 2 agents)", self.run_hook(entries))
+    def test_persistent_monitor_is_left_out_of_the_count(self):
+        entries = self.busy(persistent_monitor(T0 - timedelta(minutes=5), "m1"))
+        out = self.run_hook(entries, tasks=[task("m1", "monitor"), task("m2", "monitor"), shell()])
+        self.assertIn("(1 command, 1 monitor)", out)
 
-    def test_queued_notification_finishes_the_work(self):
-        entries = self.busy(queued(T0 - timedelta(minutes=2), notification("b1")))
-        self.assertIsNone(self.run_hook(entries))
+    def test_monitor_that_is_not_persistent_is_running_work(self):
+        self.assertIn("(1 monitor)", self.run_hook(self.busy(), tasks=[task("m2", "monitor")]))
 
-    def test_queued_command_attachment_finishes_the_work(self):
-        entries = self.busy(attached(T0 - timedelta(minutes=2), notification("b1", "failed")))
-        self.assertIsNone(self.run_hook(entries))
+    def test_work_is_named_by_type(self):
+        tasks = [shell("b1"), task("a1", "subagent"), task("a2", "subagent"), task("w1", "workflow"),
+                 task("m1", "monitor"), task("t1", "MCP task"), task("t2", "teammate"), task("d1", "dream")]
+        self.assertIn("(1 command, 2 agents, 1 workflow, 1 monitor, 2 tasks)", self.run_hook(self.busy(), tasks=tasks))
 
-    def test_user_message_notification_finishes_the_work(self):
-        entries = self.busy(user_text(T0 - timedelta(minutes=2), notification("b1", "killed")))
-        self.assertIsNone(self.run_hook(entries))
-
-    def test_task_stop_finishes_the_work(self):
-        entries = self.busy(task_stopped(T0 - timedelta(minutes=2), "b1"))
-        self.assertIsNone(self.run_hook(entries))
-
-    def test_monitor_event_without_a_status_does_not_finish_it(self):
-        entries = [monitor(T0 - timedelta(minutes=5)), queued(T0 - timedelta(minutes=2), monitor_event()),
-                   assistant(T0, msg_id="msg_last")]
-        self.assertIn("(1 monitor)", self.run_hook(entries))
-
-    def test_notification_for_other_work_leaves_this_running(self):
+    def test_work_that_ended_in_the_transcript_still_counts_while_listed(self):
+        # The list is the authority: a notification written before the turn ended says nothing more.
         entries = self.busy(queued(T0 - timedelta(minutes=2), notification("b-other")))
         self.assertIn("(1 command)", self.run_hook(entries))
-
-    def test_send_message_sets_a_finished_agent_running_again(self):
-        entries = [
-            background_agent(T0 - timedelta(minutes=20), "a1"),
-            queued(T0 - timedelta(minutes=15), notification("a1")),
-            send_message(T0 - timedelta(minutes=5), "a1"),
-            assistant(T0, msg_id="msg_last"),
-        ]
-        self.assertIn("(1 agent)", self.run_hook(entries))
-
-    def test_send_message_resumes_a_foreground_agent_in_the_background(self):
-        entries = [foreground_agent(T0 - timedelta(minutes=20), "a9"),
-                   send_message(T0 - timedelta(minutes=5), "a9"), assistant(T0, msg_id="msg_last")]
-        self.assertIn("(1 agent)", self.run_hook(entries))
-
-    def test_send_message_to_an_unknown_id_starts_nothing(self):
-        entries = [send_message(T0 - timedelta(minutes=5), "nobody"), assistant(T0, msg_id="msg_last")]
-        self.assertIsNone(self.run_hook(entries))
-
-    def test_sidechain_background_work_is_ignored(self):
-        entries = [background_command(T0 - timedelta(minutes=5), sidechain=True), assistant(T0, msg_id="msg_last")]
-        self.assertIsNone(self.run_hook(entries))
-
-    def test_work_started_before_the_process_record_is_ignored(self):
-        self.record(SESSION, T0 - timedelta(minutes=5))  # resumed after the command was started
-        self.assertIsNone(self.run_hook(self.busy()))
 
 
 class WakeTimeTests(KeepAliveTestCase):
     def test_wakes_at_54_minutes_on_the_hour_cache(self):
-        self.assertIsNotNone(self.run_hook(self.busy()))
-        self.assertAlmostEqual((self.clock.now - T0).total_seconds(), 54 * 60, delta=1)
+        self.assertWokeAt(self.run_hook(self.busy()), 54 * 60)
 
     def test_wakes_at_270_seconds_on_the_five_minute_cache(self):
         entries = self.busy(last=assistant(T0, msg_id="msg_last", split=split_5m()))
-        self.assertIsNotNone(self.run_hook(entries))
-        self.assertAlmostEqual((self.clock.now - T0).total_seconds(), 270, delta=1)
+        self.assertWokeAt(self.run_hook(entries), 270)
 
     def test_refresh_is_the_earliest_record_of_the_last_message(self):
         entries = self.busy(assistant(T0, msg_id="msg_last"),
                             last=assistant(T0 + timedelta(minutes=5), msg_id="msg_last"))
         self.clock.now = T0 + timedelta(minutes=5, seconds=20)
-        self.assertIsNotNone(self.run_hook(entries))
-        self.assertAlmostEqual((self.clock.now - T0).total_seconds(), 54 * 60, delta=1)
+        self.assertWokeAt(self.run_hook(entries), 54 * 60)
 
-    def test_this_hooks_own_turn_written_late_is_adopted(self):
-        self.write(self.busy(last=assistant(T0 - timedelta(minutes=5), msg_id="msg_before")))
-        self.clock.at(T0 + timedelta(minutes=1), lambda: self.append(assistant(T0, msg_id="msg_last")))
-        self.assertIsNotNone(self.run_hook())
-        self.assertAlmostEqual((self.clock.now - T0).total_seconds(), 54 * 60, delta=1)
+    def test_long_final_message_on_the_five_minute_cache_wakes_at_once(self):
+        # Ported from review: its first record is older than the whole wait by the time the hook starts.
+        env = {**self.env, "CACHE_GUARD_LIFETIME_SECONDS": "300"}
+        self.clock = FakeClock(T0 + timedelta(seconds=275))
+        self.assertWokeAt(self.run_hook(self.busy(), env=env), 275)
+        self.assertEqual(self.clock.sleeps, 0)
 
 
-class StaleStartTests(KeepAliveTestCase):
-    """The Stop hook started before its own turn reached the transcript: it read the turn before."""
+def answer(when, msg_id, text):
+    return assistant(when, msg_id=msg_id, content=[{"type": "text", "text": text}])
 
-    def before(self):
-        return [assistant(T0 - timedelta(minutes=70), msg_id="msg_start"),
+
+class SettleTests(KeepAliveTestCase):
+    """The Stop hook can start before its own turn's last message is in the transcript."""
+
+    def before(self, *after):
+        """A turn an hour old, whose wake-up would be long past due, then this turn's prompt."""
+        return [answer(T0 - timedelta(minutes=70), "msg_start", "started it"),
                 background_command(T0 - timedelta(minutes=69)),
-                assistant(T0 - timedelta(minutes=60), msg_id="msg_before")]
+                answer(T0 - timedelta(minutes=60), "msg_before", "earlier answer"),
+                *after]
 
-    def test_own_turn_appearing_one_poll_later_is_waited_for_not_woken_on(self):
-        self.write(self.before())
+    def test_own_message_appearing_one_poll_later_is_woken_on_once_at_its_time(self):
+        self.write(self.before(user_text(T0 - timedelta(seconds=5), "how is it going?")))
         self.clock.at(self.clock.now + timedelta(seconds=keep_alive.POLL_SECONDS),
-                      lambda: self.append(assistant(T0, msg_id="msg_own")))
-        self.assertIsNotNone(self.run_hook())
-        self.assertAlmostEqual((self.clock.now - T0).total_seconds(), 54 * 60, delta=1)
+                      lambda: self.append(answer(T0, "msg_own", "still building")))
+        real = keep_alive.wake_message
+        with mock.patch.object(keep_alive, "wake_message", side_effect=real) as wake:
+            out = self.run_hook(last_message="still building")
+        self.assertWokeAt(out, 54 * 60)
+        self.assertEqual(wake.call_count, 1)
 
-    def test_no_new_turn_ever_appearing_exits_quietly_after_the_grace(self):
-        self.write(self.before())
-        self.assertIsNone(self.run_hook())
+    def test_answer_that_reads_like_the_one_before_is_still_waited_for(self):
+        # A wake-up's answer usually reads like the one before it; the turn's own prompt tells them apart.
+        self.write(self.before(*ping_records(T0 - timedelta(seconds=5))))
+        self.clock.at(self.clock.now + timedelta(seconds=keep_alive.POLL_SECONDS),
+                      lambda: self.append(answer(T0, "msg_own", "earlier answer")))
+        self.assertWokeAt(self.run_hook(last_message="earlier answer"), 54 * 60)
+
+    def test_own_message_never_appearing_exits_quietly_after_the_grace(self):
+        self.write(self.before(user_text(T0 - timedelta(seconds=5), "how is it going?")))
+        self.assertIsNone(self.run_hook(last_message="still building"))
         self.assertGreaterEqual(self.clock.now, T0 + timedelta(seconds=20 + keep_alive.STALE_GRACE_SECONDS))
         self.assertLess(self.clock.now, T0 + timedelta(minutes=5))
 
-    def test_turn_adopted_by_the_final_check_is_waited_for_too(self):
+    def test_different_text_on_the_last_message_is_not_taken_for_it(self):
+        self.write(self.before())
+        self.assertIsNone(self.run_hook(last_message="still building"))
+        self.assertGreaterEqual(self.clock.now, T0 + timedelta(seconds=20 + keep_alive.STALE_GRACE_SECONDS))
+
+    def test_text_is_compared_trimmed(self):
+        entries = self.busy(last=answer(T0, "msg_last", "\n  done for now  \n"))
+        self.assertWokeAt(self.run_hook(entries, last_message="done for now\n"), 54 * 60)
+
+    def test_text_of_a_message_written_in_several_records_is_joined(self):
+        entries = self.busy(answer(T0, "msg_last", "first part"),
+                            last=answer(T0 + timedelta(seconds=2), "msg_last", "second part"))
+        self.assertWokeAt(self.run_hook(entries, last_message="first part\nsecond part"), 54 * 60)
+
+    def test_without_text_the_last_turn_record_being_an_answer_settles(self):
+        for text in (None, ""):
+            with self.subTest(text=text):
+                self.clock = FakeClock(T0 + timedelta(seconds=20))
+                self.assertWokeAt(self.run_hook(self.busy(), last_message=text), 54 * 60)
+
+    def test_without_text_a_prompt_after_the_last_answer_is_waited_out(self):
+        self.write(self.before(user_text(T0 - timedelta(seconds=5), "how is it going?")))
+        self.clock.at(self.clock.now + timedelta(seconds=keep_alive.POLL_SECONDS),
+                      lambda: self.append(answer(T0, "msg_own", "still building")))
+        self.assertWokeAt(self.run_hook(last_message=None), 54 * 60)
+
+    def test_without_text_a_tool_result_after_the_last_answer_is_waited_out(self):
+        self.write(self.before(background_command(T0 - timedelta(seconds=5), "b2")))
+        self.assertIsNone(self.run_hook(last_message=None))
+        self.assertGreaterEqual(self.clock.now, T0 + timedelta(seconds=20 + keep_alive.STALE_GRACE_SECONDS))
+
+    def test_without_text_a_local_command_after_the_answer_does_not_hold_it_up(self):
+        entries = self.busy() + [user_text(T0 + timedelta(seconds=10), "<bash-input>ls</bash-input>")]
+        self.assertWokeAt(self.run_hook(entries, last_message=None), 54 * 60)
+
+    def test_process_gone_while_settling_ends_it(self):
+        self.write(self.before(user_text(T0 - timedelta(seconds=5), "how is it going?")))
+        self.clock.at(self.clock.now + timedelta(seconds=1), lambda: setattr(self, "alive", False))
+        self.assertIsNone(self.run_hook(last_message="still building"))
+        self.assertLess(self.clock.now, T0 + timedelta(seconds=20 + keep_alive.POLL_SECONDS + 1))
+
+
+class ReviewReproTests(KeepAliveTestCase):
+    """Ported from review: each failed before the hook waited for its own turn and ignored local commands."""
+
+    def before(self, *after):
+        return [assistant(T0 - timedelta(minutes=10), msg_id="msg_start"),
+                background_command(T0 - timedelta(minutes=9)),
+                assistant(T0 - timedelta(minutes=5), msg_id="msg_P"), *after]
+
+    def test_race_on_prompted_text_only_turn(self):
+        # The hook for turn Q starts before Q's answer is on disk; Q's prompt is.
+        self.write(self.before(user_text(T0 - timedelta(seconds=5), "quick question")))
+        self.clock.at(self.clock.now + timedelta(seconds=keep_alive.POLL_SECONDS),
+                      lambda: self.append(assistant(T0, msg_id="msg_Q")))
+        self.assertWokeAt(self.run_hook(last_message="ok"), 54 * 60)
+
+    def test_race_on_notification_turn(self):
+        started = background_command(T0 - timedelta(minutes=9), task="b2")
+        self.write(self.before(started, user_text(T0 - timedelta(seconds=5), notification("b2"))))
+        self.clock.at(self.clock.now + timedelta(seconds=keep_alive.POLL_SECONDS),
+                      lambda: self.append(assistant(T0, msg_id="msg_Q")))
+        self.assertWokeAt(self.run_hook(last_message="ok"), 54 * 60)
+
+    def test_local_command_while_idle(self):
         self.write(self.busy())
-        # The turn lands only between the last poll and the final check, timestamped before the start.
-        real = keep_alive.evaluate
-        calls = []
+        at = T0 + timedelta(minutes=5)
+        command = ("<command-name>/tasks</command-name>\n            <command-message>tasks</command-message>\n"
+                   "            <command-args></command-args>")
+        self.clock.at(at, lambda: self.append(user_text(at, command)))
+        self.assertWokeAt(self.run_hook(last_message="ok"), 54 * 60)
 
-        def evaluate(path, since, env):
-            calls.append(1)
-            if len(calls) == 2:
-                self.append(assistant(T0 + timedelta(seconds=10), msg_id="msg_own"))
-            return real(path, since, env)
+    def test_long_final_message_5m(self):
+        env = {**self.env, "CACHE_GUARD_LIFETIME_SECONDS": "300"}
+        self.clock = FakeClock(T0 + timedelta(seconds=275))
+        self.assertIsNotNone(self.run_hook(self.busy(), env=env))
 
-        self.clock.now = T0 + timedelta(seconds=20)
-        with mock.patch.object(keep_alive, "evaluate", evaluate):
-            self.assertIsNotNone(self.run_hook())
-        self.assertAlmostEqual((self.clock.now - T0).total_seconds(), 54 * 60 + 10, delta=1)
+
+class LocalCommandTests(KeepAliveTestCase):
+    """A local command or a meta record writes a user record but starts no turn."""
+
+    SHAPES = (
+        "<command-name>/context</command-name>\n<command-message>context</command-message>",
+        "<command-message>effort</command-message>",
+        "<local-command-stdout>Set effort level to high</local-command-stdout>",
+        "<bash-input>git status</bash-input>",
+        "<bash-stdout>clean</bash-stdout><bash-stderr></bash-stderr>",
+        "<bash-stderr>oops</bash-stderr>",
+    )
+
+    def test_local_command_mid_wait_does_not_end_it(self):
+        for text in self.SHAPES:
+            with self.subTest(text=text):
+                self.clock = FakeClock(T0 + timedelta(seconds=20))
+                self.write(self.busy())
+                at = T0 + timedelta(minutes=5)
+                self.clock.at(at, lambda text=text: self.append(user_text(at, text)))
+                self.assertWokeAt(self.run_hook(last_message="ok"), 54 * 60)
+
+    def test_meta_record_mid_wait_does_not_end_it(self):
+        self.write(self.busy())
+        at = T0 + timedelta(minutes=5)
+        meta = {**user_text(at, "Caveat: the messages below were generated by the user"), "isMeta": True}
+        self.clock.at(at, lambda: self.append(meta))
+        self.assertWokeAt(self.run_hook(last_message="ok"), 54 * 60)
+
+    def test_local_command_does_not_reset_the_wake_up_count(self):
+        entries = CapTests.with_pings(self, 19, model="claude-mystery")
+        entries.insert(-1, user_text(T0 - timedelta(minutes=1), "<command-name>/tasks</command-name>"))
+        self.assertIsNone(self.run_hook(entries))
 
 
 class WaitEndsTests(KeepAliveTestCase):
@@ -431,31 +534,38 @@ class WaitEndsTests(KeepAliveTestCase):
         self.write(self.busy())
         self.clock.at(T0 + timedelta(minutes=20),
                       lambda: self.append(assistant(T0 + timedelta(minutes=19), msg_id="msg_newer")))
-        self.assertIsNone(self.run_hook())
+        self.assertIsNone(self.run_hook(last_message="ok"))
         self.assertLess(self.clock.now, T0 + timedelta(minutes=21))
 
-    def test_work_finishing_ends_the_wait(self):
+    def test_prompt_typed_mid_wait_ends_it(self):
         self.write(self.busy())
-        self.clock.at(T0 + timedelta(minutes=20),
-                      lambda: self.append(queued(T0 + timedelta(minutes=20), notification("b1"))))
-        self.assertIsNone(self.run_hook())
+        at = T0 + timedelta(minutes=20)
+        self.clock.at(at, lambda: self.append(prompt_record(at, "and another thing")))
+        self.assertIsNone(self.run_hook(last_message="ok"))
+        self.assertLess(self.clock.now, T0 + timedelta(minutes=21))
+
+    def test_notification_mid_wait_ends_it(self):
+        self.write(self.busy())
+        at = T0 + timedelta(minutes=20)
+        self.clock.at(at, lambda: self.append(queued(at, notification("b1"))))
+        self.assertIsNone(self.run_hook(last_message="ok"))
         self.assertLess(self.clock.now, T0 + timedelta(minutes=21))
 
     def test_process_record_for_another_session_ends_the_wait(self):
         self.write(self.busy())
         self.clock.at(T0 + timedelta(minutes=20), lambda: self.record("after-clear", T0 + timedelta(minutes=20)))
-        self.assertIsNone(self.run_hook())
+        self.assertIsNone(self.run_hook(last_message="ok"))
         self.assertLess(self.clock.now, T0 + timedelta(minutes=21))
 
     def test_process_record_gone_ends_the_wait(self):
         self.write(self.busy())
         self.clock.at(T0 + timedelta(minutes=20), lambda: os.remove(self.record_path()))
-        self.assertIsNone(self.run_hook())
+        self.assertIsNone(self.run_hook(last_message="ok"))
 
     def test_process_gone_ends_the_wait(self):
         self.write(self.busy())
         self.clock.at(T0 + timedelta(minutes=20), lambda: setattr(self, "alive", False))
-        self.assertIsNone(self.run_hook())
+        self.assertIsNone(self.run_hook(last_message="ok"))
         self.assertLess(self.clock.now, T0 + timedelta(minutes=21))
 
     def test_liveness_is_never_checked_with_a_signal_off_posix(self):
@@ -466,6 +576,13 @@ class WaitEndsTests(KeepAliveTestCase):
     def test_compaction_after_the_last_turn_means_no_wake_up(self):
         self.assertIsNone(self.run_hook(self.busy() + [compact_boundary(T0 + timedelta(seconds=10))]))
 
+    def test_compaction_mid_wait_ends_it(self):
+        self.write(self.busy())
+        self.clock.at(T0 + timedelta(minutes=20),
+                      lambda: self.append(compact_boundary(T0 + timedelta(minutes=20))))
+        self.assertIsNone(self.run_hook(last_message="ok"))
+        self.assertLess(self.clock.now, T0 + timedelta(minutes=21))
+
     def test_prompt_after_the_last_turn_means_no_wake_up(self):
         for record in (user_text(T0 + timedelta(minutes=53, seconds=50), "and another thing"),
                        attached(T0 + timedelta(minutes=53, seconds=50), "and another thing"),
@@ -473,18 +590,33 @@ class WaitEndsTests(KeepAliveTestCase):
             with self.subTest(type=record["type"]):
                 self.clock = FakeClock(T0 + timedelta(seconds=20))
                 self.write(self.busy() + [record])
-                self.assertIsNone(self.run_hook())
+                self.assertIsNone(self.run_hook(last_message="ok"))
 
     def test_enqueue_without_content_does_not_stop_the_wake_up(self):
         record = {"type": "queue-operation", "operation": "enqueue", "timestamp": stamp(T0 + timedelta(seconds=5))}
-        self.assertIsNotNone(self.run_hook(self.busy() + [record]))
+        self.assertIsNotNone(self.run_hook(self.busy() + [record], last_message="ok"))
 
-    def test_prompt_arriving_before_the_reply_is_written_ends_the_wait(self):
+    def test_prompt_arriving_just_before_the_wake_up_ends_the_wait(self):
         self.write(self.busy())
         at = T0 + timedelta(minutes=53, seconds=50)
         self.clock.at(at, lambda: self.append(user_text(at, "hello")))
-        self.assertIsNone(self.run_hook())
+        self.assertIsNone(self.run_hook(last_message="ok"))
         self.assertLess(self.clock.now, T0 + timedelta(minutes=54))
+
+    def test_prompt_written_between_the_last_poll_and_the_wake_up_is_seen(self):
+        self.write(self.busy())
+        real = keep_alive.evaluate
+        calls = []
+
+        def evaluate(path, env, settled_id, tasks):
+            calls.append(1)
+            if len(calls) == 2:  # the final check: nothing changed while waiting, until now
+                self.append(user_text(T0 + timedelta(minutes=54), "hello"))
+            return real(path, env, settled_id, tasks)
+
+        with mock.patch.object(keep_alive, "evaluate", evaluate):
+            self.assertIsNone(self.run_hook(last_message="ok"))
+        self.assertEqual(len(calls), 2)
 
     def test_small_context_means_no_wake_up(self):
         self.assertIsNone(self.run_hook(self.busy(last=assistant(T0, size=SMALL, msg_id="msg_last"))))
@@ -559,9 +691,9 @@ class CapTests(KeepAliveTestCase):
 
 
 class OutputTests(KeepAliveTestCase):
-    def main(self, entries):
+    def main(self, entries, tasks=None):
         self.write(entries)
-        payload = {"session_id": SESSION, "transcript_path": self.path}
+        payload = self.payload(entries, tasks=tasks)
         real_run = keep_alive.run
         out, err = io.StringIO(), io.StringIO()
 
@@ -580,12 +712,13 @@ class OutputTests(KeepAliveTestCase):
         self.assertEqual(status, 2)
         self.assertTrue(out.startswith(keep_alive.KEEP_ALIVE_MARK))
         self.assertEqual(out.count("\n"), 1)
+        self.assertIn("background work is still running (1 command)", out)
         self.assertIn("make no tool calls", out)
-        self.assertIn("ignore this and carry on", out)
+        self.assertIn("If you are in the middle of other work, ignore this and carry on.", out)
         self.assertEqual(err, "")
 
     def test_nothing_to_do_exits_0_with_no_output(self):
-        status, out, err = self.main(self.busy(task_stopped(T0 - timedelta(minutes=1))))
+        status, out, err = self.main(self.busy(), tasks=[shell(status="completed")])
         self.assertEqual((status, out, err), (0, "", ""))
 
     def test_headless_script_exits_0_at_once_with_no_output(self):

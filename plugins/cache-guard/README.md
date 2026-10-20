@@ -125,25 +125,29 @@ each and no network. It writes one thing: the paths of the handoffs you dismisse
 When Claude starts work in the background, a command, an agent or a monitor, the result comes back as a
 new turn, and that turn re-sends the whole context. If the work takes longer than the cache lasts, the
 result lands on an expired cache and pays the full write. A 90-minute build on a session with the one-hour
-cache always does. (A monitor started as persistent watches with no end, so it doesn't count.)
+cache always does.
 
-So when a turn ends with background work from this session still running, Cache Guard waits in the
-background until just before the cache would expire: 54 minutes after the last turn on the one-hour cache,
-4.5 minutes on the five-minute one. If the session is still idle and the work is still running then, it
-wakes the session. You see one line in the terminal, `cache-guard: kept the prompt cache warm while
-background work runs`, and Claude answers in one short line without using any tools. That turn reads the
-cache instead of writing it, and the cache lasts another full lifetime. Once the turn ends, the wait starts
-again.
+So when a turn ends with background work still running, Cache Guard waits in the background until just
+before the cache would expire: 54 minutes after the last turn on the one-hour cache, 4.5 minutes on the
+five-minute one. If the session is still idle then, it wakes the session. You see one line in the
+terminal, `cache-guard: kept the prompt cache warm while background work runs`, and Claude answers in one
+short line without using any tools. That turn reads the cache instead of writing it, and the cache lasts
+another full lifetime. Once the turn ends, the wait starts again.
+
+What counts as running is what Claude Code itself lists as in flight when the turn ends: commands, agents,
+workflows, monitors, teammates, cloud sessions and MCP tasks. Claude Code's own housekeeping doesn't
+count, and neither does a monitor started as persistent, which watches with no end.
 
 The arithmetic, at API list prices on the 310k-token Opus session above: a wake-up costs about $0.16, and
 the result then lands warm for another $0.16 instead of cold for $3.10.
 
 It never wakes a session that is in use: anything you send (even before Claude's reply has been written
-down), any other turn, a `/clear` or a compaction ends the wait, and so does the work finishing or Claude
-Code exiting. A server or watcher left running in the background counts as work still running, so an idle
-session with one is woken until the cap below; if you work that way, set `CACHE_GUARD_KEEP_ALIVE=0`. It doesn't run below
-`CACHE_GUARD_MIN_TOKENS`, for background work started before a resume (that work stopped with the old
-process and will never report back), or in headless `claude -p` runs, which would wait for it.
+down), a notification from finished work, any other turn, a `/clear` or a compaction ends the wait, and so
+does Claude Code exiting. A local command such as `/tasks` or `/context`, or a `!` shell command, starts no
+turn and doesn't end it. A server or watcher left running in the background counts as work still running,
+so an idle session with one is woken until the cap below; if you work that way, set
+`CACHE_GUARD_KEEP_ALIVE=0`. It doesn't run below `CACHE_GUARD_MIN_TOKENS`, or in headless `claude -p`
+runs, which would wait for it.
 
 Wake-ups stop once they would have added up to one cache write of the context: the write price divided by
 the read price, which allows 19 wake-ups on the one-hour cache and 12 on the five-minute one at list
