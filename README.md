@@ -1,24 +1,22 @@
 # Agulhas Labs plugins for Claude Code
 
 Plugins for Claude Code, the terminal and IDE tool: one that runs your session as the lead of a team of
-agents and shows you where your tokens went, one that warns you before the one message that costs twenty
-times the rest, and one that shows you what a long task did. They run on your machine through Claude
-Code's hooks, agents and commands, so they don't work in claude.ai chat or Cowork.
+agents and shows you where your tokens went, and one that warns you before the one message that costs
+twenty times the rest. They run on your machine through Claude Code's hooks, agents and commands, so they
+don't work in claude.ai chat or Cowork.
 
 ```text
 /plugin marketplace add Agulhas-Labs/claude-plugins
 /plugin install delegate@agulhas-labs
 /plugin install cache-guard@agulhas-labs
-/plugin install logbook@agulhas-labs
 ```
 
-Start a new session after installing. None of them needs configuring.
+Start a new session after installing. Neither needs configuring.
 
 | Plugin | The problem it solves | What it does |
 | --- | --- | --- |
 | [`delegate`](plugins/delegate/README.md) | A few long-running subagents take most of your spend, and you can't see where your tokens go. | Your session leads a roster of subagents on models matched to the job, and re-runs the commands that prove each handoff before it believes the report. Its `agent-cost` report reads the transcripts already on your disk and shows the spend for your sessions and their subagents. |
 | [`cache-guard`](plugins/cache-guard/README.md) | A message sent into a big session after its prompt cache expired costs far more than it looks, and nothing tells you. | Holds that message back once and shows what it will cost. Send it again and it goes through. A band above the prompt shows the cache's minutes left, the context size and what a miss would cost, with a Handoff button, and offers to resume the previous session's handoff. |
-| [`logbook`](plugins/logbook/README.md) | A long task ends and you dig through the scroll to find out what happened. | Keeps a live local page of what was built, what was verified, what was decided without you and what's waiting on you. It becomes the report when the session ends. |
 
 ## delegate
 
@@ -59,17 +57,6 @@ file is and how to resume. The band and the resume offer need Claude Code 2.1.28
 
 [cache-guard README](plugins/cache-guard/README.md): what you see, the settings, and what it never does.
 
-## logbook
-
-Useful when a task runs long or delegates a lot. Its hooks record the files changed, the commands run and
-how they ended, and the commits, so the page has something to show without a task list or subagents. The
-terminal prints the path to `board.html`; open it and it re-reads its state every 10 seconds, with nothing
-fetched from the network. When the session ends, the same file becomes `report.html`, self-contained, the
-one to keep or send.
-
-[logbook README](plugins/logbook/README.md): the page's sections, answering a question from the
-page, and the settings.
-
 ## Installing for a team
 
 The commands at the top install a plugin for you. To offer them to everyone working in a repository,
@@ -85,8 +72,7 @@ commit this to the repository's `.claude/settings.json`, keeping the plugins you
   },
   "enabledPlugins": {
     "delegate@agulhas-labs": true,
-    "cache-guard@agulhas-labs": true,
-    "logbook@agulhas-labs": true
+    "cache-guard@agulhas-labs": true
   }
 }
 ```
@@ -104,7 +90,7 @@ models are allowed.
 
 ## Requirements
 
-All three use Python 3, standard library only, and do no harm without it: the Python hooks are skipped
+Both use Python 3, standard library only, and do no harm without it: the Python hooks are skipped
 and `agent-cost` fails visibly. Their hooks and commands run through a POSIX shell, so on Windows they
 need Git Bash. Windows is untested. Each plugin's README has the detail.
 

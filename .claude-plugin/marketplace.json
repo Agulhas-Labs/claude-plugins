@@ -5,7 +5,7 @@
     "url": "https://github.com/Agulhas-Labs/claude-plugins"
   },
   "metadata": {
-    "description": "Claude Code plugins from Agulhas Labs. Delegate: a team of agents sized to the job, and a report of where your tokens went. Cache Guard: a warning before the one message that costs twenty times the rest. Logbook: a live local page for a long task, and its report when the task ends."
+    "description": "Claude Code plugins from Agulhas Labs. Delegate: a team of agents sized to the job, and a report of where your tokens went. Cache Guard: a warning before the one message that costs twenty times the rest."
   },
   "plugins": [
     {
@@ -46,26 +46,6 @@
         "prompt-cache",
         "token-cost",
         "hooks"
-      ]
-    },
-    {
-      "name": "logbook",
-      "displayName": "Logbook",
-      "source": "./plugins/logbook",
-      "description": "Keeps a live local page for a long Claude Code task: what needs you, what was built, what was verified, and what was decided without you. Hooks record it without spending model tokens, the page follows light, dark or your system's setting, and when the task ends the same page is the report.",
-      "version": "2.6.0",
-      "author": {
-        "name": "Agulhas Labs"
-      },
-      "homepage": "https://github.com/Agulhas-Labs/claude-plugins",
-      "repository": "https://github.com/Agulhas-Labs/claude-plugins",
-      "license": "Apache-2.0",
-      "keywords": [
-        "progress",
-        "report",
-        "hooks",
-        "subagents",
-        "token-cost"
       ]
     }
   ]

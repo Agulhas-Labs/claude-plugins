@@ -26,13 +26,6 @@ for them and receives nothing from them: no analytics, no telemetry, no accounts
   transcript it summarises goes to the same service your session already uses.
   `CACHE_GUARD_HANDOFF_SUMMARY=0` turns that off.
 
-## logbook
-
-- Records the files changed, commands run, commits and subagents of a session into a page inside the
-  project (`.logbook/`), which is ignored by git.
-- The page holds your prompts and commit subjects, stays on your machine, and loads nothing from the
-  network.
-
 ## Questions
 
 Open an issue at https://github.com/Agulhas-Labs/claude-plugins/issues.
