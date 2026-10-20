@@ -71,7 +71,6 @@ unit_suite() {
 unit_suite delegate plugins/delegate/tests
 unit_suite agent-cost plugins/delegate/skills/agent-cost/tests
 unit_suite cache-guard plugins/cache-guard/tests
-unit_suite logbook plugins/logbook/tests
 if [ "$verbose" = 0 ]; then echo "unit: $unit_line"; fi
 
 # A plugin's version is written twice, in its manifest and in the marketplace entry; they must agree.
@@ -127,7 +126,7 @@ fi
 terms="${PRIVATE_TERMS:-$HOME/.config/agulhas/private-terms.txt}"
 if [ -f "$terms" ]; then
   # What git would commit: tracked files and untracked ones it does not ignore. An ignored file (a
-  # handoff, a logbook, build scratch) never ships, so it is not scanned.
+  # handoff, build scratch) never ships, so it is not scanned.
   if git ls-files -z --cached --others --exclude-standard | xargs -0 grep -sniF -f "$terms" -- ; then
     echo "privacy gate: the lines above carry a private term" >&2
     exit 1

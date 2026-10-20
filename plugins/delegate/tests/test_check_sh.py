@@ -11,7 +11,6 @@ SUITES = [
     "plugins/delegate/tests",
     "plugins/delegate/skills/agent-cost/tests",
     "plugins/cache-guard/tests",
-    "plugins/logbook/tests",
 ]
 PASSING = "import unittest\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n"
 SKIPPING = (
