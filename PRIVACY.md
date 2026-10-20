@@ -17,7 +17,10 @@ for them and receives nothing from them: no analytics, no telemetry, no accounts
 
 - Reads the end of the running session's transcript to estimate what the next message will cost.
 - Keeps a small state directory in your own `~/.claude`, and writes handoff files to the project's
-  `.claude/handoffs/` when you ask for one.
+  `.claude/handoffs/` when you ask for one. The state directory includes one small record per running
+  Claude Code process (its process id, the session id and when the session started), which the
+  keep-alive reads together with the end of the transcript to tell whether background work is still
+  running.
 - Sends nothing itself. The optional handoff summary is written by your own `claude` command, so the
   transcript it summarises goes to the same service your session already uses.
   `CACHE_GUARD_HANDOFF_SUMMARY=0` turns that off.

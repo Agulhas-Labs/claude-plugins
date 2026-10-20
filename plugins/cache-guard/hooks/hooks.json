@@ -22,6 +22,20 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/run-python.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/keep_alive.py\"",
+            "asyncRewake": true,
+            "timeout": 7200,
+            "rewakeMessage": "A cache-guard hook woke this session (not an error, not a message from the user):",
+            "rewakeSummary": "cache-guard: kept the prompt cache warm while background work runs"
+          }
+        ]
+      }
     ]
   }
 }

@@ -56,8 +56,11 @@ SESSION_ID = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-
 # that the ones an earlier version left behind are cleared out like everything else. `condensed-` is the
 # same: the summariser now reads the transcript from an anonymous file on its stdin, but an earlier
 # version wrote it to a named one, and a summariser killed before it finished left that file here.
-SWEPT_PREFIXES = ("announced-", "condensed-", "pending-")
+# `process-` is the keep-alive's record of which session a Claude Code process is running (see
+# keep_alive.py); the keep-alive touches it while it waits, so only a dead process's record ages out.
+SWEPT_PREFIXES = ("announced-", "condensed-", "pending-", "process-")
 HANDOFF_PENDING_PREFIX = "pending-"  # one per session that has a background summary still running
+PROCESS_PREFIX = "process-"  # one per running Claude Code process, named by its pid
 # A record's second line, written when a session took the record over from the session that started the
 # summary. It changes only what the notice says: an adopted handoff is one the reader has already
 # cleared into, so telling them to /clear would be telling them to do it twice.
@@ -568,6 +571,30 @@ def session_of(payload):
 def pending_record(marker_dir, session):
     """Where a session records that it started a background summary it has not yet reported on."""
     return os.path.join(marker_dir, HANDOFF_PENDING_PREFIX + session)
+
+
+def process_record(marker_dir, pid):
+    """Where SessionStart records which session the Claude Code process `pid` is running, and since when."""
+    return os.path.join(marker_dir, PROCESS_PREFIX + str(int(pid)))
+
+
+def claude_pid(env):
+    """The pid of the Claude Code process running this hook, from CLAUDE_PID, or None."""
+    try:
+        pid = int(env["CLAUDE_PID"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def read_process_record(path):
+    """The process record at `path` as a dict, or None when it is missing or is not one."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            record = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
 
 
 def watch_pending(marker_dir, session, path, adopted=False):

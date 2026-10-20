@@ -22,10 +22,17 @@ that session has just cleared and will take no further prompt. `/clear` keeps th
 so the session that clears is the one this hook is speaking to, and no record from another directory
 is ever read: a handoff belongs to the directory it was written in, and announcing it anywhere else
 would be noise in a session doing unrelated work.
+
+It also records, for the keep-alive (keep_alive.py), which session this Claude Code process is running
+and since when. Background work counts as still running only when it was started at or after that time:
+a task from before a resume died with the process that started it and will never report back, and a
+`/clear` starts a session whose transcript holds none of the old one's work. A compaction keeps the
+process and its running tasks, so it keeps the time too.
 """
 import json
 import os
 import sys
+import tempfile
 from collections import namedtuple
 from datetime import datetime, timezone
 
@@ -140,6 +147,43 @@ def announcement(payload, now, env):
         return NOTHING
 
 
+def record_process(payload, now, env):
+    """Write `process-<pid>`: the session this process is running, and since when its work counts.
+
+    Written whole or not at all, since the keep-alive may be reading it from another process. Best
+    effort: without it the keep-alive does nothing, which is what it does on any doubt.
+    """
+    pid = cache_guard.claude_pid(env)
+    session = payload.get("session_id")
+    if pid is None or not isinstance(session, str) or not session:
+        return False
+    directory = cache_guard.usable_state_dir(cache_guard.state_dir(env))
+    if directory is None:
+        return False
+    record = cache_guard.process_record(directory, pid)
+    since = now.isoformat()
+    if payload.get("source") == "compact":
+        previous = cache_guard.read_process_record(record)
+        if previous and previous.get("session_id") == session and previous.get("since"):
+            since = previous["since"]  # same process, same tasks still running
+    temporary = None
+    try:
+        handle, temporary = tempfile.mkstemp(
+            dir=directory, prefix=cache_guard.PROCESS_PREFIX + "tmp-", suffix=".tmp"
+        )
+        with os.fdopen(handle, "w", encoding="utf-8") as f:
+            json.dump({"session_id": session, "since": since}, f)
+        os.replace(temporary, record)
+        return True
+    except OSError:
+        if temporary is not None:
+            try:
+                os.remove(temporary)
+            except OSError:
+                pass
+        return False
+
+
 def fresh_limit(env):
     try:
         value = int(env["CACHE_GUARD_HANDOFF_FRESH_MINUTES"])
@@ -153,7 +197,12 @@ def main():
         payload = json.load(sys.stdin)
     except Exception:
         return
-    note = announcement(payload, datetime.now(timezone.utc), os.environ)
+    now = datetime.now(timezone.utc)
+    try:
+        record_process(payload, now, os.environ)
+    except Exception:
+        pass
+    note = announcement(payload, now, os.environ)
     if not note.context:
         return
     output = {

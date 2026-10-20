@@ -120,6 +120,39 @@ it runs `hooks/resume.py` once when a session starts and again after a `/clear` 
 `git rev-parse`, `git rev-list --count` and `git status --porcelain` locally with a three-second limit
 each and no network. It writes one thing: the paths of the handoffs you dismissed or resumed, in the plugin's own store, so they are not offered again.
 
+## Keeping the cache warm while background work runs
+
+When Claude starts work in the background, a command, an agent or a monitor, the result comes back as a
+new turn, and that turn re-sends the whole context. If the work takes longer than the cache lasts, the
+result lands on an expired cache and pays the full write. A 90-minute build on a session with the one-hour
+cache always does.
+
+So when a turn ends with background work from this session still running, Cache Guard waits in the
+background until just before the cache would expire: 54 minutes after the last turn on the one-hour cache,
+4.5 minutes on the five-minute one. If the session is still idle and the work is still running then, it
+wakes the session. You see one line in the terminal, `cache-guard: kept the prompt cache warm while
+background work runs`, and Claude answers in one short line without using any tools. That turn reads the
+cache instead of writing it, and the cache lasts another full lifetime. Once the turn ends, the wait starts
+again.
+
+The arithmetic, at API list prices on the 310k-token Opus session above: a wake-up costs about $0.16, and
+the result then lands warm for another $0.16 instead of cold for $3.10.
+
+It never wakes a session that is in use: anything you send, any other turn, a `/clear` or a compaction
+ends the wait, and so does the work finishing or Claude Code exiting. It doesn't run below
+`CACHE_GUARD_MIN_TOKENS`, for background work started before a resume (that work stopped with the old
+process and will never report back), or in headless `claude -p` runs, which would wait for it.
+
+Wake-ups stop once they would have added up to one cache write of the context: the write price divided by
+the read price, which allows 19 wake-ups on the one-hour cache and 12 on the five-minute one at list
+prices. That caps the worst case, work that never reports back, at about twice what doing nothing would
+have cost.
+Anything you send starts the count again.
+
+`CACHE_GUARD_KEEP_ALIVE=0` switches it off, and `CACHE_GUARD_DISABLE=1` switches it off along with the
+rest of the guard. It needs Claude Code 2.1.304 or later, which runs a hook like this one in the
+background; on an older version it does nothing.
+
 ## Is it worth it for you?
 
 On the machine this was built on, a week of the `agent-cost` report from the `delegate` plugin showed 6%
@@ -174,6 +207,7 @@ All optional, set under `env` in `~/.claude/settings.json` or a repository's `.c
 | `resumeMaxAgeDays` (plugin option, not an environment variable) | `7` | How old the newest handoff may be for the resume band to be offered. |
 | `CACHE_GUARD_NOTIFY` | on | `0` sends no desktop notifications; the terminal messages are unchanged. |
 | `CACHE_GUARD_STATE_DIR` | `cache-guard` in `CLAUDE_CONFIG_DIR`, else `~/.claude/cache-guard` | Where the guard keeps its few small marker files. |
+| `CACHE_GUARD_KEEP_ALIVE` | on | `0` switches off the keep-alive that wakes an idle session before its cache expires. |
 | `CACHE_GUARD_DISABLE` | off | `1` switches the guard off. |
 
 ## Requirements and limits
