@@ -1303,5 +1303,66 @@ class StateDirectoryTests(unittest.TestCase):
         self.assertEqual(popen.call_args.kwargs["cwd"], tempfile.gettempdir())
 
 
+class ProcessRecordTests(HandoffTestCase):
+    """SessionStart records which session this Claude Code process runs, for the keep-alive."""
+
+    PID = 4242
+
+    def setUp(self):
+        super().setUp()
+        self.env = {**self.env, "CLAUDE_PID": str(self.PID)}
+        self.path = os.path.join(self.state, f"process-{self.PID}")
+
+    def start(self, source, session="s-1", env=None):
+        payload = {"session_id": session, "cwd": "/work/project", "source": source}
+        return session_start.record_process(payload, env or self.env)
+
+    def written(self):
+        with open(self.path, encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_startup_records_the_session(self):
+        self.assertTrue(self.start("startup"))
+        self.assertEqual(self.written(), {"session_id": "s-1"})
+
+    def test_clear_records_the_new_session(self):
+        """A keep-alive still waiting from before the /clear reads this and stays quiet."""
+        self.start("startup")
+        self.start("clear", session="s-2")
+        self.assertEqual(self.written(), {"session_id": "s-2"})
+
+    def test_resume_and_compaction_record_the_session_they_run(self):
+        for source in ("resume", "compact"):
+            self.start("startup", session="s-0")
+            self.start(source)
+            self.assertEqual(self.written(), {"session_id": "s-1"})
+
+    def test_no_claude_pid_writes_nothing(self):
+        env = {k: v for k, v in self.env.items() if k != "CLAUDE_PID"}
+        self.assertFalse(self.start("startup", env=env))
+        self.assertFalse(os.path.exists(self.state) and os.listdir(self.state))
+
+    def test_the_hook_writes_the_record_with_no_handoff_to_announce(self):
+        payload = {"session_id": "s-1", "cwd": "/work/project", "source": "startup"}
+        out = io.StringIO()
+        with mock.patch.object(session_start.sys, "stdin", io.StringIO(json.dumps(payload))):
+            with mock.patch.object(session_start.os, "environ", self.env):
+                with contextlib.redirect_stdout(out):
+                    session_start.main()
+        self.assertEqual(out.getvalue(), "")
+        self.assertEqual(self.written()["session_id"], "s-1")
+
+    def test_the_sweep_keeps_a_live_record_and_removes_a_stale_one(self):
+        self.start("startup")
+        stale = os.path.join(self.state, "process-99")
+        with open(stale, "w", encoding="utf-8") as f:
+            f.write("{}")
+        old = time.time() - cache_guard.MARKER_MAX_AGE - 60
+        os.utime(stale, (old, old))
+        cache_guard.prune(self.state, datetime.now(timezone.utc))
+        self.assertTrue(os.path.exists(self.path))
+        self.assertFalse(os.path.exists(stale))
+
+
 if __name__ == "__main__":
     unittest.main()

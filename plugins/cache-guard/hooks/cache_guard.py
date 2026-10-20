@@ -56,8 +56,12 @@ SESSION_ID = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-
 # that the ones an earlier version left behind are cleared out like everything else. `condensed-` is the
 # same: the summariser now reads the transcript from an anonymous file on its stdin, but an earlier
 # version wrote it to a named one, and a summariser killed before it finished left that file here.
-SWEPT_PREFIXES = ("announced-", "condensed-", "pending-")
+# `process-` is the keep-alive's record of which session a Claude Code process is running (see
+# keep_alive.py); the keep-alive touches it while it waits, so only a dead process's record ages out.
+SWEPT_PREFIXES = ("announced-", "condensed-", "pending-", "process-")
 HANDOFF_PENDING_PREFIX = "pending-"  # one per session that has a background summary still running
+PROCESS_RECORD_NAME = re.compile(r"process-(\d+)$")
+PROCESS_PREFIX = "process-"  # one per running Claude Code process, named by its pid
 # A record's second line, written when a session took the record over from the session that started the
 # summary. It changes only what the notice says: an adopted handoff is one the reader has already
 # cleared into, so telling them to /clear would be telling them to do it twice.
@@ -570,6 +574,30 @@ def pending_record(marker_dir, session):
     return os.path.join(marker_dir, HANDOFF_PENDING_PREFIX + session)
 
 
+def process_record(marker_dir, pid):
+    """Where SessionStart records which session the Claude Code process `pid` is running."""
+    return os.path.join(marker_dir, PROCESS_PREFIX + str(int(pid)))
+
+
+def claude_pid(env):
+    """The pid of the Claude Code process running this hook, from CLAUDE_PID, or None."""
+    try:
+        pid = int(env["CLAUDE_PID"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def read_process_record(path):
+    """The process record at `path` as a dict, or None when it is missing or is not one."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            record = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
 def watch_pending(marker_dir, session, path, adopted=False):
     """Have `session` report the landing of the background summary of the handoff at `path`.
 
@@ -715,6 +743,23 @@ def swept(name):
     return bool(MARKER_NAME.match(name)) or name.startswith(SWEPT_PREFIXES)
 
 
+def process_alive(pid):
+    """False only when the process is certainly gone.
+
+    Signal 0 checks without signalling, on POSIX. On Windows `os.kill` with any other signal
+    terminates the process, which here would be Claude Code itself, so there it is never called.
+    """
+    if os.name != "posix":
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # it exists and belongs to someone else, which is not this hook's to judge
+    return True
+
+
 def prune(marker_dir, now):
     """Drop files left by sessions that ended long ago. Best effort: a swept file is never missed.
 
@@ -729,6 +774,9 @@ def prune(marker_dir, now):
         if not swept(name):
             continue
         path = os.path.join(marker_dir, name)
+        record = PROCESS_RECORD_NAME.match(name)
+        if record and os.name == "posix" and process_alive(int(record.group(1))):
+            continue  # a live session idle for a day still needs its record
         try:
             info = os.lstat(path)
             if stat.S_ISREG(info.st_mode) and now.timestamp() - info.st_mtime > MARKER_MAX_AGE:
