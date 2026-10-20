@@ -138,8 +138,10 @@ again.
 The arithmetic, at API list prices on the 310k-token Opus session above: a wake-up costs about $0.16, and
 the result then lands warm for another $0.16 instead of cold for $3.10.
 
-It never wakes a session that is in use: anything you send, any other turn, a `/clear` or a compaction
-ends the wait, and so does the work finishing or Claude Code exiting. It doesn't run below
+It never wakes a session that is in use: anything you send (even before Claude's reply has been written
+down), any other turn, a `/clear` or a compaction ends the wait, and so does the work finishing or Claude
+Code exiting. A server or watcher left running in the background counts as work still running, so an idle
+session with one is woken until the cap below; if you work that way, set `CACHE_GUARD_KEEP_ALIVE=0`. It doesn't run below
 `CACHE_GUARD_MIN_TOKENS`, for background work started before a resume (that work stopped with the old
 process and will never report back), or in headless `claude -p` runs, which would wait for it.
 

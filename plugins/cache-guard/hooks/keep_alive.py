@@ -40,6 +40,9 @@ KEEP_ALIVE_MARK = "cache-guard keep-alive"  # opens every wake-up, and is how ea
 MIN_VERSION = (2, 1, 304)  # the first Claude Code measured to run an asyncRewake hook in the background
 WAKE_FRACTION = 0.9  # wake at 54 minutes of the hour, 270 seconds of five minutes
 POLL_SECONDS = 15  # how often the wait checks that the session is still there and still idle
+# A hook that starts on a turn whose wake-up time has already passed read the transcript before its own
+# turn was written; it waits this long for that turn to appear, and exits quietly if it never does.
+STALE_GRACE_SECONDS = 60
 # Write price over read price when the model has no list price here: 2x / 0.1x and 1.25x / 0.1x.
 UNPRICED_RATIO_1H = 20.0
 UNPRICED_RATIO_5M = 12.5
@@ -51,7 +54,7 @@ TASK_ID = re.compile(r"<task-id>([^<]+)</task-id>")
 TASK_STATUS = re.compile(r"<status>[^<]*</status>")
 NOTIFICATION = "<task-notification>"
 
-# The turn the cache was last refreshed by, what is still running, and how many wake-ups are spent.
+# When the cache was last refreshed, how long it lasts, and what is still running.
 Plan = namedtuple("Plan", "refreshed lifetime running")
 
 
@@ -179,43 +182,80 @@ def running_work(entries, since):
 def pings_since_prompt(lines, entries):
     """How many wake-ups this hook has made since the last prompt or notification that was not one.
 
-    The mark is matched anywhere in a record, because how Claude Code stores the wake-up it delivers
-    is not pinned down. A typed prompt or a notification resets the count: the session is in use again.
+    A wake-up is stored as several records (an enqueue, a dequeue or remove, then a user message or a
+    queued command attachment) with no assistant record between them, so what is counted is the
+    stretches between assistant records that hold at least one marked record. The mark is matched
+    anywhere in a record. A typed prompt or a notification without the mark resets the count: the
+    session is in use again.
     """
     mark = KEEP_ALIVE_MARK.encode()
     count = 0
+    marked_stretch = False
     by_position = dict(entries)
     for position, raw in enumerate(lines):
         entry = by_position.get(position)
         if entry is None or entry.get("isSidechain"):
             continue
-        marked = mark in raw
         if entry.get("type") == "assistant":
-            continue  # the model's own text never is a wake-up, even when it quotes one
-        if marked:
-            count += 1
+            if marked_stretch:
+                count += 1  # the model's own text never is a wake-up, even when it quotes one
+            marked_stretch = False
             continue
-        content = (entry.get("message") or {}).get("content") if entry.get("type") == "user" else None
-        attachment = entry.get("attachment") if entry.get("type") == "attachment" else None
-        queued = isinstance(attachment, dict) and attachment.get("type") == "queued_command"
-        if isinstance(content, str) or queued:
+        if mark in raw:
+            marked_stretch = True
+        elif prompt_text(entry) is not None:
             count = 0
-    return count
+            marked_stretch = False
+    return count + (1 if marked_stretch else 0)
+
+
+def prompt_text(entry):
+    """The text of a record that puts a prompt or a notification in front of the model, else None.
+
+    A user message whose content is a string, a queued command attachment's prompt, or an enqueue
+    that carries a string: the shapes a typed prompt, a notification and a wake-up are stored in.
+    """
+    kind = entry.get("type")
+    if kind == "user":
+        text = (entry.get("message") or {}).get("content")
+    elif kind == "attachment":
+        attachment = entry.get("attachment")
+        queued = isinstance(attachment, dict) and attachment.get("type") == "queued_command"
+        text = attachment.get("prompt") if queued else None
+    elif kind == "queue-operation" and entry.get("operation") == "enqueue":
+        text = entry.get("content")
+    else:
+        text = None
+    return text if isinstance(text, str) else None
+
+
+def busy_again(entries, after):
+    """True when the person or a notification has put something in front of the model since `after`."""
+    for position, entry in entries:
+        if position <= after or entry.get("isSidechain"):
+            continue
+        text = prompt_text(entry)
+        if text is not None and KEEP_ALIVE_MARK not in text:
+            return True
+    return False
 
 
 def wake_ratio(model, lifetime, env):
-    """How many wake-ups add up to one rewrite: cache-write price over cache-read price."""
+    """How many wake-ups add up to one rewrite: cache-write price over cache-read price, never more
+    than the unpriced ratio, so no model gets more than 19 wake-ups on the hour or 12 on five minutes."""
+    ceiling = UNPRICED_RATIO_1H if lifetime >= cache_guard.HOUR else UNPRICED_RATIO_5M
     write, read = cache_guard.prices(model, lifetime, env)
     if write and read:
-        return write / read
-    return UNPRICED_RATIO_1H if lifetime >= cache_guard.HOUR else UNPRICED_RATIO_5M
+        return min(write / read, ceiling)
+    return ceiling
 
 
 def evaluate(path, since, env):
     """The Plan for a wake-up, or None when there should be none.
 
     None when there is no turn to keep warm, the context was compacted after it, it is too small to be
-    worth a turn, nothing started here is still running, or the wake-ups so far add up to a rewrite.
+    worth a turn, nothing started here is still running, a prompt or notification has arrived since
+    the turn, or the wake-ups so far add up to a rewrite.
     """
     lines = cache_guard.read_tail(path)
     entries = records(lines)
@@ -228,6 +268,8 @@ def evaluate(path, since, env):
     last = found[-1]
     if cache_guard.last_compaction(lines) > last.position:
         return None  # the context the turn measured is gone, and so is its cache
+    if busy_again(entries, last.position):
+        return None  # a prompt or notification is already on its way to a turn of its own
     if last.size < cache_guard.positive_int(env, "CACHE_GUARD_MIN_TOKENS", cache_guard.DEFAULT_MIN_TOKENS):
         return None
     lifetime = cache_guard.positive_int(env, "CACHE_GUARD_LIFETIME_SECONDS", 0) or cache_guard.lifetime_of(found)
@@ -253,25 +295,12 @@ def wake_message(running):
     return (
         f"{KEEP_ALIVE_MARK}: background work is still running ({describe(running)}). This turn only "
         "keeps the prompt cache warm so the result does not land on an expired cache: reply in one "
-        "short line, make no tool calls, and end your turn."
+        "short line, make no tool calls, and end your turn. If you are in the middle of other work, ignore "
+        "this and carry on."
     )
 
 
-def process_alive(pid):
-    """False only when the process is certainly gone.
-
-    Signal 0 checks without signalling, on POSIX. On Windows `os.kill` with any other signal
-    terminates the process, which here would be Claude Code itself, so there it is never called.
-    """
-    if os.name != "posix":
-        return True
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        return True  # it exists and belongs to someone else, which is not this hook's to judge
-    return True
+process_alive = cache_guard.process_alive  # one copy, in cache_guard, for the sweep to share
 
 
 def file_stamp(path):
@@ -336,9 +365,22 @@ def run(payload, env, clock=None, sleep=time.sleep, alive=process_alive):
         stamp = file_stamp(path)
         while True:
             wake_at = plan.refreshed + timedelta(seconds=WAKE_FRACTION * plan.lifetime)
-            remaining = (wake_at - clock()).total_seconds()
-            if remaining <= 0:
-                break
+            if wake_at <= started:
+                # Due before this hook began: the transcript was read before this hook's own turn was
+                # written. Never wake on it; wait for the newer turn, and give up if none comes.
+                remaining = (started + timedelta(seconds=STALE_GRACE_SECONDS) - clock()).total_seconds()
+                if remaining <= 0:
+                    return None
+            else:
+                remaining = (wake_at - clock()).total_seconds()
+                if remaining <= 0:
+                    final = evaluate(path, since, env)
+                    if final is None or (final.refreshed != plan.refreshed and final.refreshed > started):
+                        return None
+                    if final.refreshed != plan.refreshed:
+                        plan = final  # this hook's own turn, written late: wait for its wake time
+                        continue
+                    return wake_message(final.running)
             sleep(min(POLL_SECONDS, remaining))
             if not alive(pid):
                 return None
@@ -353,10 +395,6 @@ def run(payload, env, clock=None, sleep=time.sleep, alive=process_alive):
                 if newer.refreshed != plan.refreshed and newer.refreshed > started:
                     return None  # another turn ran after this hook began, and its own Stop owns the wait
                 plan = newer  # the same turn, or this hook's own turn written to disk late
-        final = evaluate(path, since, env)
-        if final is None or (final.refreshed != plan.refreshed and final.refreshed > started):
-            return None
-        return wake_message(final.running)
     except Exception:
         return None
 

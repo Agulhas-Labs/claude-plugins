@@ -135,9 +135,19 @@ def user_text(when, text):
             "message": {"role": "user", "content": text}}
 
 
-def ping_record(when):
-    return user_text(when, "<system-reminder>A cache-guard hook woke this session: "
-                           + keep_alive.wake_message({"b1": "command"}) + "</system-reminder>")
+def ping_records(when, shape="idle"):
+    """One wake-up as Claude Code stores it: the idle shape, or the one delivered in the middle of a turn."""
+    text = ("<task-notification>\n<summary>cache-guard: kept the prompt cache warm</summary>\n"
+            "</task-notification>\n<system-reminder>\nA cache-guard hook woke this session: "
+            + keep_alive.wake_message({"b1": "command"}) + "\n</system-reminder>")
+    second = {"type": "queue-operation", "operation": "dequeue" if shape == "idle" else "remove",
+              "timestamp": stamp(when)}
+    third = user_text(when, text) if shape == "idle" else attached(when, text)
+    return [queued(when, text), second, third]
+
+
+def prompt_record(when, text="carry on"):
+    return {"type": "queue-operation", "operation": "enqueue", "timestamp": stamp(when), "content": text}
 
 
 def compact_boundary(when):
@@ -377,6 +387,45 @@ class WakeTimeTests(KeepAliveTestCase):
         self.assertAlmostEqual((self.clock.now - T0).total_seconds(), 54 * 60, delta=1)
 
 
+class StaleStartTests(KeepAliveTestCase):
+    """The Stop hook started before its own turn reached the transcript: it read the turn before."""
+
+    def before(self):
+        return [assistant(T0 - timedelta(minutes=70), msg_id="msg_start"),
+                background_command(T0 - timedelta(minutes=69)),
+                assistant(T0 - timedelta(minutes=60), msg_id="msg_before")]
+
+    def test_own_turn_appearing_one_poll_later_is_waited_for_not_woken_on(self):
+        self.write(self.before())
+        self.clock.at(self.clock.now + timedelta(seconds=keep_alive.POLL_SECONDS),
+                      lambda: self.append(assistant(T0, msg_id="msg_own")))
+        self.assertIsNotNone(self.run_hook())
+        self.assertAlmostEqual((self.clock.now - T0).total_seconds(), 54 * 60, delta=1)
+
+    def test_no_new_turn_ever_appearing_exits_quietly_after_the_grace(self):
+        self.write(self.before())
+        self.assertIsNone(self.run_hook())
+        self.assertGreaterEqual(self.clock.now, T0 + timedelta(seconds=20 + keep_alive.STALE_GRACE_SECONDS))
+        self.assertLess(self.clock.now, T0 + timedelta(minutes=5))
+
+    def test_turn_adopted_by_the_final_check_is_waited_for_too(self):
+        self.write(self.busy())
+        # The turn lands only between the last poll and the final check, timestamped before the start.
+        real = keep_alive.evaluate
+        calls = []
+
+        def evaluate(path, since, env):
+            calls.append(1)
+            if len(calls) == 2:
+                self.append(assistant(T0 + timedelta(seconds=10), msg_id="msg_own"))
+            return real(path, since, env)
+
+        self.clock.now = T0 + timedelta(seconds=20)
+        with mock.patch.object(keep_alive, "evaluate", evaluate):
+            self.assertIsNotNone(self.run_hook())
+        self.assertAlmostEqual((self.clock.now - T0).total_seconds(), 54 * 60 + 10, delta=1)
+
+
 class WaitEndsTests(KeepAliveTestCase):
     def test_newer_turn_ends_the_wait(self):
         self.write(self.busy())
@@ -417,17 +466,37 @@ class WaitEndsTests(KeepAliveTestCase):
     def test_compaction_after_the_last_turn_means_no_wake_up(self):
         self.assertIsNone(self.run_hook(self.busy() + [compact_boundary(T0 + timedelta(seconds=10))]))
 
+    def test_prompt_after_the_last_turn_means_no_wake_up(self):
+        for record in (user_text(T0 + timedelta(minutes=53, seconds=50), "and another thing"),
+                       attached(T0 + timedelta(minutes=53, seconds=50), "and another thing"),
+                       prompt_record(T0 + timedelta(minutes=53, seconds=50), "and another thing")):
+            with self.subTest(type=record["type"]):
+                self.clock = FakeClock(T0 + timedelta(seconds=20))
+                self.write(self.busy() + [record])
+                self.assertIsNone(self.run_hook())
+
+    def test_enqueue_without_content_does_not_stop_the_wake_up(self):
+        record = {"type": "queue-operation", "operation": "enqueue", "timestamp": stamp(T0 + timedelta(seconds=5))}
+        self.assertIsNotNone(self.run_hook(self.busy() + [record]))
+
+    def test_prompt_arriving_before_the_reply_is_written_ends_the_wait(self):
+        self.write(self.busy())
+        at = T0 + timedelta(minutes=53, seconds=50)
+        self.clock.at(at, lambda: self.append(user_text(at, "hello")))
+        self.assertIsNone(self.run_hook())
+        self.assertLess(self.clock.now, T0 + timedelta(minutes=54))
+
     def test_small_context_means_no_wake_up(self):
         self.assertIsNone(self.run_hook(self.busy(last=assistant(T0, size=SMALL, msg_id="msg_last"))))
 
 
 class CapTests(KeepAliveTestCase):
-    def with_pings(self, count, split=None, model="claude-opus-4-5"):
+    def with_pings(self, count, split=None, model="claude-opus-4-5", shape="idle"):
         entries = [assistant(T0 - timedelta(hours=25), msg_id="msg_start", split=split, model=model),
                    background_command(T0 - timedelta(hours=25) + timedelta(minutes=1))]
         for i in range(count):
             when = T0 - timedelta(hours=24) + timedelta(minutes=54 * i)
-            entries.append(ping_record(when))
+            entries.extend(ping_records(when, shape))
             entries.append(assistant(when + timedelta(seconds=5), msg_id=f"msg_ping{i}", split=split, model=model))
         entries.append(assistant(T0, msg_id="msg_last", split=split, model=model))
         return entries
@@ -444,13 +513,36 @@ class CapTests(KeepAliveTestCase):
     def test_thirteenth_wake_up_is_refused_on_five_minutes(self):
         self.assertIsNone(self.run_hook(self.with_pings(12, split=split_5m(), model="claude-mystery")))
 
-    def test_list_price_ratio_allows_more_where_reads_are_cheaper(self):
-        # Opus 5.5 lists its cache read at $0.20 against $4.00 input: 8.00 / 0.20 = 40 on the hour.
-        self.assertIsNotNone(self.run_hook(self.with_pings(19, model="claude-opus-5-5")))
+    def test_cheaper_list_price_read_gets_no_more_wake_ups_than_the_ceiling(self):
+        # Opus 5.5 lists its cache read at $0.20 against $4.00 input: 8.00 / 0.20 = 40, held to 20 here.
+        self.assertIsNotNone(self.run_hook(self.with_pings(18, model="claude-opus-5-5")))
+        self.clock = FakeClock(T0 + timedelta(seconds=20))
+        self.assertIsNone(self.run_hook(self.with_pings(19, model="claude-opus-5-5")))
+
+    def test_three_wake_ups_count_three_in_each_stored_shape(self):
+        for shape in ("idle", "mid-turn"):
+            with self.subTest(shape=shape):
+                entries = self.with_pings(3, shape=shape)
+                lines = [json.dumps(entry).encode() for entry in entries]
+                self.assertEqual(keep_alive.pings_since_prompt(lines, keep_alive.records(lines)), 3)
+
+    def test_each_stored_shape_hits_the_cap_at_the_same_wake_up(self):
+        for shape in ("idle", "mid-turn"):
+            with self.subTest(shape=shape):
+                self.clock = FakeClock(T0 + timedelta(seconds=20))
+                self.assertIsNotNone(self.run_hook(self.with_pings(18, model="claude-mystery", shape=shape)))
+                self.clock = FakeClock(T0 + timedelta(seconds=20))
+                self.assertIsNone(self.run_hook(self.with_pings(19, model="claude-mystery", shape=shape)))
+
+    def test_enqueued_prompt_resets_the_count(self):
+        entries = self.with_pings(19, model="claude-mystery")
+        entries.insert(-1, prompt_record(T0 - timedelta(minutes=1)))
+        self.assertIsNotNone(self.run_hook(entries))
 
     def test_input_price_override_sets_the_ratio(self):
         env = {**self.env, "CACHE_GUARD_INPUT_PRICE": "4"}  # read at a tenth: 8.00 / 0.40 = 20
         self.assertIsNotNone(self.run_hook(self.with_pings(18, model="claude-opus-5-5"), env=env))
+        self.clock = FakeClock(T0 + timedelta(seconds=20))
         self.assertIsNone(self.run_hook(self.with_pings(19, model="claude-opus-5-5"), env=env))
 
     def test_typed_prompt_resets_the_count(self):
@@ -489,6 +581,7 @@ class OutputTests(KeepAliveTestCase):
         self.assertTrue(out.startswith(keep_alive.KEEP_ALIVE_MARK))
         self.assertEqual(out.count("\n"), 1)
         self.assertIn("make no tool calls", out)
+        self.assertIn("ignore this and carry on", out)
         self.assertEqual(err, "")
 
     def test_nothing_to_do_exits_0_with_no_output(self):
@@ -519,6 +612,40 @@ class RegistrationTests(unittest.TestCase):
     def test_process_record_name_is_swept_once_stale(self):
         self.assertTrue(cache_guard.swept(f"process-{PID}"))
         self.assertTrue(cache_guard.swept("process-tmp-abc123.tmp"))
+
+
+class SweepTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="cache-guard-sweep-test-")
+        self.addCleanup(self.tmp.cleanup)
+
+    def old(self, name):
+        path = os.path.join(self.tmp.name, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("{}")
+        os.utime(path, (1, 1))
+        return path
+
+    def test_live_process_record_survives_the_sweep(self):
+        live, dead = self.old("process-111"), self.old("process-222")
+        with mock.patch.object(cache_guard, "process_alive", lambda pid: pid == 111):
+            cache_guard.prune(self.tmp.name, T0)
+        self.assertTrue(os.path.exists(live))
+        self.assertFalse(os.path.exists(dead))
+
+    def test_leftover_temporary_is_swept_whatever_is_alive(self):
+        leftover = self.old("process-tmp-abc123.tmp")
+        with mock.patch.object(cache_guard, "process_alive", lambda pid: True):
+            cache_guard.prune(self.tmp.name, T0)
+        self.assertFalse(os.path.exists(leftover))
+
+    def test_liveness_is_not_asked_off_posix(self):
+        record = self.old("process-111")
+        with mock.patch.object(cache_guard.os, "name", "nt"), \
+                mock.patch.object(cache_guard, "process_alive") as alive:
+            cache_guard.prune(self.tmp.name, T0)
+        alive.assert_not_called()
+        self.assertFalse(os.path.exists(record))
 
 
 if __name__ == "__main__":
