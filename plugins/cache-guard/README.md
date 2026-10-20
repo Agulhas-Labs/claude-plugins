@@ -141,10 +141,11 @@ count, and neither does a monitor started as persistent, which watches with no e
 The arithmetic, at API list prices on the 310k-token Opus session above: a wake-up costs about $0.16, and
 the result then lands warm for another $0.16 instead of cold for $3.10.
 
-It never wakes a session that is in use: anything you send (even before Claude's reply has been written
-down), a notification from finished work, any other turn, a `/clear` or a compaction ends the wait, and so
-does Claude Code exiting. A local command such as `/tasks` or `/context`, or a `!` shell command, starts no
-turn and doesn't end it. A server or watcher left running in the background counts as work still running,
+It never wakes a session that is in use: a prompt (even before Claude's reply has been written down), a
+prompt command or skill, a notification from finished work, a subagent's report, a `/clear` or a
+compaction ends the wait, and so does Claude Code exiting. A local command (`/tasks`, `/model`, or `!`
+bash mode) starts no turn and doesn't end it. A server or watcher left running in the background counts
+as work still running,
 so an idle session with one is woken until the cap below; if you work that way, set
 `CACHE_GUARD_KEEP_ALIVE=0`. It doesn't run below `CACHE_GUARD_MIN_TOKENS`, or in headless `claude -p`
 runs, which would wait for it.
@@ -153,7 +154,8 @@ Wake-ups stop once they would have added up to one cache write of the context: t
 the read price, which allows 19 wake-ups on the one-hour cache and 12 on the five-minute one at list
 prices. That caps the worst case, work that never reports back, at about twice what doing nothing would
 have cost.
-Anything you send starts the count again.
+A prompt, a prompt command or skill, a notification or a subagent's report starts the count again; a
+local command doesn't.
 
 `CACHE_GUARD_KEEP_ALIVE=0` switches it off, and `CACHE_GUARD_DISABLE=1` switches it off along with the
 rest of the guard. It needs Claude Code 2.1.304 or later, which runs a hook like this one in the

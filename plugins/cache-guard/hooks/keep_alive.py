@@ -67,8 +67,10 @@ KINDS = (("shell", "command", "commands"), ("subagent", "agent", "agents"),
          ("workflow", "workflow", "workflows"), ("monitor", "monitor", "monitors"))
 OTHER_KIND = ("task", "tasks")
 # What a local command (`/tasks`, `/context`, `!` bash mode) writes: a user record, but no turn.
-LOCAL_COMMAND = ("<command-name>", "<command-message>", "<local-command-", "<bash-input>", "<bash-stdout>",
-                 "<bash-stderr>")
+LOCAL_COMMAND = ("<command-name>", "<local-command-", "<bash-input>", "<bash-stdout>", "<bash-stderr>")
+# The main thread's request record, written when a request goes out: a busy session, and the time a
+# turn's request reached the cache.
+MAIN_REQUEST = "repl_main_thread"
 
 # When the cache was last refreshed, how long it lasts, and the types of the work still running.
 Plan = namedtuple("Plan", "refreshed lifetime running")
@@ -106,10 +108,13 @@ def message_id(entry):
 
 
 def refreshed_at(entries, last):
-    """When the last turn's request reached the cache: the earliest record of its message.
+    """When the last turn's request reached the cache: the main thread's request record for it when
+    there is one, else the earliest record of its message.
 
     A response is written as one record per content block, all with the same message id; the cache is
-    read and written before the first of them, so the last record's time is late by the whole answer.
+    read and written before the first of them, so the last record's time is late by the whole answer,
+    and the first record itself is written once its first content block is done. The request record
+    counts only between the previous assistant message and that first record.
     """
     wanted = None
     for position, entry in entries:
@@ -124,7 +129,26 @@ def refreshed_at(entries, last):
         if entry.get("type") == "assistant" and not entry.get("isSidechain") and message_id(entry) == wanted
     ]
     times = [when for when in times if when is not None]
-    return min(times) if times else last.time
+    if not times:
+        return last.time
+    first = min(times)
+    first_position = previous = None
+    for position, entry in entries:
+        if entry.get("type") != "assistant" or entry.get("isSidechain"):
+            continue
+        if message_id(entry) == wanted:
+            first_position = position
+            break
+        previous = position
+    if first_position is None:
+        return first
+    requests = [
+        cache_guard.parse_time(entry.get("timestamp"))
+        for position, entry in entries
+        if (previous is None or position > previous) and position < first_position and is_main_request(entry)
+    ]
+    requests = [when for when in requests if when is not None and when <= first]
+    return max(requests) if requests else first
 
 
 def in_flight(payload):
@@ -141,26 +165,50 @@ def in_flight(payload):
     ]
 
 
-def persistent_monitors(entries):
-    """Ids of the monitors this transcript shows were started as persistent: they watch with no end."""
+def is_main_request(entry):
+    """True for the record written when the main thread sends a request."""
+    return (entry.get("type") == "api-request" and not entry.get("isSidechain")
+            and entry.get("querySource") == MAIN_REQUEST)
+
+
+def persistent_monitors(path):
+    """Ids of the monitors the whole transcript shows were started as persistent: they watch with no end.
+
+    The whole file, not its tail: in a long session the start of a monitor scrolls out of the tail.
+    Only lines that mention `persistent` are parsed.
+    """
     found = set()
-    for _, entry in entries:
-        result = entry.get("toolUseResult")
-        if isinstance(result, dict) and result.get("taskId") and result.get("persistent") is True:
-            found.add(str(result["taskId"]))
+    try:
+        with open(path, "rb") as f:
+            for raw in f:
+                if b'"persistent"' not in raw:
+                    continue
+                try:
+                    entry = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(entry, dict):
+                    found |= persistent_in(entry)
+    except OSError:
+        pass
     return found
 
 
-def running_work(tasks, entries):
-    """The types of the tasks that are work still running, persistent monitors left out."""
-    persistent = persistent_monitors(entries)
-    return [str(task.get("type") or "") for task in tasks if str(task.get("id")) not in persistent]
+def persistent_in(entry):
+    """The id of the persistent monitor this record started, as a set of zero or one."""
+    result = entry.get("toolUseResult")
+    if isinstance(result, dict) and result.get("taskId") and result.get("persistent") is True:
+        return {str(result["taskId"])}
+    return set()
+
+
+def running_work(tasks):
+    """The types of the tasks that are work still running."""
+    return [str(task.get("type") or "") for task in tasks]
 
 
 def is_local(entry, text):
     """True for a record a local command or Claude Code itself wrote, which starts no turn."""
-    if entry.get("isMeta") is True:
-        return True
     return isinstance(text, str) and text.lstrip().startswith(LOCAL_COMMAND)
 
 
@@ -274,6 +322,8 @@ def busy_again(entries, after):
     for position, entry in entries:
         if position <= after or entry.get("isSidechain"):
             continue
+        if is_main_request(entry):
+            return True  # a request has gone out: only a supplement, not every request has a record
         text = prompt_text(entry)
         if text is not None and KEEP_ALIVE_MARK not in text:
             return True
@@ -316,7 +366,7 @@ def evaluate(path, env, settled_id, tasks):
     if last.size < cache_guard.positive_int(env, "CACHE_GUARD_MIN_TOKENS", cache_guard.DEFAULT_MIN_TOKENS):
         return None
     lifetime = cache_guard.positive_int(env, "CACHE_GUARD_LIFETIME_SECONDS", 0) or cache_guard.lifetime_of(found)
-    running = running_work(tasks, entries)
+    running = running_work(tasks)
     if not running:
         return None
     if pings_since_prompt(lines, entries) + 1 >= wake_ratio(last.model, lifetime, env):
@@ -401,6 +451,10 @@ def run(payload, env, clock=None, sleep=time.sleep, alive=process_alive):
         tasks = in_flight(payload)
         if not tasks:
             return None
+        persistent = persistent_monitors(path)  # once per run, not per poll
+        tasks = [task for task in tasks if str(task.get("id")) not in persistent]
+        if not tasks:
+            return None
         session = payload.get("session_id")
         last_message = payload.get("last_assistant_message")
         last_message = last_message.strip() if isinstance(last_message, str) else ""
@@ -424,10 +478,12 @@ def run(payload, env, clock=None, sleep=time.sleep, alive=process_alive):
         if plan is None:
             return None
         wake_at = plan.refreshed + timedelta(seconds=WAKE_FRACTION * plan.lifetime)
+        if clock() >= plan.refreshed + timedelta(seconds=plan.lifetime):
+            return None  # the cache has expired already: a wake-up would write it, not read it
         while True:
             remaining = (wake_at - clock()).total_seconds()
             if remaining <= 0:
-                break  # also at once when the message took longer to write than the wait would last
+                break  # also at once when the message took longer to write, while the cache is alive
             if not still_there(min(POLL_SECONDS, remaining)):
                 return None
             current = file_stamp(path)
