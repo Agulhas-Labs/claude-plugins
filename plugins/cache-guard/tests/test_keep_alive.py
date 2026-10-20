@@ -23,7 +23,6 @@ import cache_guard  # noqa: E402
 import keep_alive  # noqa: E402
 
 T0 = datetime(2026, 1, 2, 12, 0, 0, tzinfo=timezone.utc)  # the last turn's request
-SINCE = T0 - timedelta(hours=30)  # when this process's session started
 LARGE = 310_000
 SMALL = 40_000
 VERSION = "2.1.304"
@@ -186,14 +185,14 @@ class KeepAliveTestCase(unittest.TestCase):
             "CLAUDE_CODE_ENTRYPOINT": "cli",
             "CLAUDE_PID": str(PID),
         }
-        self.record(SESSION, SINCE)
+        self.record(SESSION)
         self.clock = FakeClock(T0 + timedelta(seconds=20))
         self.alive = True
 
-    def record(self, session, since):
+    def record(self, session):
         os.makedirs(self.state, exist_ok=True)
         with open(self.record_path(), "w", encoding="utf-8") as f:
-            json.dump({"session_id": session, "since": since.isoformat()}, f)
+            json.dump({"session_id": session}, f)
 
     def record_path(self):
         return os.path.join(self.state, f"process-{PID}")
@@ -290,7 +289,7 @@ class GateTests(KeepAliveTestCase):
         self.assertIsNone(self.run_hook(self.busy()))
 
     def test_process_record_naming_another_session_exits_at_once(self):
-        self.record("someone-else", SINCE)
+        self.record("someone-else")
         self.assertIsNone(self.run_hook(self.busy()))
 
     def test_process_record_without_a_start_time_is_enough(self):
@@ -553,7 +552,7 @@ class WaitEndsTests(KeepAliveTestCase):
 
     def test_process_record_for_another_session_ends_the_wait(self):
         self.write(self.busy())
-        self.clock.at(T0 + timedelta(minutes=20), lambda: self.record("after-clear", T0 + timedelta(minutes=20)))
+        self.clock.at(T0 + timedelta(minutes=20), lambda: self.record("after-clear"))
         self.assertIsNone(self.run_hook(last_message="ok"))
         self.assertLess(self.clock.now, T0 + timedelta(minutes=21))
 

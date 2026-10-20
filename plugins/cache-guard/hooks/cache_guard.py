@@ -575,7 +575,7 @@ def pending_record(marker_dir, session):
 
 
 def process_record(marker_dir, pid):
-    """Where SessionStart records which session the Claude Code process `pid` is running, and since when."""
+    """Where SessionStart records which session the Claude Code process `pid` is running."""
     return os.path.join(marker_dir, PROCESS_PREFIX + str(int(pid)))
 
 
